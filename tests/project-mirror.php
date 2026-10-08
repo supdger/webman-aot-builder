@@ -259,7 +259,7 @@ try {
         throw new RuntimeException('mirror accepted concurrent source changes');
     } catch (ConfigurationException $error) {
         $message = $error->getMessage();
-        check(str_contains($message, 'added "a-added.php"'), 'addition path missing');
+        check(str_contains($message, 'added "a-added.php"'), 'addition path missing: ' . $message);
         check(str_contains($message, 'removed "b-removed.php"'), 'removal path missing');
         check(str_contains($message, 'modified "c-modified.php"'), 'modification path missing');
         check(str_contains($message, PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : 'd-control\\n.php'), 'changed path was not safely reported');
