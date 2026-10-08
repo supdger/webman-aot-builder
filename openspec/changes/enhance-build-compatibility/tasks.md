@@ -28,8 +28,8 @@
 - [x] 4.1 同步受影响兼容与恢复说明，OpenSpec 严格校验及相关工具回归通过。
 - [x] 4.2 固定候选后完成独立审查，区分源码验证、真实平台、发行包及发布状态。
 
-- [ ] 4.3 准备 0.4.1 版本与发行说明、确认 SDK 材料绑定及新组件锁，完成实际索引审查和 pre-commit 检查，经 feature branch / PR 提交合并。
-- [ ] 4.4 完成双平台实际发行资源、原生 Windows CI 与安装消费者验证，生成并核对全部摘要，公开 tag/Release 后回读资产及保留验证边界。
+- [x] 4.3 准备 0.4.1 版本与发行说明、确认 SDK 材料绑定及新组件锁，完成实际索引审查和 pre-commit 检查，经 feature branch / PR 提交合并。
+- [x] 4.4 完成双平台实际发行资源、原生 Windows CI 与安装消费者验证，生成并核对全部摘要，公开 tag/Release 后回读资产及保留验证边界。
 
 ## Illuminate 实现证据
 
@@ -69,3 +69,10 @@ CarbonInterval 内部符号兼容：新领域规则与 universal generator entry
 最终原生构包回归：统一 native build revision 为 ac9368144bd03a1523e54af463e8b5cf035e6874。Windows CI 37755998044 的原生 PowerShell、双包构建、真实 FileStream 恢复/永久失败清理、短路径别名、复制并发拒绝/激活屏障诊断及工作区测试均通过，原机器结果与包已由 CI 保存。macOS 同提交的轻量/完整包完成 155/156 项 payload manifest、实际私有安装与 0.4.1 CLI 自检（5.5/29.3 秒），完整工具链 7,614 项校验、离线安装及重复校验通过。安装消费者和公开资产回读仍待后续步骤，不将此构包回归等同于完整应用业务。
 
 最终资产绑定准备：Windows 实际轻量/完整 ZIP 已核原机器 receipt、原生日志 SHA、七个选取外 ZIP entry CRC、内部 157/158 项 payload 与 runtime 摘要，完整包内组件与锁定新 26 补丁归档一致；未下载重复组件段，不宣称外 CI bundle 整体 SHA 已核。Composer 0.4.1 runtime 锁从同 ac936814 两平台实际完整包生成；最终轻量 ZIP 包含 13 个源码相同文件（31,300 字节），真实隔离 Composer 生命周期 32 项、最终入口 20 项通过。README 同步远端 main 已公开的两行徽章说明删除，保持 PR 合并后 Composer ZIP 来源一致。公开 Release/消费者校验仍待门槛，不提前勾选 4.4。
+
+
+最终公开交付：PR #54 已正常合并，v0.4.1 tag 固定于合并提交 d01de199abac7b9516db7db3fc5ca3b70be3d85a，Release 于 2026-10-08T10:00:22Z 公开。最终资产清单共 11 项，10 项文件摘要写入 SHA256SUMS；本机完整文件摘要、服务端摘要/大小与匿名公开可用性均一致。匿名实际下载 Composer ZIP、macOS setup.command、setup.zip 和 SHA256SUMS 后摘要通过；不宣称所有大资产重新整包下载。最终索引审查与真实 pre-commit 通过，原脏工作区、用户宿主和 Wiki 未发布或同步。
+
+公开 Windows 消费者：CI 37760742170 成功（4 分 30 秒），原始回执绑定公开源码 d01de199、native 构包源码 ac936814、SHA256SUMS 5e7a33c3dd236fc77a72d5866aa67afc9611a3b84cdea8d4a263d744edb84de6。匿名 canonical URL 实际下载 SUMS/setup/轻量包/完整包并验摘要，小/全包新安装均为 0.4.1；完整包 109 单元编译与自动结构完整性校验通过。五个缓存场景复用数为 0/109/107/108/0；实际父进程和 PHP 子树中断后重试通过，复用 24/剩余 85、并发 78，临时资源清理为空且持久 PATH 不变。验证范围为构建宿主结构与完整性；Windows 未执行 Linux targetLdd，不扩大为完整 Laravel/ORM 应用验收。原回执和日志位于 /private/tmp/webman-aot-compatibility-release/windows/consumer-public-37760742170 与 run-37760742170-public.log。
+
+发布后索引状态：Release 与安装资产已公开可用；官方 Packagist metadata/p2 暂未列出 0.4.1，隔离实际 Composer 查询返回未找到该版本。此为外部索引尚未同步，不能据此声称 Composer 升级入口已可解析；不移动公开 tag、不伪造凭据或用无用途提交触发刷新。公开用户代码直接零参 invert() 的编译器限制仍保留，完整应用及既有用户宿主未验收。以上公开结果记录独立于不可变的 v0.4.1 tag，不重写已发布资产。
