@@ -39,7 +39,7 @@ final class SourceTreeSnapshot
         RuntimeDataPaths::assertNoExcludedPhp($this->projectDirectory);
         $files = [];
         $directory = new \RecursiveDirectoryIterator(
-            $this->projectDirectory,
+            realpath($this->projectDirectory) ?: $this->projectDirectory,
             \FilesystemIterator::SKIP_DOTS
         );
         $filter = new \RecursiveCallbackFilterIterator(

@@ -324,14 +324,19 @@ final class UpstreamGeneratorBoundary
         $installed = [];
         foreach (array_merge($lock['packages'], $lock['packages-dev'] ?? []) as $package) {
             if (is_array($package) && is_string($package['name'] ?? null)) {
+                if (isset($installed[$package['name']])) {
+                    throw new ConfigurationException('upstream generator dependency lock contains duplicate package: ' . $package['name']);
+                }
                 $installed[$package['name']] = $package;
             }
         }
-        foreach ($expected as $name => $package) {
+        // Package labels are evidence; the complete source and generated output
+        // digests below determine whether this dependency shape is supported.
+        foreach (array_keys($expected) as $name) {
             $actual = $installed[$name] ?? null;
             if (!is_array($actual)
-                || ($actual['version'] ?? null) !== $package['version']
-                || ($actual['source']['reference'] ?? null) !== $package['reference']
+                || !is_string($actual['version'] ?? null)
+                || $actual['version'] === ''
             ) {
                 throw new ConfigurationException("upstream generator dependency lock drift: {$name}");
             }

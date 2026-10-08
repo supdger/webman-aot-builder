@@ -17,8 +17,15 @@ final class ProjectMirror
         'node_modules',
     ];
 
-    public function __construct(private readonly string $projectDirectory)
-    {
+    /** @var \Closure(string,string):bool */
+    private readonly \Closure $move;
+
+    /** @param (\Closure(string,string):bool)|null $move */
+    public function __construct(
+        private readonly string $projectDirectory,
+        ?\Closure $move = null
+    ) {
+        $this->move = $move ?? static fn (string $from, string $to): bool => rename($from, $to);
     }
 
     /** Validate both the legacy mirror and independently owned attempt paths. */
@@ -77,9 +84,7 @@ final class ProjectMirror
             foreach ($files as $path => $digest) {
                 hash_update($context, $path . "\0" . $digest . "\n");
             }
-            if (!rename($candidate, $destination)) {
-                throw new ConfigurationException('unable to activate project build mirror');
-            }
+            $this->activate($candidate, $destination, $sourceSnapshot, $before);
             return [
                 'path' => $destination,
                 'files' => count($files),
@@ -91,6 +96,53 @@ final class ProjectMirror
                 $this->removeCandidate($candidate);
             }
         }
+    }
+
+    /** @param array{sha256:string,files:int,digests:array<string,string>} $before */
+    private function activate(
+        string $candidate,
+        string $destination,
+        SourceTreeSnapshot $sourceSnapshot,
+        array $before
+    ): void {
+        $reason = 'rename returned false';
+        for ($attempt = 0; $attempt < 6; ++$attempt) {
+            clearstatcache(true, $destination);
+            if (file_exists($destination) || is_link($destination)) {
+                throw new ConfigurationException('project build mirror already exists; wait for the active build to finish and retry webman-aot build');
+            }
+            if ($attempt > 0) {
+                $after = $sourceSnapshot->captureWithFiles();
+                if ($after !== $before) {
+                    throw new ConfigurationException(
+                        'project source changed while activating build mirror: '
+                        . $this->describeChanges($before['digests'], $after['digests'])
+                        . '; wait for source writes to finish and retry webman-aot build'
+                    );
+                }
+            }
+            set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
+                $reason = $message;
+                return true;
+            }, E_WARNING);
+            try {
+                $moved = ($this->move)($candidate, $destination);
+            } finally {
+                restore_error_handler();
+            }
+            if ($moved) {
+                return;
+            }
+            if ($attempt < 5) {
+                usleep(50000 * (2 ** $attempt));
+            }
+        }
+        $reason = str_replace([$candidate, $destination], ['<candidate>', '<project>'], $reason);
+        $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', $reason) ?? 'rename failed';
+        throw new ConfigurationException(
+            'unable to activate project build mirror after 6 attempts: ' . substr($reason, 0, 400)
+            . '; close programs holding files in .webman-aot-builder/build, check directory permissions, and retry webman-aot build'
+        );
     }
 
     /**

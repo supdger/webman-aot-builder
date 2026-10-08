@@ -70,18 +70,12 @@ final class GeneratedProjectAdapter
         ) {
             throw new ConfigurationException('Webman Composer installer policy is missing');
         }
-        (new VersionRange('2.2.4', '2.2.5'))->assertSupported(
-            $installerVersion,
-            'webman-composer-installer-install-only',
-            'workerman/webman-framework',
-            $installerPath,
-            1
-        );
         $installer = $this->readGuardedFile(
             $mirror . '/' . $installerPath,
             (string) ($installerRule['sourceSha256'] ?? ''),
             'Webman Composer installer'
         );
+        $installerTokens = $this->significantTokens($installer);
         foreach ([
             'class Plugin',
             'public static function install($event)',
@@ -89,7 +83,15 @@ final class GeneratedProjectAdapter
             'public static function uninstall($event)',
             "require_once __DIR__ . '/helpers.php';",
         ] as $marker) {
-            if (!str_contains($installer, $marker)) {
+            $markerTokens = $this->significantTokens('<?php ' . $marker);
+            $found = false;
+            for ($offset = 0; $offset <= count($installerTokens) - count($markerTokens); ++$offset) {
+                if (array_slice($installerTokens, $offset, count($markerTokens)) === $markerTokens) {
+                    $found = true;
+                    break;
+                }
+            }
+            if (!$found) {
                 throw new ConfigurationException(
                     'Webman Composer installer source structure drifted'
                 );
@@ -120,6 +122,20 @@ final class GeneratedProjectAdapter
             'workerShadowSha256' => hash('sha256', $adaptedShadow),
             'installOnlySourceSha256' => hash('sha256', $installer),
         ];
+    }
+
+    /** @return list<array{int|string,string}> */
+    private function significantTokens(string $source): array
+    {
+        $result = [];
+        foreach (token_get_all($source) as $token) {
+            $id = is_array($token) ? $token[0] : $token;
+            $text = is_array($token) ? $token[1] : $token;
+            if (!in_array($id, [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+                $result[] = [$id, $text];
+            }
+        }
+        return $result;
     }
 
     private function readGuardedFile(string $path, string $expectedSha256, string $label): string

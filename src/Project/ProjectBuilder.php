@@ -77,7 +77,7 @@ final class ProjectBuilder
             $compatibilityLockFile,
             $profile->name(),
             'webman-server',
-            $toolchainSha256
+            $tools['phpx'] . '/full-static/sdk'
         );
         $beforeStage?->__invoke('overlay');
         (new FullStaticProjectOverlay())->apply(

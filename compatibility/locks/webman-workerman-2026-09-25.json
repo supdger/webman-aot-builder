@@ -52,7 +52,8 @@
       "rule": "symfony.deepclone-php84-fallback.v1",
       "version": "v1.42.0",
       "reference": "70ba0627efc68e97ea392843458a2dd9d6dbd156",
-      "toolchainSha256": "79fce2da1dafe1184228130a8aa6c9eda16d72bdd51e05cb40630c8ae7836399",
+      "sdkSha256": "47705a92ff965250fb197087dddf8745da46a29249b0d6d0d1e40cc5b958d9f0",
+      "derivationSha256": "6bd209ab980650e80c908df098a53d73f87108c784d7f00fa7e1c74a0b96b319",
       "files": {
         "bootstrap.php": "18ecc97e1cc4bb01c94ecb5a90625f8cdebd705cea43490c1895818c746f0369",
         "bootstrap81.php": "f285e676d2f2ae97e221e7c472f8ba90e95d15835aa8c987239247268725249a",

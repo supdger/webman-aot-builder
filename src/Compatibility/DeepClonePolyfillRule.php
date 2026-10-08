@@ -5,16 +5,18 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Toolchain\SdkArchiveGuard;
+use WebmanAotBuilder\Toolchain\StaticSdkFingerprint;
 
 final class DeepClonePolyfillRule
 {
     /**
      * The locked PHP 8.4 static SDK has no deepclone module. Select its PHP
-     * fallback from the target lock, never from the build host's extensions.
+     * fallback from verified target SDK contents, never the host's extensions.
      *
      * @return list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>
      */
-    public function apply(string $directory, array $policy, ?string $toolchainSha256): array
+    public function apply(string $directory, array $policy, ?string $sdkDirectory): array
     {
         $mirror = realpath($directory);
         if (!is_string($mirror) || is_link($directory)
@@ -33,12 +35,27 @@ final class DeepClonePolyfillRule
         }
         if (count($packages) !== 1
             || ($policy['rule'] ?? null) !== 'symfony.deepclone-php84-fallback.v1'
-            || ($policy['version'] ?? null) !== ($packages[0]['version'] ?? null)
-            || ($policy['reference'] ?? null) !== ($packages[0]['source']['reference'] ?? null)
-            || !is_string($toolchainSha256)
-            || ($policy['toolchainSha256'] ?? null) !== $toolchainSha256
+            || !is_string($packages[0]['version'] ?? null)
+            || $packages[0]['version'] === ''
         ) {
-            throw new ConfigurationException('deepclone package or PHP 8.4 target lock drifted');
+            throw new ConfigurationException('deepclone package policy drifted');
+        }
+        $sdk = is_string($sdkDirectory) && !is_link($sdkDirectory) ? realpath($sdkDirectory) : false;
+        if (!is_string($sdk) || !is_dir($sdk)
+            || !is_string($policy['sdkSha256'] ?? null)
+            || preg_match('/^[a-f0-9]{64}$/D', $policy['sdkSha256']) !== 1
+            || !is_string($policy['derivationSha256'] ?? null)
+            || preg_match('/^[a-f0-9]{64}$/D', $policy['derivationSha256']) !== 1
+        ) {
+            throw new ConfigurationException('deepclone PHP 8.4 target SDK is missing or unapproved');
+        }
+        try {
+            if ((new StaticSdkFingerprint())->digest($sdk) !== $policy['sdkSha256']) {
+                throw new \RuntimeException('static contents differ from the approved SDK');
+            }
+            (new SdkArchiveGuard())->assertDerivation($sdk, $policy);
+        } catch (\RuntimeException $exception) {
+            throw new ConfigurationException('deepclone PHP 8.4 target SDK drifted: ' . $exception->getMessage(), previous: $exception);
         }
         $names = ['bootstrap.php', 'bootstrap81.php', 'Resources/stubs/ClassNotFoundException.php',
             'Resources/stubs/NotInstantiableException.php', 'DeepClone.php'];

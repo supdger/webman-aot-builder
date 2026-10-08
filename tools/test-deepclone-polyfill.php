@@ -32,6 +32,7 @@ mkdir($mirror . '/vendor/symfony/polyfill-deepclone/Resources/stubs', 0700, true
 $policy = json_decode(file_get_contents($repo . '/compatibility/locks/webman-workerman-2026-09-25.json'), true,
     flags: JSON_THROW_ON_ERROR)['optionalAdaptations']['symfony/polyfill-deepclone'];
 $prefix = '/vendor/symfony/polyfill-deepclone/';
+$sdk = $typephp . '/vendor/swoole/phpx/full-static/sdk';
 try {
     copy($project . '/composer.lock', $mirror . '/composer.lock');
     foreach ($policy['files'] as $name => $digest) {
@@ -40,22 +41,55 @@ try {
     file_put_contents($mirror . '/project.linux.yml', "sources:\n  - vendor\n\nignore:\n  - main.php\n\noutput: test\n");
     $rule = new DeepClonePolyfillRule();
     try {
-        $rule->apply($mirror, $policy, str_repeat('0', 64));
+        $rule->apply($mirror, $policy, null);
         throw new RuntimeException('target drift must fail');
     } catch (ConfigurationException $exception) {
-        checkDeepClone(str_contains($exception->getMessage(), 'target lock'), 'wrong target rejection');
+        checkDeepClone(str_contains($exception->getMessage(), 'target SDK'), 'wrong target rejection');
+    }
+    echo "PASS: missing actual SDK rejected before source writes\n";
+    $cloneSdk = $root . '/sdk';
+    mkdir($cloneSdk, 0700, true);
+    $entries = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($sdk, FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::SELF_FIRST);
+    foreach ($entries as $entry) {
+        $target = $cloneSdk . '/' . substr($entry->getPathname(), strlen($sdk) + 1);
+        if ($entry->isLink()) { checkDeepClone(symlink(readlink($entry->getPathname()), $target), 'cannot copy SDK link'); }
+        elseif ($entry->isDir()) { mkdir($target, 0700, true); }
+        else { checkDeepClone(copy($entry->getPathname(), $target), 'cannot copy SDK fixture'); }
+    }
+    $library = $cloneSdk . '/lib/libphpx.a';
+    $header = $cloneSdk . '/include/phpx/typephp_helper.h';
+    $derivation = $cloneSdk . '/builder-derivation.json';
+    foreach (['claimed-sdk', 'archive', 'header', 'derivation'] as $case) {
+        $candidatePolicy = $policy;
+        $changed = null;
+        if ($case === 'claimed-sdk') { $candidatePolicy['sdkSha256'] = str_repeat('0', 64); }
+        else {
+            $changed = match ($case) { 'archive' => $library, 'header' => $header, default => $derivation };
+            checkDeepClone(file_put_contents($changed, "\n// unknown material change\n", FILE_APPEND) !== false, 'cannot mutate isolated SDK fixture');
+        }
+        try {
+            $rule->apply($mirror, $candidatePolicy, $cloneSdk);
+            throw new RuntimeException('SDK material drift accepted: ' . $case);
+        } catch (ConfigurationException $exception) {
+            checkDeepClone(str_contains($exception->getMessage(), 'target SDK'), 'wrong SDK rejection: ' . $exception->getMessage());
+            checkDeepClone((glob($mirror . '/.typephp/build/deepclone-*') ?: []) === [], 'SDK rejection published shadows');
+            checkDeepClone(file_get_contents($mirror . '/project.linux.yml') === "sources:\n  - vendor\n\nignore:\n  - main.php\n\noutput: test\n", 'SDK rejection changed project');
+            echo "PASS: actual {$case} drift rejected before writes\n";
+        } finally {
+            if ($changed !== null) { copy($sdk . substr($changed, strlen($cloneSdk)), $changed); }
+        }
     }
     $stub = $mirror . $prefix . 'Resources/stubs/ClassNotFoundException.php';
     $original = file_get_contents($stub);
     file_put_contents($stub, $original . "// drift\n");
     try {
-        $rule->apply($mirror, $policy, hash_file('sha256', $repo . '/toolchain.lock.json'));
+        $rule->apply($mirror, $policy, $sdk);
         throw new RuntimeException('source drift must fail');
     } catch (ConfigurationException $exception) {
         checkDeepClone(str_contains($exception->getMessage(), 'source drifted'), 'wrong source rejection');
     }
     file_put_contents($stub, $original);
-    $mappings = $rule->apply($mirror, $policy, hash_file('sha256', $repo . '/toolchain.lock.json'));
+    $mappings = $rule->apply($mirror, $policy, $sdk);
     checkDeepClone(count($mappings) === 5, 'conditional declarations and complete DeepClone implementation must be mapped');
     require $typephp . '/bin/bootstrap.php';
     $preprocessor = new TypePhp\Preprocessor($root);
@@ -135,7 +169,7 @@ PROBE;
     $iterator = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS),
         RecursiveIteratorIterator::CHILD_FIRST);
     foreach ($iterator as $entry) {
-        $entry->isDir() ? rmdir($entry->getPathname()) : unlink($entry->getPathname());
+        !$entry->isLink() && $entry->isDir() ? rmdir($entry->getPathname()) : unlink($entry->getPathname());
     }
     rmdir($root);
 }

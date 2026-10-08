@@ -25,7 +25,7 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 composer global require supdger/webman-aot-builder
 ```
 
-入口版本 0.4.0 使用对应 0.4.0 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
+入口版本 0.4.1 使用对应 0.4.1 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
 
 网络受阻时，可从[最新完整发行页](https://github.com/supdger/webman-aot-builder/releases/latest)下载对应开发机的完整包，在同一菜单选择导入并输入或拖入包路径。构建及本机校验成功后显示 `dist-aot/` 位置；包安装与项目流程分别显示结果，Composer 后续安全审计照常执行。下次只需运行：
 
@@ -92,9 +92,17 @@ Windows 在 PowerShell 运行：
 
 `webman-aot build --fresh` 会重新编译全部单元，不清理旧缓存或失败构建目录。对象缓存位于项目内 `.webman-aot-builder/cache/objects/`；失败构建目录会保留并占用磁盘，成功后清理本轮临时镜像。规则及验证边界见[源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)与[测试与验证范围](https://github.com/supdger/webman-aot-builder/wiki/Verification)。Windows 原生 CI 已验证安装、续编及强制中断恢复；用户 Windows 实机续编与 PHP 8.1 原生流程仍未验收。
 
+## v0.4.1 兼容修复
+
+v0.4.1 改进下述依赖版本与写法兼容。Illuminate 时间间隔辅助函数按实际源码形态识别：接受 Laravel 12 的单位调用、Laravel 13 的 `make()` 调用，以及空白、注释、类名大小写、导入别名和全限定类名的变化。保留 `make()` 的小数行为；旧魔术单位调用改为显式调用，同一段已经适配的源码可重复处理。缺失、重复或单位不符仍会指出具体辅助函数，不能靠跳过规则继续构建。
+
+Webman / Workerman 的相关适配检查实际语法与改写结果；Carbon profile 检查已安装的 CarbonPeriod / CarbonInterval 所需调用结构，业务依赖只设已有基线的版本下限，不设版本上限或精确版本白名单。SaiAdmin profile 的下限为 Carbon 3.13.2、ThinkORM 3.0.34；同形源码不会因版本更高被拒绝，未知调用仍会停止。官方 Laravel 12、13 的时间间隔源码夹具已生成静态 ELF，并在 Linux 容器完成与普通 PHP 的行为对照；完整项目业务与用户已有宿主仍未验收。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
+
+构建副本激活遇到短暂文件占用时会有限重试；持续失败会保留系统原因和重试建议。目标目录冲突或源码在重试期间变化仍会停止。原生 Windows CI 已验证真实文件占用后的恢复、永久失败清理、短路径别名及并发源码变化拒绝；这不代表用户已有宿主升级验收。
+
 ## v0.3.2 兼容范围
 
-v0.3.2 适配锁定的 Carbon 3.14.1 与 `symfony/polyfill-deepclone` 1.42.0，并使用本项目重建的 PHPX 静态 SDK 支持其所需的闭包绑定和引用存储。适配只作用于隔离构建副本，版本或源码摘要不匹配时拒绝应用；`Closure::call()` 仍不支持。适用组合与限制见 [SaiAdmin 兼容说明](https://github.com/supdger/webman-aot-builder/wiki/SaiAdmin-Compatibility)。
+v0.3.2 适配锁定的 Carbon 3.14.1 与 `symfony/polyfill-deepclone` 1.42.0，并使用本项目重建的 PHPX 静态 SDK 支持其所需的闭包绑定和引用存储。这是旧发行版的验证与拒绝策略；v0.4.1 的下限及形态判断见上一节。适配只作用于隔离构建副本；`Closure::call()` 仍不支持。适用组合与限制见 [SaiAdmin 兼容说明](https://github.com/supdger/webman-aot-builder/wiki/SaiAdmin-Compatibility)。
 
 普通安装继续选择 setup。维护者的 `webman-aot-builder-0.3.2-derived-linux-x86_64-sdk.tar.xz` 是 Linux x86_64 musl 目标 SDK 素材，不是开发机安装包或 PHPX 官方发行资产；来源与重建步骤见 [源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
