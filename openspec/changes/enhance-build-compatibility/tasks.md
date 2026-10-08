@@ -59,3 +59,7 @@ CarbonInterval 内部符号兼容：新领域规则与 universal generator entry
 后续发布授权：用户明确要求“提交发布”，覆盖本轮兼容修复的 feature branch 提交、推送、PR 合并及适当 patch 版本 tag/Release 资产公开。已只读核远端最新正式版本为 v0.4.0，拟交付 v0.4.1。原候选基线 05f33af 后的远端 main 六个提交仅包含已公开 0.4.0 交付记录与 README 调整；本轮不回滚它们、不改原脏工作区。版本字段及发行说明已准备，资产锁须由真实新包生成。目标仓库原无 pre-commit，已接入现有索引审查检查器并验证缺审查记录时拒绝；不改全局 hooksPath。Wiki、用户宿主、数据库不在此次发布写入范围。
 
 发布材料准入审查：SDK 修复的六份源码冻结摘要、实际 SDK/头文件/派生证据/库文件与写入前安全拒绝均已独立复核，默认生成五份 shadow 摘要一致；ProjectBuilder 真实入口夹具通过（1.24 秒），证据 /private/tmp/webman-aot-compatibility-release/sdk/default-builder-result.json。Windows 新增实际 FileStream 句柄占用分支已静态审查，macOS 通用镜像回归通过，原生分支须由此次发行 CI 执行。
+
+发布执行进度：双平台 0.4.1 组件已逐文件核验并生成实际锁；源码与组件锁已通过索引绑定审查及实际 pre-commit，提交 f09ec1a297ea66912835c07be4985e6b5fc77f38 已推送 feature branch，PR #54 已创建。两组件上传私有 Release 草稿后的服务端大小和 SHA-256 与本机一致，尚未公开发行。0026 补丁的五行空白上下文产生 Git whitespace 提示，已核为 unified-diff 必需前缀，完整补丁应用与幂等核验通过，未改变补丁数据。
+
+首轮原生 Windows CI 37754001594 已完成 PowerShell 语法及双安装包构建，但镜像测试在文件占用分支前失败：迭代器保留临时目录短路径名，快照前缀却使用 realpath 后的规范路径，误报越界。修复将迭代根与比较根统一为规范路径，保留越界和符号链接拒绝；需独立审查与新提交原生重跑，当前不计 Windows 恢复验收完成。两平台最终安装包须绑定修复后的同一源码提交。

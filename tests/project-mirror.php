@@ -102,6 +102,8 @@ try {
     file_put_contents($root . '/nested/.DS_Store', 'metadata two');
     $snapshot = new SourceTreeSnapshot($root);
     $before = $snapshot->capture();
+    check((new SourceTreeSnapshot($root . '/nested/..'))->capture() === $before,
+        'canonical project alias changed the source snapshot');
     file_put_contents($root . '/.DS_Store', 'metadata changed');
     unlink($root . '/nested/.DS_Store');
     check($snapshot->capture() === $before, 'Finder metadata changed source fingerprint');
