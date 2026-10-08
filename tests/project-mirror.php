@@ -35,27 +35,36 @@ function removeFixture(string $path): void
 
 $controlFilename = PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : "d-control\n.php";
 
-if (($argv[1] ?? null) === '--writer') {
+if (in_array($argv[1] ?? null, ['--writer', '--activation-writer'], true)) {
     $root = $argv[2];
     $deadline = microtime(true) + 10;
     do {
-        $candidates = glob($root . '/.webman-aot-builder/build/.project-*') ?: [];
-        foreach ($candidates as $candidate) {
-            if (is_file($candidate . '/c-modified.php')) {
-                file_put_contents($root . '/a-added.php', '<?php // added');
-                unlink($root . '/b-removed.php');
-                file_put_contents($root . '/c-modified.php', '<?php // modified');
-                file_put_contents($root . '/' . $controlFilename, '<?php // modified');
-                file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php // modified');
-                for ($index = 0; $index < 8; ++$index) {
-                    file_put_contents($root . "/f-{$index}.php", '<?php // modified');
+        clearstatcache();
+        $ready = is_file($root . '/.webman-aot-builder/write-source');
+        if (($argv[1] ?? null) === '--writer') {
+            $ready = false;
+            foreach (glob($root . '/.webman-aot-builder/build/.project-*') ?: [] as $candidate) {
+                if (is_file($candidate . '/c-modified.php')) {
+                    $ready = true;
+                    break;
                 }
-                exit(0);
             }
+        }
+        if ($ready) {
+            file_put_contents($root . '/a-added.php', '<?php // added');
+            unlink($root . '/b-removed.php');
+            file_put_contents($root . '/c-modified.php', '<?php // modified');
+            file_put_contents($root . '/' . $controlFilename, '<?php // modified');
+            file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php // modified');
+            for ($index = 0; $index < 8; ++$index) {
+                file_put_contents($root . "/f-{$index}.php", '<?php // modified');
+            }
+            file_put_contents($root . '/.webman-aot-builder/writer-done', 'done');
+            exit(0);
         }
         usleep(1000);
     } while (microtime(true) < $deadline);
-    fwrite(STDERR, "writer did not observe mirror copy\n");
+    fwrite(STDERR, "writer did not observe its copy or activation barrier\n");
     exit(1);
 }
 
@@ -233,47 +242,71 @@ try {
         }
         fwrite(STDOUT, "PASS actual Windows file handle contention, release recovery and permanent failure cleanup\n");
     }
-    removeFixture($root);
-    mkdir($root, 0700);
-    mkdir($root . '/.webman-aot-builder/build', 0700, true);
-    file_put_contents($root . '/b-removed.php', '<?php');
-    file_put_contents($root . '/c-modified.php', '<?php');
-    file_put_contents($root . '/' . $controlFilename, '<?php');
-    file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php');
-    for ($index = 0; $index < 8; ++$index) {
-        file_put_contents($root . "/f-{$index}.php", '<?php');
+    foreach (['copy', 'activation'] as $stage) {
+        removeFixture($root);
+        mkdir($root, 0700);
+        mkdir($root . '/.webman-aot-builder/build', 0700, true);
+        file_put_contents($root . '/b-removed.php', '<?php');
+        file_put_contents($root . '/c-modified.php', '<?php');
+        file_put_contents($root . '/' . $controlFilename, '<?php');
+        file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php');
+        for ($index = 0; $index < 8; ++$index) {
+            file_put_contents($root . "/f-{$index}.php", '<?php');
+        }
+        if ($stage === 'copy') {
+            mkdir($root . '/padding');
+            for ($index = 0; $index < 3000; ++$index) {
+                file_put_contents($root . "/padding/{$index}", 'copy time for concurrent writer');
+            }
+        }
+        $writer = proc_open(
+            [PHP_BINARY, __FILE__, $stage === 'copy' ? '--writer' : '--activation-writer', $root],
+            [0 => ['pipe', 'r'], 1 => STDOUT, 2 => STDERR],
+            $pipes
+        );
+        check(is_resource($writer), 'unable to start concurrent writer');
+        fclose($pipes[0]);
+        $move = $stage === 'copy' ? null : static function (string $from, string $to) use ($root): bool {
+            file_put_contents($root . '/.webman-aot-builder/write-source', 'write');
+            $deadline = microtime(true) + 10;
+            while (!is_file($root . '/.webman-aot-builder/writer-done')) {
+                check(microtime(true) < $deadline, 'activation writer did not finish');
+                usleep(1000);
+                clearstatcache();
+            }
+            return false;
+        };
+        try {
+            (new ProjectMirror($root, $move))->create($root . '/.webman-aot-builder/build');
+            throw new RuntimeException("mirror accepted {$stage} source changes");
+        } catch (ConfigurationException $error) {
+            $message = $error->getMessage();
+            if ($stage === 'copy') {
+                check(str_starts_with($message, 'project mirror copy drift: ')
+                    || str_starts_with($message, 'project source changed while creating build mirror: '),
+                    'unexpected copy concurrency rejection: ' . $message);
+            } else {
+                check(str_contains($message, 'added "a-added.php"'), 'addition path missing: ' . $message);
+                check(str_contains($message, 'removed "b-removed.php"'), 'removal path missing');
+                check(str_contains($message, 'modified "c-modified.php"'), 'modification path missing');
+                check(str_contains($message, PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : 'd-control\\n.php'), 'changed path was not safely reported');
+                check(!str_contains($message, "\n"), 'diagnostic contains a raw newline');
+                check(!str_contains($message, $root), 'diagnostic exposes absolute fixture path');
+                check(str_contains($message, '(+8 more)'), 'diagnostic did not cap changed path count');
+                check(strlen($message) < 1000, 'diagnostic is unbounded');
+                check(str_contains($message, 'retry webman-aot build'), 'recovery guidance missing');
+            }
+            check(!is_dir($root . '/.webman-aot-builder/build/project'), 'failed mirror was activated');
+            check((glob($root . '/.webman-aot-builder/build/.project-*') ?: []) === [], 'candidate remains after failure');
+        }
+        check(proc_close($writer) === 0, 'concurrent writer failed');
+        $writer = null;
+        check(is_file($root . '/.webman-aot-builder/writer-done'), 'source writer did not complete real changes');
+        fwrite(STDOUT, $stage === 'copy'
+            ? "PASS real copy concurrency safely rejects changed source and removes candidate\n"
+            : "PASS synchronized writer, bounded safe changed paths, recovery guidance and candidate cleanup\n");
     }
-    mkdir($root . '/padding');
-    for ($index = 0; $index < 3000; ++$index) {
-        file_put_contents($root . "/padding/{$index}", 'copy time for concurrent writer');
-    }
-    $writer = proc_open(
-        [PHP_BINARY, __FILE__, '--writer', $root],
-        [0 => ['pipe', 'r'], 1 => STDOUT, 2 => STDERR],
-        $pipes
-    );
-    check(is_resource($writer), 'unable to start concurrent writer');
-    fclose($pipes[0]);
-    try {
-        (new ProjectMirror($root))->create($root . '/.webman-aot-builder/build');
-        throw new RuntimeException('mirror accepted concurrent source changes');
-    } catch (ConfigurationException $error) {
-        $message = $error->getMessage();
-        check(str_contains($message, 'added "a-added.php"'), 'addition path missing: ' . $message);
-        check(str_contains($message, 'removed "b-removed.php"'), 'removal path missing');
-        check(str_contains($message, 'modified "c-modified.php"'), 'modification path missing');
-        check(str_contains($message, PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : 'd-control\\n.php'), 'changed path was not safely reported');
-        check(!str_contains($message, "\n"), 'diagnostic contains a raw newline');
-        check(!str_contains($message, $root), 'diagnostic exposes absolute fixture path');
-        check(str_contains($message, '(+8 more)'), 'diagnostic did not cap changed path count');
-        check(strlen($message) < 1000, 'diagnostic is unbounded');
-        check(str_contains($message, 'retry webman-aot build'), 'recovery guidance missing');
-        check(!is_dir($root . '/.webman-aot-builder/build/project'), 'failed mirror was activated');
-        check((glob($root . '/.webman-aot-builder/build/.project-*') ?: []) === [], 'candidate remains after failure');
-        fwrite(STDOUT, "PASS concurrent source change rejection, bounded safe relative paths, candidate cleanup\n");
-    }
-    check(proc_close($writer) === 0, 'concurrent writer failed');
-    $writer = null;
+
 } finally {
     if (is_resource($writer)) {
         proc_terminate($writer);
