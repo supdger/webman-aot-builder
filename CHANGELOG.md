@@ -7,7 +7,7 @@
 - Illuminate 时间间隔适配兼容 Laravel 12 的单位调用与 Laravel 13 的 `make()` 写法，以及已确认的等价语法；保留宏、浮点 setter 和分数行为，不改原 vendor。
 - Webman、Workerman、Carbon 按源码结构与转换结果判断兼容，移除业务依赖版本上限与精确版本白名单。SaiAdmin profile 使用 Carbon 3.13.2、ThinkORM 3.0.34 的下限；Monolog 与相关 polyfill 继续核源码及输出摘要。
 - 修复已确认 CarbonInterval 内部负小数符号切换的 AOT 差异；Laravel 12、13 各 75 个实际 ELF 输出与普通 PHP 基准一致。公开用户代码直接零参 `invert()` 的编译器限制仍保留，完整应用业务未因此宣称通过。
-- Windows 构建镜像激活增加有界重试及系统原因，保留目标冲突和源码变化保护；原生 Windows 文件占用恢复仍需专项验证。
+- Windows 构建镜像激活增加有界重试及系统原因，保留目标冲突和源码变化保护；原生 Windows CI 已验证真实文件占用后的恢复、永久占用失败清理及短路径别名快照。
 - 修复 DeepClone 适配将整份工具链锁摘要当作 SDK 身份的问题，改为核实际 SDK、派生证据和头文件；保留材料完整性校验。
 - 修复编译器对含空格工具路径的错误引用，新增第 26 号补丁并纳入补丁清单。
 

@@ -2,8 +2,6 @@
 
 [![macOS ARM64 构建](https://img.shields.io/badge/macOS%20ARM64%20%E6%9E%84%E5%BB%BA-%E5%AE%9E%E6%9C%BA%E9%80%9A%E8%BF%87%C2%B72026--09--30-brightgreen.svg)](https://github.com/supdger/webman-aot-builder#%E5%AE%9E%E6%9C%BA%E6%9E%84%E5%BB%BA%E4%B8%8E%E5%90%AF%E5%8A%A8%E9%AA%8C%E8%AF%81) [![Windows x64 构建](https://img.shields.io/badge/Windows%20x64%20%E6%9E%84%E5%BB%BA-%E5%AE%9E%E6%9C%BA%E9%80%9A%E8%BF%87%C2%B72026--09--30-brightgreen.svg)](https://github.com/supdger/webman-aot-builder#%E5%AE%9E%E6%9C%BA%E6%9E%84%E5%BB%BA%E4%B8%8E%E5%90%AF%E5%8A%A8%E9%AA%8C%E8%AF%81) [![Linux x86_64 启动](https://img.shields.io/badge/Linux%20x86__64%20%E5%90%AF%E5%8A%A8-%E5%AE%9E%E6%9C%BA%E9%80%9A%E8%BF%87%C2%B72026--09--30-brightgreen.svg)](https://github.com/supdger/webman-aot-builder#%E5%AE%9E%E6%9C%BA%E6%9E%84%E5%BB%BA%E4%B8%8E%E5%90%AF%E5%8A%A8%E9%AA%8C%E8%AF%81) [![License](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/supdger/webman-aot-builder/blob/main/LICENSE)
 
-徽章链接到 2026-09-30 的实机构建与启动记录。
-
 Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态程序。
 在 macOS Apple Silicon 或 Windows x64 开发机上安装工具、构建项目，再将生成的 `dist-aot/` 部署到 Linux，目标机无需安装 PHP。
 
@@ -98,9 +96,9 @@ Windows 在 PowerShell 运行：
 
 v0.4.1 改进下述依赖版本与写法兼容。Illuminate 时间间隔辅助函数按实际源码形态识别：接受 Laravel 12 的单位调用、Laravel 13 的 `make()` 调用，以及空白、注释、类名大小写、导入别名和全限定类名的变化。保留 `make()` 的小数行为；旧魔术单位调用改为显式调用，同一段已经适配的源码可重复处理。缺失、重复或单位不符仍会指出具体辅助函数，不能靠跳过规则继续构建。
 
-Webman / Workerman 的相关适配检查实际语法与改写结果；Carbon profile 检查已安装的 CarbonPeriod / CarbonInterval 所需调用结构，业务依赖只设已有基线的版本下限，不设版本上限或精确版本白名单。SaiAdmin profile 的下限为 Carbon 3.13.2、ThinkORM 3.0.34；同形源码不会因版本更高被拒绝，未知调用仍会停止。官方 Laravel 12、13 的时间间隔源码夹具已生成静态 ELF，并在 Linux 容器完成与普通 PHP 的行为对照；完整项目业务与 Windows 原生验证仍未完成。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
+Webman / Workerman 的相关适配检查实际语法与改写结果；Carbon profile 检查已安装的 CarbonPeriod / CarbonInterval 所需调用结构，业务依赖只设已有基线的版本下限，不设版本上限或精确版本白名单。SaiAdmin profile 的下限为 Carbon 3.13.2、ThinkORM 3.0.34；同形源码不会因版本更高被拒绝，未知调用仍会停止。官方 Laravel 12、13 的时间间隔源码夹具已生成静态 ELF，并在 Linux 容器完成与普通 PHP 的行为对照；完整项目业务与用户已有宿主仍未验收。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
 
-构建副本激活遇到短暂文件占用时会有限重试；持续失败会保留系统原因和重试建议。目标目录冲突或源码在重试期间变化仍会停止。Windows 原生文件占用恢复需单独验证。
+构建副本激活遇到短暂文件占用时会有限重试；持续失败会保留系统原因和重试建议。目标目录冲突或源码在重试期间变化仍会停止。原生 Windows CI 已验证真实文件占用后的恢复、永久失败清理、短路径别名及并发源码变化拒绝；这不代表用户已有宿主升级验收。
 
 ## v0.3.2 兼容范围
 
