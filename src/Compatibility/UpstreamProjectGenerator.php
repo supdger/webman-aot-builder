@@ -19,7 +19,7 @@ final class UpstreamProjectGenerator
         string $lockFile,
         string $profile,
         string $outputName,
-        ?string $toolchainSha256 = null
+        ?string $sdkDirectory = null
     ): array {
         if (!in_array($profile, [ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
             || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1
@@ -57,17 +57,18 @@ final class UpstreamProjectGenerator
         $generatorFile = $generatorRoot . '/src/Compiler/ProjectGenerator.php';
         $generatorSha256 = $lock['generator']['sourceSha256'];
         $profileFile = $generatorRoot . '/src/Compiler/Profile/SaiAdminProfile.php';
+        $generatorOverlay = (new SaiAdminGeneratorOverlay())->prepare(
+            $generatorFile,
+            $generatorSha256,
+            $lock['generator']['mainStubSha256'],
+            $privateCache,
+            $mirror,
+            $lock['optionalAdaptations']['nesbot/carbon'] ?? [],
+            $profile === ProjectProfile::SAIADMIN
+        );
+        $generatorFile = $generatorOverlay['path'];
+        $generatorSha256 = $generatorOverlay['sha256'];
         if ($profile === ProjectProfile::SAIADMIN) {
-            $generatorOverlay = (new SaiAdminGeneratorOverlay())->prepare(
-                $generatorFile,
-                $generatorSha256,
-                $lock['generator']['mainStubSha256'],
-                $privateCache,
-                $mirror,
-                $lock['optionalAdaptations']['nesbot/carbon'] ?? []
-            );
-            $generatorFile = $generatorOverlay['path'];
-            $generatorSha256 = $generatorOverlay['sha256'];
             $profileFile = (new SaiAdminProfileOverlay())->prepare(
                 $profileFile,
                 $lock['generator']['profileSha256'],
@@ -116,7 +117,7 @@ final class UpstreamProjectGenerator
             $deepClone = (new DeepClonePolyfillRule())->apply(
                 $mirror,
                 $lock['optionalAdaptations']['symfony/polyfill-deepclone'] ?? [],
-                $toolchainSha256
+                $sdkDirectory
             );
             foreach ($deepClone as $mapping) {
                 $manifest[] = $mapping;

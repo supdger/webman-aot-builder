@@ -31,6 +31,9 @@ final class NativeIntlPolyfillRule
         $installed = [];
         foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $package) {
             if (is_array($package) && is_string($package['name'] ?? null)) {
+                if (isset($installed[$package['name']])) {
+                    throw new ConfigurationException('native intl polyfill Composer lock contains duplicate package: ' . $package['name']);
+                }
                 $installed[$package['name']] = $package;
             }
         }
@@ -50,8 +53,8 @@ final class NativeIntlPolyfillRule
             $shadow = ".typephp/build/symfony-{$name}-functions.php";
             if (!is_array($packagePolicy) || !is_array($shadowPolicy)
                 || !is_array($package)
-                || ($package['version'] ?? null) !== ($packagePolicy['version'] ?? null)
-                || ($package['source']['reference'] ?? null) !== ($packagePolicy['reference'] ?? null)
+                || !is_string($package['version'] ?? null)
+                || $package['version'] === ''
             ) {
                 throw new ConfigurationException("native intl polyfill package drifted: {$name}");
             }

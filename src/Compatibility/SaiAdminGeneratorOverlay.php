@@ -17,7 +17,8 @@ final class SaiAdminGeneratorOverlay
         string $expectedStubSha256,
         string $privateCache,
         ?string $mirror = null,
-        array $carbonPolicy = []
+        array $carbonPolicy = [],
+        bool $saiAdmin = true
     ): array {
         $source = is_file($sourceFile) && !is_link($sourceFile)
             ? file_get_contents($sourceFile)
@@ -27,30 +28,57 @@ final class SaiAdminGeneratorOverlay
         ) {
             throw new ConfigurationException('locked SaiAdmin generator source drifted');
         }
-        $before = "                \$sourceRel === 'plugin/saiadmin/exception/SystemException.php',\n";
-        $groupEnd = <<<'PHP'
-                $sourceRel === 'vendor/webman/console/src/Application.php',
-                    => 1,
-PHP;
-        $after = <<<'PHP'
-                $sourceRel === 'vendor/webman/console/src/Application.php',
-                    => 1,
-                $sourceRel === 'plugin/saiadmin/exception/SystemException.php'
-                    => match (true) {
-                        substr_count($content, ', Throwable $previous = null)') === 1
-                            && substr_count($content, ', ?Throwable $previous = null)') === 0 => 1,
-                        substr_count($content, ', Throwable $previous = null)') === 0
-                            && substr_count($content, ', ?Throwable $previous = null)') === 1 => 0,
-                        default => -1,
-                    },
-PHP;
-        if (substr_count($source, $before) !== 1 || substr_count($source, $groupEnd) !== 1) {
-            throw new ConfigurationException('locked SaiAdmin exception rule structure drifted');
+        $overlay = $source;
+        if ($saiAdmin) {
+            $before = "                \$sourceRel === 'plugin/saiadmin/exception/SystemException.php',\n";
+            $groupEnd = <<<'PHP'
+                    $sourceRel === 'vendor/webman/console/src/Application.php',
+                        => 1,
+    PHP;
+            $after = <<<'PHP'
+                    $sourceRel === 'vendor/webman/console/src/Application.php',
+                        => 1,
+                    $sourceRel === 'plugin/saiadmin/exception/SystemException.php'
+                        => match (true) {
+                            substr_count($content, ', Throwable $previous = null)') === 1
+                                && substr_count($content, ', ?Throwable $previous = null)') === 0 => 1,
+                            substr_count($content, ', Throwable $previous = null)') === 0
+                                && substr_count($content, ', ?Throwable $previous = null)') === 1 => 0,
+                            default => -1,
+                        },
+    PHP;
+            if (substr_count($source, $before) !== 1 || substr_count($source, $groupEnd) !== 1) {
+                throw new ConfigurationException('locked SaiAdmin exception rule structure drifted');
+            }
+            $overlay = str_replace($groupEnd, $after, str_replace($before, '', $source));
+            if ($mirror !== null) {
+                $overlay = $this->applyCarbonSourceRules($overlay, $mirror);
+            }
         }
-        $overlay = str_replace($groupEnd, $after, str_replace($before, '', $source));
-        if ($mirror !== null) {
-            $overlay = $this->applyCarbonVersionRules($overlay, $mirror, $carbonPolicy);
+        $patchEntry = <<<'PHP'
+    protected function patchSwitchTerminals(string $sourceRel, string $content): string
+    {
+PHP;
+        $intervalPatch = <<<'PHP'
+        if ($sourceRel === 'vendor/nesbot/carbon/src/Carbon/CarbonInterval.php') {
+            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($content);
         }
+PHP;
+        if (substr_count($overlay, $patchEntry) !== 1) {
+            throw new ConfigurationException('locked Carbon interval patch entry structure drifted');
+        }
+        $overlay = str_replace($patchEntry, $patchEntry . "\n" . $intervalPatch, $overlay);
+        $start = strpos($overlay, "        if (\$sourceRel === 'vendor/illuminate/support/functions.php') {");
+        $end = strpos($overlay, "        if (\$sourceRel === 'vendor/cakephp/core/functions.php') {");
+        if ($start === false || $end === false || $end <= $start) {
+            throw new ConfigurationException('locked Illuminate interval rule structure drifted');
+        }
+        $intervalRule = <<<'PHP'
+        if ($sourceRel === 'vendor/illuminate/support/functions.php') {
+            return (new \WebmanAotBuilder\Compatibility\IlluminateIntervalRule())->transform($content);
+        }
+PHP;
+        $overlay = substr_replace($overlay, $intervalRule . "\n", $start, $end - $start);
         $digest = hash('sha256', $overlay);
         $stubSource = dirname($sourceFile, 2) . '/Stubs/main.php.stub';
         $stub = is_file($stubSource) && !is_link($stubSource)
@@ -89,58 +117,55 @@ PHP;
         }
         return ['path' => $target, 'sha256' => $digest];
     }
-    /** @param array<string,mixed> $policy */
-    private function applyCarbonVersionRules(string $generator, string $mirror, array $policy): string
+    private function applyCarbonSourceRules(string $generator, string $mirror): string
     {
-        $lockFile = $mirror . '/composer.lock';
-        $contents = is_file($lockFile) && !is_link($lockFile) ? file_get_contents($lockFile) : false;
-        if (!is_string($contents)) {
-            throw new ConfigurationException('Carbon adaptation requires a project lock');
-        }
-        $lock = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
-        $package = null;
-        foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $candidate) {
-            if (is_array($candidate) && ($candidate['name'] ?? null) === 'nesbot/carbon') {
-                $package = $candidate;
-                break;
-            }
-        }
-        $version = $package['version'] ?? null;
-        $rule = is_string($version) ? ($policy['versions'][$version] ?? null) : null;
-        if ($rule === null) {
-            return $generator;
-        }
-        $sourcePath = $rule['sourcePath'] ?? null;
-        $sourceSha256 = $rule['sourceSha256'] ?? null;
-        $replacements = $rule['replacements'] ?? null;
-        if (!is_array($rule) || !is_string($sourcePath)
-            || preg_match('~^vendor/nesbot/carbon/[A-Za-z0-9_/]+\.php$~D', $sourcePath) !== 1
-            || !is_string($sourceSha256) || preg_match('/^[a-f0-9]{64}$/D', $sourceSha256) !== 1
-            || !is_array($replacements) || $replacements === []
-            || !is_string($rule['reference'] ?? null)
-            || ($package['source']['reference'] ?? $package['dist']['reference'] ?? null) !== $rule['reference']
-        ) {
-            throw new ConfigurationException('Carbon version adaptation policy or source reference drifted');
-        }
-        $sourceFile = $mirror . '/' . $sourcePath;
-        $source = is_file($sourceFile) && !is_link($sourceFile) ? file_get_contents($sourceFile) : false;
-        if (!is_string($source) || !hash_equals($sourceSha256, hash('sha256', $source))) {
-            throw new ConfigurationException('Carbon version adaptation source drifted');
-        }
+        $sourcePath = 'vendor/nesbot/carbon/src/Carbon/CarbonPeriod.php';
+        $period = $this->readCarbonSource($mirror . '/' . $sourcePath);
+        $interval = $this->readCarbonSource($mirror . '/vendor/nesbot/carbon/src/Carbon/CarbonInterval.php');
+        (new SaiAdminCarbonPeriodRule())->replacements($period, $interval);
+        (new SaiAdminCarbonIntervalRule())->transform($interval);
         $anchor = "        '{$sourcePath}' => [\n";
-        if (substr_count($generator, $anchor) !== 1) {
+        $start = strpos($generator, $anchor);
+        $end = strpos($generator, "        'vendor/illuminate/database/Eloquent/Casts/ArrayObject.php' => [", $start ?: 0);
+        if ($start === false || $end === false || $end <= $start) {
             throw new ConfigurationException('Carbon generator mapping structure drifted');
         }
-        $addition = '';
-        foreach ($replacements as $before => $after) {
-            if (!is_string($before) || $before === '' || !is_string($after) || $before === $after
-                || substr_count($source, $before) !== 1
-            ) {
-                throw new ConfigurationException('Carbon version adaptation replacement structure drifted');
-            }
-            $addition .= '            ' . var_export($before, true) . ' => ' . var_export($after, true) . ",\n";
+        $mapping = substr($generator, $start, $end - $start);
+        $oldIntervalRules = <<<'PHP'
+            '\Carbon\CarbonInterval::day()' => 'new \Carbon\CarbonInterval(0, 0, 0, 1)',
+            'CarbonInterval::day()' => 'new CarbonInterval(0, 0, 0, 1)',
+            'CarbonInterval::month()' => 'new CarbonInterval(0, 1)',
+PHP;
+        if (substr_count($mapping, $oldIntervalRules) !== 1) {
+            throw new ConfigurationException('locked Carbon interval mapping structure drifted');
         }
-        return str_replace($anchor, $anchor . $addition, $generator);
+        $generator = substr_replace($generator, str_replace($oldIntervalRules . "\n", '', $mapping), $start, $end - $start);
+        $method = <<<'PHP'
+    protected function patchSwitchTerminals(string $sourceRel, string $content): string
+    {
+PHP;
+        $rule = <<<'PHP'
+        if ($sourceRel === 'vendor/nesbot/carbon/src/Carbon/CarbonPeriod.php') {
+            $intervalPath = $this->basePath . '/vendor/nesbot/carbon/src/Carbon/CarbonInterval.php';
+            $interval = is_file($intervalPath) && !is_link($intervalPath) ? file_get_contents($intervalPath) : false;
+            if (!is_string($interval)) {
+                throw new \WebmanAotBuilder\Cli\ConfigurationException('CarbonInterval compatibility source is missing');
+            }
+            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonPeriodRule())->transform($content, $interval);
+        }
+PHP;
+        if (substr_count($generator, $method) !== 1) {
+            throw new ConfigurationException('locked Carbon patch entry structure drifted');
+        }
+        return str_replace($method, $method . "\n" . $rule, $generator);
     }
 
+    private function readCarbonSource(string $path): string
+    {
+        $source = is_file($path) && !is_link($path) ? file_get_contents($path) : false;
+        if (!is_string($source)) {
+            throw new ConfigurationException('Carbon compatibility source is missing: ' . $path);
+        }
+        return $source;
+    }
 }

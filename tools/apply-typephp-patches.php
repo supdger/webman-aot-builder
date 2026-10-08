@@ -69,7 +69,7 @@ try {
     }
     if ($alreadyApplied) {
         fwrite(STDOUT, json_encode(['component' => 'typephp-source', 'version' => '0.9.2',
-            'patches' => 25, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
+            'patches' => 26, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
         exit(0);
     }
 
@@ -111,6 +111,7 @@ try {
         '0023-full-static-select-target-reflection.patch',
         '0024-closure-runtime-binding-and-reference-storage.patch',
         '0025-verified-object-checkpoints.patch',
+        '0026-compiler-command-paths.patch',
     ] as $patch) {
         $applier->apply($patchDirectory . '/' . $patch, $typephp);
     }
@@ -130,7 +131,7 @@ try {
             [
                 'component' => 'typephp-source',
                 'version' => '0.9.2',
-                'patches' => 25,
+                'patches' => 26,
                 'rules' => count($rules),
                 'status' => 'applied-and-verified',
             ],

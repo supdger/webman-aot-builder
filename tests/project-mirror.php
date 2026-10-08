@@ -33,6 +33,8 @@ function removeFixture(string $path): void
     rmdir($path);
 }
 
+$controlFilename = PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : "d-control\n.php";
+
 if (($argv[1] ?? null) === '--writer') {
     $root = $argv[2];
     $deadline = microtime(true) + 10;
@@ -43,7 +45,7 @@ if (($argv[1] ?? null) === '--writer') {
                 file_put_contents($root . '/a-added.php', '<?php // added');
                 unlink($root . '/b-removed.php');
                 file_put_contents($root . '/c-modified.php', '<?php // modified');
-                file_put_contents($root . "/d-control\n.php", '<?php // modified');
+                file_put_contents($root . '/' . $controlFilename, '<?php // modified');
                 file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php // modified');
                 for ($index = 0; $index < 8; ++$index) {
                     file_put_contents($root . "/f-{$index}.php", '<?php // modified');
@@ -55,6 +57,36 @@ if (($argv[1] ?? null) === '--writer') {
     } while (microtime(true) < $deadline);
     fwrite(STDERR, "writer did not observe mirror copy\n");
     exit(1);
+}
+
+function windowsHandle(string $path, string $ready, string $release): mixed
+{
+    $script = '$file = [IO.File]::Open($args[0], [IO.FileMode]::Open, '
+        . '[IO.FileAccess]::Read, [IO.FileShare]::ReadWrite); '
+        . 'try { [IO.File]::WriteAllText($args[1], "ready"); '
+        . '$deadline = [DateTime]::UtcNow.AddSeconds(10); '
+        . 'while (-not [IO.File]::Exists($args[2])) { '
+        . 'if ([DateTime]::UtcNow -gt $deadline) { throw "release timed out" }; '
+        . 'Start-Sleep -Milliseconds 10 } } finally { $file.Dispose() }';
+    $command = ' & { ' . $script . ' } ';
+    foreach ([$path, $ready, $release] as $argument) {
+        $command .= "'" . str_replace("'", "''", $argument) . "' ";
+    }
+    $process = proc_open(
+        ['powershell.exe', '-NoProfile', '-NonInteractive', '-EncodedCommand',
+            base64_encode(iconv('UTF-8', 'UTF-16LE', $command))],
+        [0 => ['pipe', 'r'], 1 => STDOUT, 2 => STDERR],
+        $pipes
+    );
+    check(is_resource($process), 'unable to start native Windows file holder');
+    fclose($pipes[0]);
+    $deadline = microtime(true) + 10;
+    while (!is_file($ready)) {
+        check(microtime(true) < $deadline, 'native Windows file holder did not become ready');
+        usleep(10000);
+        clearstatcache(true, $ready);
+    }
+    return $process;
 }
 
 $started = microtime(true);
@@ -87,12 +119,124 @@ try {
     unlink($root . '/added.php');
     check($snapshot->capture() === $changed, 'PHP removal was ignored');
     fwrite(STDOUT, "PASS metadata exclusion, hidden input retention, PHP modification/addition/removal\n");
+    try {
+        (new ProjectMirror($root))->create($root . '/.webman-aot-builder/build');
+        throw new RuntimeException('existing mirror was replaced');
+    } catch (ConfigurationException $error) {
+        check(str_contains($error->getMessage(), 'already exists'), 'existing mirror conflict missing');
+    }
+    removeFixture($mirror['path']);
+    $moves = 0;
+    $mirror = (new ProjectMirror($root, static function (string $from, string $to) use (&$moves): bool {
+        ++$moves;
+        return rename($from, $moves < 3 ? $to . '/unavailable/project' : $to);
+    }))->create($root . '/.webman-aot-builder/build');
+    check($moves === 3 && is_file($mirror['path'] . '/source.php'), 'transient activation failure did not recover');
+    check($mirror['sourceSha256'] === $snapshot->capture()['sha256'], 'recovered mirror fingerprint changed');
+    check((glob(dirname($mirror['path']) . '/.project-*') ?: []) === [], 'recovered candidate remains');
+    removeFixture($mirror['path']);
+    $moves = 0;
+    try {
+        (new ProjectMirror($root, static function (string $from, string $to) use (&$moves): bool {
+            ++$moves;
+            return rename($from, $to . '/unavailable/project');
+        }))->create($root . '/.webman-aot-builder/build');
+        throw new RuntimeException('permanent activation failure accepted');
+    } catch (ConfigurationException $error) {
+        check($moves === 6, 'activation retry bound changed');
+        check(str_contains($error->getMessage(), 'rename('), 'system rename reason missing');
+        check(str_contains($error->getMessage(), 'retry webman-aot build'), 'activation recovery guidance missing');
+        check(!str_contains($error->getMessage(), $root), 'activation reason exposes absolute source paths');
+        check(!is_dir($root . '/.webman-aot-builder/build/project'), 'permanent failure published a mirror');
+        check((glob($root . '/.webman-aot-builder/build/.project-*') ?: []) === [], 'failed activation candidate remains');
+    }
+    $moves = 0;
+    try {
+        (new ProjectMirror($root, static function (string $from, string $to) use (&$moves): bool {
+            ++$moves;
+            mkdir($to);
+            file_put_contents($to . '/other-build', 'retained');
+            return false;
+        }))->create($root . '/.webman-aot-builder/build');
+        throw new RuntimeException('concurrent destination accepted');
+    } catch (ConfigurationException $error) {
+        check($moves === 1 && str_contains($error->getMessage(), 'already exists'), 'concurrent target not rejected before retry');
+        check(file_get_contents($root . '/.webman-aot-builder/build/project/other-build') === 'retained', 'concurrent target replaced');
+    }
+    removeFixture($root . '/.webman-aot-builder/build/project');
+    $moves = 0;
+    try {
+        (new ProjectMirror($root, static function (string $from, string $to) use ($root, &$moves): bool {
+            ++$moves;
+            file_put_contents($root . '/source.php', '<?php // written during activation');
+            return false;
+        }))->create($root . '/.webman-aot-builder/build');
+        throw new RuntimeException('source change during retry accepted');
+    } catch (ConfigurationException $error) {
+        check($moves === 1 && str_contains($error->getMessage(), 'modified "source.php"'), 'retry accepted stale source snapshot');
+        check((glob($root . '/.webman-aot-builder/build/.project-*') ?: []) === [], 'source drift candidate remains');
+    }
+    fwrite(STDOUT, "PASS activation retries, complete mirror recovery, bounded system error, destination conflict and retry source drift rejection\n");
+    if (PHP_OS_FAMILY === 'Windows') {
+        foreach ([false, true] as $permanent) {
+            $holder = null;
+            $moves = 0;
+            $ready = $root . '/.webman-aot-builder/handle-ready';
+            $release = $root . '/.webman-aot-builder/handle-release';
+            $nativeMirror = new ProjectMirror($root, static function (string $from, string $to) use (
+                &$holder, &$moves, $ready, $release, $permanent
+            ): bool {
+                ++$moves;
+                if ($moves === 1) {
+                    $holder = windowsHandle($from . '/source.php', $ready, $release);
+                }
+                $moved = rename($from, $to);
+                if (!$permanent && $moves === 1) {
+                    check(!$moved, 'native Windows file handle did not block directory rename');
+                    file_put_contents($release, 'release');
+                }
+                // Release before failure cleanup so candidate removal remains a separate assertion.
+                if ($permanent && $moves === 6) {
+                    file_put_contents($release, 'release');
+                    check(proc_close($holder) === 0, 'native file holder failed');
+                    $holder = null;
+                }
+                return $moved;
+            });
+            try {
+                if ($permanent) {
+                    try {
+                        $nativeMirror->create($root . '/.webman-aot-builder/build');
+                        throw new RuntimeException('permanent native Windows file handle accepted');
+                    } catch (ConfigurationException $error) {
+                        check($moves === 6, 'native handle retry count differs');
+                        check(str_contains($error->getMessage(), 'close programs holding files'), 'native error lacks recovery');
+                        check(!is_dir($root . '/.webman-aot-builder/build/project'), 'native failure published a directory');
+                    }
+                } else {
+                    $mirror = $nativeMirror->create($root . '/.webman-aot-builder/build');
+                    check($moves > 1 && $moves <= 6, 'native file handle did not recover within retry bound');
+                    check(is_file($mirror['path'] . '/source.php'), 'native recovery omitted source');
+                    removeFixture($mirror['path']);
+                }
+            } finally {
+                file_put_contents($release, 'release');
+                if (is_resource($holder)) {
+                    check(proc_close($holder) === 0, 'native file holder failed');
+                }
+                unlink($ready);
+                unlink($release);
+            }
+            check((glob($root . '/.webman-aot-builder/build/.project-*') ?: []) === [], 'native candidate remains');
+        }
+        fwrite(STDOUT, "PASS actual Windows file handle contention, release recovery and permanent failure cleanup\n");
+    }
     removeFixture($root);
     mkdir($root, 0700);
     mkdir($root . '/.webman-aot-builder/build', 0700, true);
     file_put_contents($root . '/b-removed.php', '<?php');
     file_put_contents($root . '/c-modified.php', '<?php');
-    file_put_contents($root . "/d-control\n.php", '<?php');
+    file_put_contents($root . '/' . $controlFilename, '<?php');
     file_put_contents($root . '/e-' . str_repeat('x', 130) . '.php', '<?php');
     for ($index = 0; $index < 8; ++$index) {
         file_put_contents($root . "/f-{$index}.php", '<?php');
@@ -116,7 +260,7 @@ try {
         check(str_contains($message, 'added "a-added.php"'), 'addition path missing');
         check(str_contains($message, 'removed "b-removed.php"'), 'removal path missing');
         check(str_contains($message, 'modified "c-modified.php"'), 'modification path missing');
-        check(str_contains($message, 'd-control\\n.php'), 'control characters were not escaped');
+        check(str_contains($message, PHP_OS_FAMILY === 'Windows' ? 'd-control.php' : 'd-control\\n.php'), 'changed path was not safely reported');
         check(!str_contains($message, "\n"), 'diagnostic contains a raw newline');
         check(!str_contains($message, $root), 'diagnostic exposes absolute fixture path');
         check(str_contains($message, '(+8 more)'), 'diagnostic did not cap changed path count');

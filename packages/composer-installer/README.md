@@ -1,6 +1,6 @@
 # Webman AOT Builder Composer 入口
 
-通过 Composer 在同一终端选择准备组件、项目目录、构建和校验。支持 macOS Apple Silicon、Windows x64；入口 0.4.0 自动识别开发机，使用对应的 0.4.0 完整运行时。
+通过 Composer 在同一终端选择准备组件、项目目录、构建和校验。支持 macOS Apple Silicon、Windows x64；入口 0.4.1 自动识别开发机，使用对应的 0.4.1 完整运行时。
 
 系统 PHP 须为 8.1+，Composer 须为 2.5.3+；作者实际验证为 PHP 8.4/Composer 2.9.5/macOS，PHP 8.1 与 Windows 真机验收仍未完成。 配套原生运行时的 Windows CI 已通过安装及续编，记录见[测试与验证范围](https://github.com/supdger/webman-aot-builder/wiki/Verification)。运行 `composer global require supdger/webman-aot-builder`，首次接受 Composer 本身的插件信任询问后，包安装和自动加载完成即打开已有引导。包归属为 [supdger/webman-aot-builder（Packagist）](https://packagist.org/packages/supdger/webman-aot-builder)。
 
@@ -40,9 +40,9 @@ webman-aot setup --archive="/完整包所在目录/对应完整安装包" --non-
 
 在项目根目录运行 `webman-aot build --fresh` 可让全部单元重新编译。对象缓存位于项目内 `.webman-aot-builder/cache/objects/`；失败 attempt 与缓存保留并占用磁盘，成功后清理本轮 attempt。`--fresh` 不清旧缓存或失败目录。Windows 与 PHP 8.1 的真实续编尚未验证。
 
-构建器详细安装、兼容性与 Linux 部署要求见[现有 Wiki](https://github.com/supdger/webman-aot-builder/wiki)。旧安装不会自动获得 0.4.0 新功能。Packagist 登记状态以[包页面](https://packagist.org/packages/supdger/webman-aot-builder)为准；没有自动镜像切换，网络不可用时使用已校验的本地完整包。
+构建器详细安装、兼容性与 Linux 部署要求见[现有 Wiki](https://github.com/supdger/webman-aot-builder/wiki)。旧安装不会自动获得 0.4.1 修复。Packagist 登记状态以[包页面](https://packagist.org/packages/supdger/webman-aot-builder)为准；没有自动镜像切换，网络不可用时使用已校验的本地完整包。
 
-0.4.0 Composer 入口与配套完整运行时同为 0.4.0；旧入口 0.3.7 仍固定 0.3.2。根 `composer.json` 注册元数据的 bin/autoload 路径与小 ZIP 保持同样的 `packages/composer-installer/` 布局。普通 Composer 安装取得轻量 Release ZIP，`--prefer-source` 会下载完整源码仓库。
+0.4.1 Composer 入口与配套完整运行时同为 0.4.1；旧入口 0.3.7 仍固定 0.3.2。根 `composer.json` 注册元数据的 bin/autoload 路径与小 ZIP 保持同样的 `packages/composer-installer/` 布局。普通 Composer 安装取得轻量 Release ZIP，`--prefer-source` 会下载完整源码仓库。
 
 当前入口提供统一卸载入口；旧 0.3.3 和原生 0.3.2 没有这个命令。请先更新 Composer 包，然后从代理完整路径启动：
 
@@ -54,7 +54,7 @@ webman-aot uninstall
 清理旧安装后改用 Composer：
 
 ```powershell
-composer global require supdger/webman-aot-builder:^0.4.0 --no-scripts
+composer global require supdger/webman-aot-builder:^0.4.1 --no-scripts
 if ($LASTEXITCODE -ne 0) { throw 'Composer 安装失败，未开始卸载。' }
 $aotBin = (composer global config bin-dir --absolute).Trim()
 & (Join-Path $aotBin 'webman-aot.bat') uninstall --list

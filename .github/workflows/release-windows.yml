@@ -23,7 +23,7 @@ on:
       version:
         description: Expected source version
         required: true
-        default: '0.4.0'
+        default: '0.4.1'
         type: string
       native_build_revision:
         description: Native package build commit (defaults to checkout revision)
@@ -35,6 +35,8 @@ permissions:
 
 jobs:
   windows-packages:
+    permissions:
+      contents: write
     if: inputs.operation == 'build'
     runs-on: windows-2022
     timeout-minutes: 60
@@ -67,6 +69,31 @@ jobs:
             -ExpectedVersion $env:RELEASE_VERSION `
             -Output (Join-Path $env:RUNNER_TEMP 'release-packages')
           if ($LASTEXITCODE -ne 0) { throw "Release packages failed: $LASTEXITCODE" }
+      - name: Verify mirror recovery on the packaged Windows runtime
+        shell: powershell
+        run: |
+          $repository = $PWD.Path
+          $resultPath = Join-Path $env:RUNNER_TEMP 'release-packages\full-source-result.json'
+          $record = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+          $runtimeRoot = Join-Path $env:RUNNER_TEMP 'mirror-regression-runtime'
+          if (Test-Path -LiteralPath $runtimeRoot) { throw 'Mirror regression directory must be new.' }
+          New-Item -ItemType Directory -Path $runtimeRoot | Out-Null
+          try {
+            Expand-Archive -LiteralPath $record.archive -DestinationPath $runtimeRoot
+            $runtime = Join-Path $runtimeRoot 'payload\runtime'
+            $php = Join-Path $runtime 'php.exe'
+            $lock = Get-Content -LiteralPath (Join-Path $repository 'installer\runtime.lock.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            $actual = (Get-FileHash -LiteralPath $php -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $lock.runtimes.'windows-x86_64'.binarySha256) { throw 'Packaged mirror regression runtime differs from its lock.' }
+            Push-Location $runtime
+            try {
+              foreach ($test in @('tests\project-mirror.php','tests\resumable-workspace.php')) {
+                Write-Host "[regression] Native Windows $test"
+                & $php -n (Join-Path $repository $test)
+                if ($LASTEXITCODE -ne 0) { throw "Native Windows $test failed: $LASTEXITCODE" }
+              }
+            } finally { Pop-Location }
+          } finally { Remove-Item -LiteralPath $runtimeRoot -Recurse -Force }
       - name: Preserve actual packages and original machine results
         uses: actions/upload-artifact@v4
         with:

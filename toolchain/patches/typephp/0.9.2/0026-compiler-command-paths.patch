@@ -1,0 +1,55 @@
+--- a/src/Backend/CompilerFactory.php
++++ b/src/Backend/CompilerFactory.php
+@@ -130,7 +130,7 @@
+         }
+ 
+         $nullDevice = DIRECTORY_SEPARATOR === '\\' ? 'NUL' : '/dev/null';
+-        $command = escapeshellcmd($compilerName)
++        $command = self::quoteCommand($compilerName)
+             . ' ' . escapeshellarg('--target=' . $target)
+             . ' -c ' . escapeshellarg($source)
+             . ' -o ' . escapeshellarg($object)
+@@ -153,6 +153,10 @@
+             return '';
+         }
+ 
++        if (is_file($command)) {
++            return $command;
++        }
++
+         if ($command[0] === '"' || $command[0] === "'") {
+             $quote = $command[0];
+             $end = strpos($command, $quote, 1);
+@@ -162,6 +166,19 @@
+         }
+ 
+         return strtok($command, " \t\r\n");
++    }
++
++    public static function quoteCommand(string $command): string
++    {
++        $program = self::getCommandProgram($command);
++        $configured = trim($command);
++        $programLength = strlen($program);
++        if ($configured !== '' && ($configured[0] === '"' || $configured[0] === "'")) {
++            $programLength += 2;
++        }
++        $arguments = trim(substr($configured, $programLength));
++        return escapeshellarg($program)
++            . ($arguments !== '' ? ' ' . escapeshellcmd($arguments) : '');
+     }
+ 
+     private static function normalizeCompilerName(string $compilerName): string
+--- a/src/Backend/GccLikeBackend.php
++++ b/src/Backend/GccLikeBackend.php
+@@ -18,8 +18,8 @@
+     public function __construct(PlatformBase $platform, string $compilerCommand, ?string $linkerCommand = null)
+     {
+         parent::__construct($platform);
+-        $this->compilerCommand = $compilerCommand;
+-        $this->linkerCommand = $linkerCommand;
++        $this->compilerCommand = CompilerFactory::quoteCommand($compilerCommand);
++        $this->linkerCommand = $linkerCommand !== null ? CompilerFactory::quoteCommand($linkerCommand) : null;
+     }
+ 
+     public function getCompilerCommand(): string

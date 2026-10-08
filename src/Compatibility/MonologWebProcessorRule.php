@@ -51,8 +51,8 @@ final class MonologWebProcessorRule
         }
         if (count($matches) !== 1 || !is_file($sourcePath) || is_link($sourcePath)
             || ($policy['path'] ?? null) !== self::SOURCE
-            || ($policy['version'] ?? null) !== ($matches[0]['version'] ?? null)
-            || ($policy['reference'] ?? null) !== ($matches[0]['source']['reference'] ?? null)
+            || !is_string($matches[0]['version'] ?? null)
+            || $matches[0]['version'] === ''
             || ($policy['rule'] ?? null) !== 'monolog.web-processor-global-reference.v1'
         ) {
             throw new ConfigurationException('Monolog WebProcessor package or rule drifted');
