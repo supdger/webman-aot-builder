@@ -25,9 +25,9 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 composer global require supdger/webman-aot-builder
 ```
 
-入口版本 0.4.1 使用对应 0.4.1 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
+入口版本 0.4.2 使用锁定的 0.4.1 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
 
-网络受阻时，可从[最新完整发行页](https://github.com/supdger/webman-aot-builder/releases/latest)下载对应开发机的完整包，在同一菜单选择导入并输入或拖入包路径。构建及本机校验成功后显示 `dist-aot/` 位置；包安装与项目流程分别显示结果，Composer 后续安全审计照常执行。下次只需运行：
+完整包下载中断或取消会保留进度；再次选择开始从已有字节续传，下载完成后校验大小和 SHA-256。服务器拒绝续传时会提示并重新下载。网络受阻时，可从[0.4.1 完整运行时发行页](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.1)下载对应开发机的完整包，在同一菜单选择导入并输入或拖入包路径。构建及本机校验成功后显示 `dist-aot/` 位置；包安装与项目流程分别显示结果，Composer 后续安全审计照常执行。下次只需运行：
 
 ```sh
 composer global exec -- webman-aot guide

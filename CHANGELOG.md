@@ -2,6 +2,12 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.2](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.2) — 2026-10-09
+
+- 完整包下载失败或取消后保留进度，自动重试及下次启动从已有字节继续；取消固定 30 分钟总时长限制，保留连接与无数据超时。
+- 服务器拒绝续传时明确提示并重新下载；完整包仍须通过大小与 SHA-256 校验，损坏内容不会用于安装。
+- Composer 入口更新至 0.4.2，继续锁定公开 0.4.1 完整运行时，无需重新安装已准备好的运行时。旧入口已删除的部分下载无法恢复。
+
 ## [v0.4.1](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.1)
 
 - Illuminate 时间间隔适配兼容 Laravel 12 的单位调用与 Laravel 13 的 `make()` 写法，以及已确认的等价语法；保留宏、浮点 setter 和分数行为，不改原 vendor。
