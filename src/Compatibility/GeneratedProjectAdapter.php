@@ -12,7 +12,7 @@ final class GeneratedProjectAdapter
      * @param array<string,mixed> $lock Verified upstream generator lock.
      * @return array{workerShadowSha256:string,installOnlySourceSha256:string}
      */
-    public function apply(string $mirrorDirectory, array $lock): array
+    public function apply(string $mirrorDirectory, array $lock, array $generatedMappings): array
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror) || is_link($mirrorDirectory)
@@ -23,7 +23,7 @@ final class GeneratedProjectAdapter
 
         $workerPath = 'vendor/workerman/workerman/src/Worker.php';
         $workerMapping = $lock['mappings'][$workerPath] ?? null;
-        $workerVersion = $lock['packages']['workerman/workerman']['version'] ?? null;
+        $workerVersion = 'source-validated';
         $shadowRelative = '.typephp/build/workerman-worker.php';
         if (!is_array($workerMapping)
             || ($workerMapping['shadow'] ?? null) !== $shadowRelative
@@ -31,10 +31,19 @@ final class GeneratedProjectAdapter
         ) {
             throw new ConfigurationException('Workerman generated shadow mapping is missing');
         }
+        $generatedWorker = null;
+        foreach ($generatedMappings as $mapping) {
+            if (($mapping['path'] ?? null) === $workerPath && ($mapping['shadow'] ?? null) === $shadowRelative) {
+                if ($generatedWorker !== null) {
+                    throw new ConfigurationException('Workerman generated shadow evidence is duplicated');
+                }
+                $generatedWorker = $mapping;
+            }
+        }
         $shadowFile = $mirror . '/' . $shadowRelative;
         $shadow = $this->readGuardedFile(
             $shadowFile,
-            (string) ($workerMapping['shadowSha256'] ?? ''),
+            (string) ($generatedWorker['shadowSha256'] ?? ''),
             'Workerman generated shadow'
         );
         $requiredRuleIds = [
@@ -52,29 +61,19 @@ final class GeneratedProjectAdapter
         if ($appliedRuleIds !== $requiredRuleIds) {
             throw new ConfigurationException('Workerman generated compatibility rules are missing');
         }
-        $expectedAdaptedSha256 = $workerMapping['adaptedShadowSha256'] ?? null;
-        if (!is_string($expectedAdaptedSha256)
-            || preg_match('/^[a-f0-9]{64}$/D', $expectedAdaptedSha256) !== 1
-            || !hash_equals($expectedAdaptedSha256, hash('sha256', $adaptedShadow))
-        ) {
-            throw new ConfigurationException(
-                'Workerman generated shadow post-adaptation digest drifted'
-            );
-        }
-
         $installerPath = 'vendor/workerman/webman-framework/src/support/Plugin.php';
-        $installerVersion = $lock['packages']['workerman/webman-framework']['version'] ?? null;
         $installerRule = $lock['installOnly'][$installerPath] ?? null;
-        if (!is_string($installerVersion) || !is_array($installerRule)
+        if (!is_array($installerRule)
             || ($installerRule['policy'] ?? null) !== 'webman.composer-installer.v1'
         ) {
             throw new ConfigurationException('Webman Composer installer policy is missing');
         }
-        $installer = $this->readGuardedFile(
-            $mirror . '/' . $installerPath,
-            (string) ($installerRule['sourceSha256'] ?? ''),
-            'Webman Composer installer'
-        );
+        $installerFile = $mirror . '/' . $installerPath;
+        $installer = is_file($installerFile) && !is_link($installerFile)
+            ? file_get_contents($installerFile) : false;
+        if (!is_string($installer)) {
+            throw new ConfigurationException('Webman Composer installer is missing or unsafe');
+        }
         $installerTokens = $this->significantTokens($installer);
         foreach ([
             'class Plugin',

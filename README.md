@@ -19,15 +19,15 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 
 ### 方式一：Composer
 
-开发机需 PHP 8.1+、Composer 2.5.3+。先按目标项目自身要求安装 Composer 依赖，备好 `vendor/`，在 macOS 终端或 Windows PowerShell 运行：
+0.4.3 Composer 入口要求 PHP 支持实际使用的 PHP 8 语法（manifest 为 >=8.0），Composer 按公共接口能力检查，不设置历史 2.5.3 下限或插件 API 主版本上界。先按目标项目自身要求安装 Composer 依赖，备好 `vendor/`，在 macOS 终端或 Windows PowerShell 运行：
 
 ```sh
 composer global require supdger/webman-aot-builder
 ```
 
-入口版本 0.4.1 使用对应 0.4.1 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
+入口版本 0.4.3 使用对应 0.4.3 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。
 
-网络受阻时，可从[最新完整发行页](https://github.com/supdger/webman-aot-builder/releases/latest)下载对应开发机的完整包，在同一菜单选择导入并输入或拖入包路径。构建及本机校验成功后显示 `dist-aot/` 位置；包安装与项目流程分别显示结果，Composer 后续安全审计照常执行。下次只需运行：
+完整包下载中断或取消会保留进度；再次选择开始从已有字节续传，下载完成后校验大小和 SHA-256。服务器拒绝续传时会提示并重新下载。网络受阻时，可从[最新完整发行页](https://github.com/supdger/webman-aot-builder/releases/latest)下载对应开发机的完整包，在同一菜单选择导入并输入或拖入包路径。构建及本机校验成功后显示 `dist-aot/` 位置；包安装与项目流程分别显示结果，Composer 后续安全审计照常执行。下次只需运行：
 
 ```sh
 composer global exec -- webman-aot guide
@@ -44,7 +44,7 @@ composer global exec -- webman-aot guide
 
 ### 方式三：源码编译
 
-适用于需要从源码制作工具包的开发者；开发机仍须为 macOS Apple Silicon 或 Windows x64，构建所需锁定材料需联网准备，目标项目的 Composer 依赖须提前安装。到[GitHub 仓库](https://github.com/supdger/webman-aot-builder)选择 **Code → Download ZIP**，解压并进入包含 `build.command` 与 `build.cmd` 的源码根目录。
+适用于需要从源码制作工具包的开发者；开发机仍须为 macOS Apple Silicon 或 Windows x64，构建所需 manifest 声明材料需联网准备，目标项目的 Composer 依赖须提前安装。到[GitHub 仓库](https://github.com/supdger/webman-aot-builder)选择 **Code → Download ZIP**，解压并进入包含 `build.command` 与 `build.cmd` 的源码根目录。
 
 Mac 在终端运行：
 
@@ -58,7 +58,7 @@ Windows 在 PowerShell 运行：
 .\build.cmd
 ```
 
-入口准备锁定材料、制作并校验安装包，确认安装后选择项目。构建及本机校验成功后显示 `dist-aot/`；源码构包成功不等于项目构建成功。详细步骤见[源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
+入口按 manifest 准备并核验材料、制作并校验安装包，确认安装后选择项目。构建及本机校验成功后显示 `dist-aot/`；源码构包成功不等于项目构建成功。详细步骤见[源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
 ## macOS 首次打开被拦截时
 
@@ -96,7 +96,11 @@ Windows 在 PowerShell 运行：
 
 v0.4.1 改进下述依赖版本与写法兼容。Illuminate 时间间隔辅助函数按实际源码形态识别：接受 Laravel 12 的单位调用、Laravel 13 的 `make()` 调用，以及空白、注释、类名大小写、导入别名和全限定类名的变化。保留 `make()` 的小数行为；旧魔术单位调用改为显式调用，同一段已经适配的源码可重复处理。缺失、重复或单位不符仍会指出具体辅助函数，不能靠跳过规则继续构建。
 
-Webman / Workerman 的相关适配检查实际语法与改写结果；Carbon profile 检查已安装的 CarbonPeriod / CarbonInterval 所需调用结构，业务依赖只设已有基线的版本下限，不设版本上限或精确版本白名单。SaiAdmin profile 的下限为 Carbon 3.13.2、ThinkORM 3.0.34；同形源码不会因版本更高被拒绝，未知调用仍会停止。官方 Laravel 12、13 的时间间隔源码夹具已生成静态 ELF，并在 Linux 容器完成与普通 PHP 的行为对照；完整项目业务与用户已有宿主仍未验收。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
+v0.4.1 已移除部分业务依赖的显式版本门禁；SaiAdmin profile 的最低版本为 Carbon 3.13.2、ThinkORM 3.0.34。实际生成器仍比较历史 vendor 文件摘要，Workerman 5.2.3 会因此被拒绝；验证码资源规划也仍有版本与 reference 限制，不能据此认定全部依赖已兼容。官方 Laravel 12、13 的时间间隔源码夹具已生成静态 ELF，并在 Linux 容器完成与普通 PHP 的行为对照；该结果不等于完整项目业务或用户已有宿主验收。
+
+v0.4.3 按实际源码、API 和 ABI 能力处理兼容性，不按消费项目的版本上下限、精确标签、历史文件摘要或固定替换次数拒绝；保留批准的下载材料、补丁链与 SDK 完整性检查。转换限定真实方法、分支及变量角色，保留无关方法和闭包。TypePHP 编译器取消 PHP 8.6 上限并检查实际运行能力；其 property hooks 源码需要 PHP 8.4 语法，与 Composer 入口分别校验。
+
+当前兼容修复已完成隔离全新构建：1,621 个 C++ 单元全部编译（零复用）、链接和打包，独立 `verify` 通过 40 个产物文件、55 个 direct 和 11 个 shadow。该结果仅证明构建宿主上的结构与完整性，不等于 Linux 原生应用运行、Windows 原生或完整业务验收；已有宿主须自行升级后实测。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
 
 构建副本激活遇到短暂文件占用时会有限重试；持续失败会保留系统原因和重试建议。目标目录冲突或源码在重试期间变化仍会停止。原生 Windows CI 已验证真实文件占用后的恢复、永久失败清理、短路径别名及并发源码变化拒绝；这不代表用户已有宿主升级验收。
 

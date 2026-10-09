@@ -25,6 +25,50 @@ function rejects(callable $action, string $message): void {
     check(false, $message);
 }
 
+$metadata = json_decode((string) file_get_contents(dirname(__DIR__, 3) . '/composer.json'), true, flags: JSON_THROW_ON_ERROR);
+check($metadata['require']['composer-plugin-api'] === '*' && $metadata['require']['composer'] === '*', 'Composer 与插件 API 元数据没有版本边界');
+check($metadata['require']['php'] === '>=8.0', 'PHP 约束只保留 match 和字符串函数所需的运行能力');
+$capabilitySource = <<<'PHP'
+<?php
+namespace Composer { class Composer { public function isGlobal(){return false;} public function getRepositoryManager(){} public function getInstallationManager(){} public function getConfig(){} } class Config { public function get($name){} } }
+namespace Composer\IO { interface IOInterface { public function isInteractive(); public function writeError($message); } class IO implements IOInterface { public function isInteractive(){return false;} public function writeError($message){} } }
+namespace Composer\Plugin { interface PluginInterface { public const PLUGIN_API_VERSION='999.0.0'; public function activate(\Composer\Composer $composer,\Composer\IO\IOInterface $io); public function deactivate(\Composer\Composer $composer,\Composer\IO\IOInterface $io); public function uninstall(\Composer\Composer $composer,\Composer\IO\IOInterface $io); } class PluginEvents { public const COMMAND='command'; } class CommandEvent { public function getCommandName(){} public function getInput(){} } }
+namespace Composer\EventDispatcher { interface EventSubscriberInterface { public static function getSubscribedEvents(); } }
+namespace Composer\Script { class Event { public function getComposer(){} } class ScriptEvents { public const POST_UPDATE_CMD='post-update-cmd'; } }
+namespace Composer\Command { class RequireCommand { public function getDefinition(){} } }
+namespace Composer\Console { class Application { public function getDefinition(){} } }
+namespace Composer\Repository { class RepositoryManager { public function getLocalRepository(){} } interface RepositoryInterface { public function findPackage($name,$constraint); } }
+namespace Composer\Installer { class InstallationManager { public function getInstallPath($package){} } }
+namespace Composer\Package { interface PackageInterface { public function getType(); } }
+namespace Symfony\Component\Console\Input { class ArgvInput { public function __construct($arguments = null, $definition = null) {} } interface InputInterface { public function hasOption($name); public function getOption($name); public function hasArgument($name); public function getArgument($name); public function isInteractive(); } class InputDefinition { public function getArguments(){} public function getOptions(){} public function addArguments($arguments){} public function addOptions($options){} } }
+namespace {
+    require $argv[1];
+    try {
+        (new \Supdger\WebmanAotInstaller\Plugin())->activate(new \Composer\Composer(), new \Composer\IO\IO());
+        \Supdger\WebmanAotInstaller\Plugin::getSubscribedEvents();
+        echo 'CAPABLE';
+    } catch (\RuntimeException $error) { echo $error->getMessage(); }
+}
+PHP;
+$pluginPath = dirname(__DIR__) . '/src/Plugin.php';
+foreach ([
+    [$capabilitySource, 'CAPABLE', '相同公共能力接受未知插件 API 标签'],
+    [str_replace("PLUGIN_API_VERSION='999.0.0'", "PLUGIN_API_VERSION='0.0.1'", $capabilitySource), 'CAPABLE', '相同公共能力接受低插件 API 标签'],
+    [str_replace('public function isGlobal(){return false;}', '', $capabilitySource), 'Composer\\Composer::isGlobal', '缺少 Composer global 能力有具体诊断'],
+    [str_replace('public function getConfig(){}', 'private function getConfig(){}', $capabilitySource), 'Composer\\Composer::getConfig', '不可调用的 Composer 配置接口有具体诊断'],
+    [str_replace("COMMAND='command'", "OTHER='command'", $capabilitySource), 'Composer\\Plugin\\PluginEvents::COMMAND', '缺少订阅事件有具体诊断'],
+    [str_replace('public function getDefinition(){}', '', $capabilitySource), 'getDefinition', '缺少命令定义接口有具体诊断'],
+    [str_replace('isGlobal()', 'isGlobal($required)', $capabilitySource), 'Composer\\Composer::isGlobal', '新增必填参数的公共方法明确拒绝'],
+    [str_replace('__construct($arguments = null, $definition = null)', '__construct($arguments = null)', $capabilitySource), 'ArgvInput::__construct', '命令输入构造器缺少当前参数槽位明确拒绝'],
+    [str_replace('get($name)', 'get(&$name)', $capabilitySource), 'Composer\\Config::get', '新增引用参数的公共方法明确拒绝'],
+    [str_replace('class Application {', 'class Application { public function __construct($required) {}', $capabilitySource), 'Application::__construct', '命令应用新增必填构造参数明确拒绝'],
+    [str_replace('class RequireCommand {', 'class RequireCommand { public function __construct($required) {}', $capabilitySource), 'RequireCommand::__construct', 'require 命令新增必填构造参数明确拒绝'],
+] as [$source, $expected, $message]) {
+    $fixture = $directory . '/plugin-capabilities.php';
+    file_put_contents($fixture, $source);
+    check(str_contains(Process::output([PHP_BINARY, $fixture, $pluginPath]), $expected), $message);
+}
+
 check(Installer::inputPath('"C:\\Download dir\\builder.zip"') === 'C:\\Download dir\\builder.zip', 'Windows带空格引号路径可解析');
 check(Installer::inputPath("'/tmp/中文 目录/builder.tar.gz'") === '/tmp/中文 目录/builder.tar.gz', '中文空格引号路径可解析');
 if (PHP_OS_FAMILY !== 'Windows') {

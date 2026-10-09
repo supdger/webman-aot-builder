@@ -5,7 +5,7 @@ namespace Supdger\WebmanAotInstaller;
 
 final class Installer
 {
-    public const VERSION = '0.4.1';
+    public const VERSION = '0.4.3';
     private array $release;
     private bool $interactive;
     private bool $consoleRecoveryAllowed;
@@ -378,25 +378,88 @@ final class Installer
                 $this->say('[缓存] 旧缓存无效，将取得新的完整包。');
             }
         }
-        $partial = $cache . '/download-' . bin2hex(random_bytes(8));
-        $curl = $host === 'macos-arm64' ? '/usr/bin/curl' : ((string) getenv('SystemRoot')) . '\\System32\\curl.exe';
-        $this->say('[下载] ' . $package['url'] . "\n保留实际下载进度，最多重试 2 次；Ctrl+C 可取消。");
-        try {
-            $code = Process::run([$curl, '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
-                '--retry', '2', '--retry-all-errors', '--retry-delay', '2', '--connect-timeout', '20',
-                '--max-time', '1800', '--output', $partial, $package['url']]);
-            if ($code !== 0) {
-                throw new \RuntimeException('curl 退出码 ' . $code);
-            }
-            Archive::verify($partial, $package);
-            if (is_link($archive) || !rename($partial, $archive)) {
-                throw new \RuntimeException('无法保存已校验完整包。');
-            }
-        } finally {
-            if (is_file($partial) && !is_link($partial)) {
-                unlink($partial);
+        // setup.lock is held by prepare() throughout download and installation.
+        $partial = $archive . '.' . $package['sha256'] . '.part';
+        $headers = $partial . '.headers';
+        foreach ([$archive, $partial, $headers] as $path) {
+            if (is_link($path) || (file_exists($path) && !is_file($path))) {
+                throw new \RuntimeException('下载缓存不能是链接或目录：' . $path);
             }
         }
+        $curl = $host === 'macos-arm64' ? '/usr/bin/curl' : ((string) getenv('SystemRoot')) . '\\System32\\curl.exe';
+        $started = microtime(true);
+        $this->say('[下载] ' . $package['url'] . "\n保留实际下载进度，最多重试 2 次；Ctrl+C 可取消并保留进度，下次选择开始会继续下载。");
+        $code = 0;
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            clearstatcache(true, $partial);
+            $offset = is_file($partial) ? filesize($partial) : 0;
+            if ($offset >= $package['size']) {
+                try {
+                    Archive::verify($partial, $package);
+                    $code = 0;
+                    break;
+                } catch (\Throwable) {
+                    $this->say('[缓存] 未完成包大小或摘要不匹配，清除损坏内容后重新下载。');
+                    if (!unlink($partial)) { throw new \RuntimeException('无法清除损坏的下载缓存。'); }
+                    $offset = 0;
+                }
+            }
+            $this->say($offset > 0
+                ? '[续传] 从 ' . $offset . ' / ' . $package['size'] . ' 字节继续。'
+                : '[下载] 从头取得完整包。');
+            $command = [$curl, '--fail', '--location', '--proto', '=https', '--proto-redir', '=https',
+                '--connect-timeout', '20', '--speed-limit', '1', '--speed-time', '120',
+                '--dump-header', $headers, '--output', $partial];
+            if ($offset > 0) { array_push($command, '--continue-at', (string) $offset); }
+            $command[] = $package['url'];
+            try {
+                $code = Process::run($command);
+                $response = is_file($headers) ? (string) file_get_contents($headers) : '';
+            } finally {
+                if (is_file($headers)) { unlink($headers); }
+            }
+            preg_match_all('~^HTTP/\S+\s+(\d{3})~m', $response, $statuses);
+            $status = (int) (end($statuses[1]) ?: 0);
+            // Some system curl versions treat HTTP 416 as success for a resumed request.
+            if ($offset > 0 && (in_array($code, [33, 36], true) || $status === 416)) {
+                $this->say('[续传] 服务器拒绝已有位置（HTTP ' . $status . '，curl ' . $code . '），需重新下载完整包。');
+                if (is_file($partial) && !unlink($partial)) {
+                    throw new \RuntimeException('无法重置被服务器拒绝的下载缓存。');
+                }
+                $code = $code === 0 ? 33 : $code;
+            }
+            if ($code === 0) {
+                clearstatcache(true, $partial);
+                try {
+                    Archive::verify($partial, $package);
+                    $code = 0;
+                    break;
+                } catch (\Throwable $error) {
+                    // A complete response with the wrong identity must never be resumed or unpacked.
+                    if (is_file($partial) && !unlink($partial)) {
+                        throw new \RuntimeException('完整包校验失败且无法清除损坏缓存。');
+                    }
+                    throw $error;
+                }
+            }
+            // User cancellation is not a network retry. Keep the partial file for the next invocation.
+            if (in_array($code, [130, 143], true)) { break; }
+            if ($attempt < 2) {
+                $this->say('[重试] curl 退出码 ' . $code . '；2 秒后第 ' . ($attempt + 1) . ' 次重试。');
+                sleep(2);
+            }
+        }
+        if ($code !== 0) {
+            clearstatcache(true, $partial);
+            $bytes = is_file($partial) ? filesize($partial) : 0;
+            throw new \RuntimeException(sprintf('下载未完成（curl %d，耗时 %.1f 秒）；已保留 %d 字节：%s。下次选择开始或重跑同一命令会继续下载。',
+                $code, microtime(true) - $started, $bytes, $partial));
+        }
+        Archive::verify($partial, $package);
+        if (!rename($partial, $archive)) {
+            throw new \RuntimeException('无法保存已校验完整包；已保留下载内容，下次可重试。');
+        }
+        $this->say(sprintf('[下载成功] 完整包大小与 SHA-256 通过，耗时 %.1f 秒。', microtime(true) - $started));
         return $archive;
     }
 

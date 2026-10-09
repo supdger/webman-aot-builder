@@ -22,7 +22,8 @@ final class BoundedTextRule implements CompatibilityRule
         private readonly string $needle,
         private readonly string $replacement,
         private readonly int $expectedHits,
-        private readonly array $requiredAfter
+        private readonly array $requiredAfter,
+        private readonly array $methods = []
     ) {
         if ($id === '' || $dependency === '' || $sourcePath === ''
             || $needle === '' || $expectedHits < 1 || $needle === $replacement
@@ -57,8 +58,13 @@ final class BoundedTextRule implements CompatibilityRule
         $tokens = $this->tokens($source);
         $before = $this->tokens('<?php ' . $this->needle);
         $after = $this->tokens('<?php ' . $this->replacement);
-        $matches = $this->matches($tokens, $before);
-        $adapted = $this->matches($tokens, $after);
+        $matches = $this->sourceMatches($tokens, $before);
+        $adapted = array_values(array_filter($this->sourceMatches($tokens, $after), static function (array $match) use ($matches): bool {
+            foreach ($matches as $original) {
+                if ($match['start'] >= $original['start'] && $match['start'] < $original['start'] + $original['length']) { return false; }
+            }
+            return true;
+        }));
         foreach ($this->requiredBefore as $marker) {
             if ($marker === '' || $this->matches($tokens, $this->tokens('<?php ' . $marker)) === []) {
                 throw new ConfigurationException(
@@ -66,16 +72,16 @@ final class BoundedTextRule implements CompatibilityRule
                 );
             }
         }
-        if (count($matches) + count($adapted) !== $this->expectedHits) {
+        $actualHits = count($matches) + count($adapted);
+        if ($actualHits === 0) {
             throw new ConfigurationException(
-                "compatibility rule {$this->id}: expected {$this->expectedHits} source or adapted hits "
-                . "in {$this->sourcePath} at {$version}, found " . count($matches) . ' source and '
-                . count($adapted) . ' adapted; source structure requires review'
+                "compatibility rule {$this->id}: no supported source or adapted operation "
+                . "in {$this->sourcePath} at {$version}; source structure requires review"
             );
         }
         $output = $source;
-        foreach (array_reverse($matches) as $index) {
-            $matched = array_slice($tokens, $index, count($before));
+        foreach (array_reverse($matches) as $match) {
+            $matched = array_slice($tokens, $match['start'], $match['length']);
             $start = $matched[0]['offset'];
             $end = $matched[count($matched) - 1]['end'];
             $fragment = substr($source, $start, $end - $start);
@@ -83,8 +89,8 @@ final class BoundedTextRule implements CompatibilityRule
             $output = substr_replace($output, $replacement, $start, $end - $start);
         }
         $outputTokens = $this->tokens($output);
-        if ($this->matches($outputTokens, $before) !== []
-            || count($this->matches($outputTokens, $after)) !== $this->expectedHits
+        if ($this->sourceMatches($outputTokens, $before) !== []
+            || count($this->sourceMatches($outputTokens, $after)) !== $actualHits
         ) {
             throw new ConfigurationException("compatibility rule {$this->id}: transformed source count drift in {$this->sourcePath} at {$version}");
         }
@@ -94,6 +100,52 @@ final class BoundedTextRule implements CompatibilityRule
             }
         }
         return $output;
+    }
+
+    private function sourceMatches(array $tokens, array $needle): array
+    {
+        $matches = $this->matches($tokens, $needle);
+        if ($this->methods === []) { return $matches; }
+        $className = pathinfo($this->sourcePath, PATHINFO_FILENAME);
+        $ranges = [];
+        foreach ($tokens as $index => $token) {
+            if ($token['id'] !== T_CLASS || ($tokens[$index + 1]['text'] ?? null) !== $className) { continue; }
+            $open = $index + 2;
+            while (isset($tokens[$open]) && $tokens[$open]['id'] !== '{') { ++$open; }
+            $classEnd = $this->bodyEnd($tokens, $open);
+            for ($cursor = $open + 1; $cursor < $classEnd; ++$cursor) {
+                if ($tokens[$cursor]['id'] !== T_FUNCTION) { continue; }
+                $name = $cursor + 1;
+                if (($tokens[$name]['text'] ?? null) === '&') { ++$name; }
+                if (($tokens[$name]['id'] ?? null) !== T_STRING) { continue; }
+                $body = $name + 1;
+                while ($body < $classEnd && !in_array($tokens[$body]['id'], ['{', ';'], true)) { ++$body; }
+                if (($tokens[$body]['id'] ?? null) !== '{') { continue; }
+                $end = $this->bodyEnd($tokens, $body);
+                if (in_array('*', $this->methods, true) || in_array($tokens[$name]['text'], $this->methods, true)) {
+                    $ranges[] = [$body + 1, $end];
+                }
+                $cursor = $end;
+            }
+        }
+        if ($ranges === []) { throw new ConfigurationException("compatibility rule {$this->id}: source method scope drift in {$this->sourcePath}"); }
+        return array_values(array_filter($matches, static function (array $match) use ($ranges): bool {
+            foreach ($ranges as [$start, $end]) {
+                if ($match['start'] >= $start && $match['start'] + $match['length'] <= $end) { return true; }
+            }
+            return false;
+        }));
+    }
+
+    private function bodyEnd(array $tokens, int $open): int
+    {
+        if (($tokens[$open]['id'] ?? null) !== '{') { throw new ConfigurationException("compatibility rule {$this->id}: source body is missing"); }
+        $depth = 1;
+        for ($index = $open + 1; isset($tokens[$index]); ++$index) {
+            if (in_array($tokens[$index]['id'], ['{', T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true)) { ++$depth; }
+            elseif ($tokens[$index]['id'] === '}' && --$depth === 0) { return $index; }
+        }
+        throw new ConfigurationException("compatibility rule {$this->id}: source body is unbalanced");
     }
 
     /** @return list<array{id:int|string,text:string,offset:int,end:int}> */
@@ -116,7 +168,7 @@ final class BoundedTextRule implements CompatibilityRule
     /**
      * @param list<array{id:int|string,text:string,offset:int,end:int}> $source
      * @param list<array{id:int|string,text:string,offset:int,end:int}> $needle
-     * @return list<int>
+     * @return list<array{start:int,length:int}>
      */
     private function matches(array $source, array $needle): array
     {
@@ -125,13 +177,39 @@ final class BoundedTextRule implements CompatibilityRule
         }
         $matches = [];
         for ($index = 0; $index <= count($source) - count($needle); ++$index) {
+            $cursor = $index;
+            $variadics = [];
             foreach ($needle as $relative => $token) {
-                if (!$this->sameToken($source[$index + $relative], $token)) {
+                if ($token['id'] === T_ELLIPSIS
+                    && ($source[$cursor]['id'] ?? null) === T_STRING
+                    && ($source[$cursor]['text'] ?? null) === 'mixed'
+                ) {
+                    ++$cursor;
+                }
+                $actual = $source[$cursor] ?? null;
+                if (!is_array($actual)) {
                     continue 2;
                 }
+                if ($token['id'] === T_VARIABLE
+                    && in_array($token['text'], ['$__err', '$__sig', '$__walk'], true)
+                ) {
+                    if (($needle[$relative - 1]['id'] ?? null) === T_ELLIPSIS
+                        && $actual['id'] === T_VARIABLE
+                    ) {
+                        $variadics[$token['text']] = $actual['text'];
+                    }
+                    if ($actual['id'] !== T_VARIABLE
+                        || $actual['text'] !== ($variadics[$token['text']] ?? $token['text'])
+                    ) {
+                        continue 2;
+                    }
+                } elseif (!$this->sameToken($actual, $token)) {
+                    continue 2;
+                }
+                ++$cursor;
             }
-            $matches[] = $index;
-            $index += count($needle) - 1;
+            $matches[] = ['start' => $index, 'length' => $cursor - $index];
+            $index = $cursor - 1;
         }
         return $matches;
     }

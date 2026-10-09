@@ -47,15 +47,25 @@ final class ReproducibilityInput
         }
 
         $llvmVersions = [];
+        $llvmMaterials = [];
         foreach (['llvm-macos-arm64', 'llvm-windows-x64'] as $id) {
             $version = (string) ($components[$id]['version'] ?? '');
             if ($version === '') {
                 throw new \RuntimeException("locked LLVM host component is missing: {$id}");
             }
-            $llvmVersions[$version] = true;
+            $llvmVersions[$id] = $version;
+            $material = $components[$id];
+            if (($material['kind'] ?? null) !== 'host-tool' || preg_match('/^[a-f0-9]{64}$/D', (string) ($material['sha256'] ?? '')) !== 1) {
+                throw new \RuntimeException('selected LLVM material identity is invalid: ' . $id);
+            }
+            $llvmMaterials[$id] = $material['sha256'];
         }
-        if (count($llvmVersions) !== 1) {
-            throw new \RuntimeException('Mac and Windows LLVM versions are not aligned');
+        // Both native preparers execute the same C++17/x86_64 capability probe.
+        // Their archive identities remain part of this contract; labels do not establish ABI parity.
+        if (($lock['target']['os'] ?? null) !== 'linux'
+            || ($lock['target']['architecture'] ?? null) !== 'x86_64'
+            || ($lock['target']['libc'] ?? null) !== 'musl') {
+            throw new \RuntimeException('host LLVM selections do not share the required Linux x86_64 musl target ABI');
         }
 
         $patches = [];
@@ -84,6 +94,10 @@ final class ReproducibilityInput
             '0021-portable-source-scan-order.patch',
             '0022-full-static-hide-host-only-reflection.patch',
             '0023-full-static-select-target-reflection.patch',
+            '0024-closure-runtime-binding-and-reference-storage.patch',
+            '0025-verified-object-checkpoints.patch',
+            '0026-compiler-command-paths.patch',
+            '0027-compiler-runtime-capabilities.patch',
         ] as $patch) {
             $patches[$patch] = $this->hashNormalizedTextFile(
                 $patchDirectory . '/' . $patch,
@@ -100,15 +114,17 @@ final class ReproducibilityInput
         $input = [
             'target' => $lock['target'] ?? null,
             'components' => $selected,
-            'llvmVersion' => array_key_first($llvmVersions),
+            'llvmVersions' => $llvmVersions,
+            'llvmMaterials' => $llvmMaterials,
+            'compilerCapabilities' => ['target' => 'x86_64-unknown-linux-musl', 'cxxStandard' => 'c++17', 'pointerBits' => 64],
             'patches' => $patches,
             'fixtureSha256' => $fixtureDigest,
             'build' => [
-                'phpVersion' => '8.4',
+                'phpVersion' => $lock['evidence']['phpxSdkManifest']['phpVersion'] ?? null,
                 'targetTriple' => 'x86_64-unknown-linux-musl',
                 'sourcePrefix' => '/usr/src/webman-aot-builder',
                 'cxxStandard' => 'c++17',
-                'gccVersion' => '12.2.1',
+                'gccVersion' => $components['alpine-gcc-x86-64']['version'] ?? null,
                 'allowMultipleDefinition' => true,
                 'stripDebug' => true,
                 'stripSdkDebug' => true,

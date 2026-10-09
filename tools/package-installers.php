@@ -56,13 +56,10 @@ final class InstallerPackager
         try {
             $licenseDirectory = $workspace . '/typephp-license';
             $this->createDirectory($licenseDirectory);
-            (new PharData($typePhpSource))->extractTo(
-                $licenseDirectory,
-                'typephp-0.9.2/LICENSE'
-            );
-            $typePhpLicense = $licenseDirectory . '/typephp-0.9.2/LICENSE';
-            if (!is_file($typePhpLicense)) {
-                throw new RuntimeException('locked TypePHP source license is missing');
+            $typePhpLicense = $licenseDirectory . '/LICENSE';
+            $typePhpLicenses = $this->sourceLicenses($typePhpSource, $typePhpComponent['sha256'], ['LICENSE']);
+            if (file_put_contents($typePhpLicense, $typePhpLicenses['LICENSE']) === false) {
+                throw new RuntimeException('unable to stage selected TypePHP source license');
             }
             $packages = [];
             if ($platform !== 'windows-x86_64') {
@@ -144,11 +141,14 @@ final class InstallerPackager
         chmod($stage . '/payload/runtime/bin/php', 0700);
         chmod($stage . '/payload/runtime/bin/php-compiler', 0700);
         $this->copyDirectory($runtimeLicenseDirectory, $stage . '/payload/runtime/licenses');
+        $phpLicenses = $this->sourceLicenses($phpSourceArchive, $runtime['compilerDriver']['sourceSha256'], [
+            'ext/mbstring/libmbfl/LICENSE', 'ext/bcmath/libbcmath/LICENSE',
+        ]);
         foreach ([
-            'libmbfl-LGPL-2.1.txt' => 'php-8.4.25/ext/mbstring/libmbfl/LICENSE',
-            'libbcmath-LGPL-2.1.txt' => 'php-8.4.25/ext/bcmath/libbcmath/LICENSE',
+            'libmbfl-LGPL-2.1.txt' => 'ext/mbstring/libmbfl/LICENSE',
+            'libbcmath-LGPL-2.1.txt' => 'ext/bcmath/libbcmath/LICENSE',
         ] as $name => $member) {
-            $license = $this->readTarMember($phpSourceArchive, $member);
+            $license = $phpLicenses[$member];
             if (!str_contains($license, 'GNU LESSER GENERAL PUBLIC LICENSE')
                 || file_put_contents($stage . '/payload/runtime/licenses/' . $name, $license) === false
             ) {
@@ -390,6 +390,7 @@ final class InstallerPackager
             'guided.php',
             'windows-replay.ps1',
             'macos-prepare.php',
+            'check-toolchain-capabilities.php',
             'apply-typephp-patches.php',
             'strip-sdk-debug.php',
             'assemble-sysroot.php',
@@ -499,6 +500,52 @@ final class InstallerPackager
         if (!is_file($source) || is_link($source) || !copy($source, $destination)) {
             throw new RuntimeException("unable to stage required runtime file: {$source}");
         }
+    }
+
+    /** @param list<string> $members @return array<string,string> */
+    private function sourceLicenses(string $archive, string $sha256, array $members): array
+    {
+        if (!hash_equals($sha256, $this->digest($archive))) {
+            throw new RuntimeException('selected source license archive digest differs');
+        }
+        $process = proc_open(['tar', '-tf', $archive], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+        if (!is_resource($process)) {
+            throw new RuntimeException('unable to inspect selected source archive root');
+        }
+        fclose($pipes[0]);
+        $listing = stream_get_contents($pipes[1]);
+        fclose($pipes[1]);
+        $error = stream_get_contents($pipes[2]);
+        fclose($pipes[2]);
+        if (proc_close($process) !== 0 || !is_string($listing) || trim($listing) === '') {
+            throw new RuntimeException('selected source archive listing failed: ' . trim((string) $error));
+        }
+        $roots = [];
+        $entries = [];
+        foreach (explode("\n", rtrim($listing, "\n")) as $entry) {
+            $entry = rtrim($entry, '/');
+            $parts = explode('/', $entry);
+            if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._+-]*$/D', $parts[0]) !== 1
+                || str_contains($entry, '\\') || preg_match('/[\x00-\x1f]/', $entry) === 1
+                || in_array('..', $parts, true) || in_array('.', $parts, true) || in_array('', $parts, true)
+                || isset($entries[$entry])) {
+                throw new RuntimeException('selected source archive contains unsafe or repeated entries');
+            }
+            $roots[$parts[0]] = true;
+            $entries[$entry] = true;
+        }
+        if (count($roots) !== 1) {
+            throw new RuntimeException('selected source archive requires one source root');
+        }
+        $root = array_key_first($roots);
+        $licenses = [];
+        foreach ($members as $member) {
+            if (!isset($entries[$root . '/' . $member])) {
+                throw new RuntimeException('selected source license is missing: ' . $member);
+            }
+            $licenses[$member] = $this->readTarMember($archive, $root . '/' . $member);
+        }
+        return $licenses;
     }
 
     private function readTarMember(string $archive, string $member): string

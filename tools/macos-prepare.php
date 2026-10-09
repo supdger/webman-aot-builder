@@ -169,9 +169,7 @@ function prepare(array $arguments): void
     if (!copy($driver, $php) || !chmod($php, 0700)) {
         throw new RuntimeException('unable to install private PHP driver');
     }
-    if (trim(run([$php, '-n', '-r', 'echo PHP_VERSION;'])) !== '8.4.25') {
-        throw new RuntimeException('private PHP driver version differs from locked PHP');
-    }
+    run([$php, dirname(__DIR__) . '/tools/check-toolchain-capabilities.php', 'php', $php]);
 
     fwrite(STDERR, "[prepare] Extracting locked TypePHP and PHPX sources\n");
     $host = extractArchive($tar, $archives['typephp-macos-arm64'], $workRoot . '/typephp-host');
@@ -202,11 +200,11 @@ function prepare(array $arguments): void
     }
     $compiler = $llvm . '/bin/clang++';
     $objcopy = $llvm . '/bin/llvm-objcopy';
-    if (!is_executable($compiler) || !is_executable($objcopy)
-        || preg_match('/^clang version 19\.1\.7(?:\s|$)/', run([$compiler, '--version'])) !== 1
-    ) {
-        throw new RuntimeException('locked private LLVM is incomplete or has the wrong version');
+    if (!is_executable($compiler) || !is_executable($objcopy)) {
+        throw new RuntimeException('selected private LLVM is incomplete');
     }
+
+    run([$php, dirname(__DIR__) . '/tools/check-toolchain-capabilities.php', 'cxx', $compiler]);
 
     fwrite(STDERR, "[prepare] Stripping and verifying static SDK\n");
     $repository = dirname(__DIR__);

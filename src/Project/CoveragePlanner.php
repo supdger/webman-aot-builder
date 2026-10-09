@@ -90,7 +90,7 @@ final class CoveragePlanner
                     $sourceSha256,
                     CoverageLedger::RUNTIME_APPROVED,
                     'runtime.third-party-dynamic.v1',
-                    'digest-locked third-party view adapter uses runtime template behavior'
+                    'structurally verified third-party view adapter uses runtime template behavior'
                 );
                 continue;
             }

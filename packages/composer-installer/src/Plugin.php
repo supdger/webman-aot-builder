@@ -27,6 +27,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
     public function activate(Composer $composer, IOInterface $io): void
     {
+        self::assertComposerCapabilities();
         $this->composer = $composer;
         $this->io = $io;
         // A newly installed/replaced plugin has missed the earlier command event.
@@ -48,6 +49,7 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
 
     public static function getSubscribedEvents(): array
     {
+        self::assertComposerCapabilities();
         return [
             PluginEvents::COMMAND => 'onCommand',
             // Autoload and package installation are complete here. Composer's audit still follows.
@@ -89,6 +91,54 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
                 : '<warning>[项目流程未完成] 退出码 ' . $code . '；Composer 入口已安装，请按上方诊断处理后运行 composer global exec -- webman-aot guide。</warning>');
         } catch (\Throwable $error) {
             $this->io->writeError('<warning>[引导未启动] ' . $error->getMessage() . '；Composer 入口已安装，可运行 composer global exec -- webman-aot guide。</warning>');
+        }
+    }
+
+    private static function assertComposerCapabilities(): void
+    {
+        foreach ([
+            Composer::class => ['isGlobal' => 0, 'getRepositoryManager' => 0, 'getInstallationManager' => 0, 'getConfig' => 0],
+            IOInterface::class => ['isInteractive' => 0, 'writeError' => 1],
+            CommandEvent::class => ['getCommandName' => 0, 'getInput' => 0],
+            Event::class => ['getComposer' => 0],
+            Application::class => ['__construct' => 0, 'getDefinition' => 0],
+            RequireCommand::class => ['__construct' => 0, 'getDefinition' => 0],
+            ArgvInput::class => ['__construct' => 2],
+            InputInterface::class => ['hasOption' => 1, 'getOption' => 1, 'hasArgument' => 1, 'getArgument' => 1, 'isInteractive' => 0],
+            'Composer\\Repository\\RepositoryManager' => ['getLocalRepository' => 0],
+            'Composer\\Repository\\RepositoryInterface' => ['findPackage' => 2],
+            'Composer\\Installer\\InstallationManager' => ['getInstallPath' => 1],
+            'Composer\\Package\\PackageInterface' => ['getType' => 0],
+            'Composer\\Config' => ['get' => 1],
+            'Symfony\\Component\\Console\\Input\\InputDefinition' => ['getArguments' => 0, 'getOptions' => 0, 'addArguments' => 1, 'addOptions' => 1],
+        ] as $class => $methods) {
+            foreach ($methods as $method => $arguments) {
+                if ($method === '__construct') {
+                    if (!(new \ReflectionClass($class))->isInstantiable()) {
+                        throw new \RuntimeException('Composer 入口不能构造必要命令接口：' . $class . '。');
+                    }
+                    if ($arguments === 0 && !method_exists($class, $method)) { continue; }
+                }
+                if (!method_exists($class, $method)) {
+                    throw new \RuntimeException('Composer 入口缺少必要接口：' . $class . '::' . $method . '。');
+                }
+                $reflection = new \ReflectionMethod($class, $method);
+                if (!$reflection->isPublic() || $reflection->getNumberOfRequiredParameters() > $arguments
+                    || (!$reflection->isVariadic() && $reflection->getNumberOfParameters() < $arguments)
+                ) {
+                    throw new \RuntimeException('Composer 入口接口不能接受当前调用：' . $class . '::' . $method . '。');
+                }
+                foreach (array_slice($reflection->getParameters(), 0, $arguments) as $parameter) {
+                    if ($parameter->isPassedByReference()) {
+                        throw new \RuntimeException('Composer 入口接口要求不支持的引用参数：' . $class . '::' . $method . '。');
+                    }
+                }
+            }
+        }
+        foreach ([PluginEvents::class . '::COMMAND', ScriptEvents::class . '::POST_UPDATE_CMD'] as $event) {
+            if (!defined($event) || !is_string(constant($event))) {
+                throw new \RuntimeException('Composer 入口缺少必要事件：' . $event . '。');
+            }
         }
     }
 

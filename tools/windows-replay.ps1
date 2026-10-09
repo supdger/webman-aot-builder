@@ -199,7 +199,7 @@ foreach ($required in @($sevenZip)) {
 }
 
 $driverRoot = Join-Path $WorkRoot 'php-driver'
-Write-Host 'Extracting locked PHP 8.4.25 Windows driver ...'
+Write-Host 'Extracting selected PHP Windows driver ...'
 New-Item -ItemType Directory -Path $driverRoot | Out-Null
 & $systemTar -xf $archives['php-driver-windows-x64'] -C $driverRoot
 Assert-LastExitCode 'PHP Windows driver extraction'
@@ -209,9 +209,8 @@ if (-not (Test-Path -LiteralPath $php -PathType Leaf)) {
 }
 $driverVersion = (& $php -n -r 'echo PHP_VERSION;')
 Assert-LastExitCode 'PHP Windows driver version'
-if ($driverVersion -ne '8.4.25') {
-    throw "locked PHP Windows driver has unexpected version: $driverVersion"
-}
+& $php (Join-Path $PSScriptRoot 'check-toolchain-capabilities.php') 'php' $php
+Assert-LastExitCode 'PHP compiler runtime capabilities'
 
 $sourceExtract = Join-Path $WorkRoot 'typephp-source'
 Write-Host 'Extracting TypePHP source ...'
@@ -302,9 +301,8 @@ foreach ($required in @($compiler, $llvmNm, $llvmObjcopy)) {
     }
 }
 $compilerVersion = (& $compiler --version 2>$null | Select-Object -First 1)
-if ($compilerVersion -notmatch '^clang version 19\.1\.7(?:\s|$)') {
-    throw "locked LLVM archive has unexpected compiler version: $compilerVersion"
-}
+& $php (Join-Path $PSScriptRoot 'check-toolchain-capabilities.php') 'cxx' $compiler
+Assert-LastExitCode 'C++17 Linux target capabilities'
 
 Write-Host 'Stripping debug sections from the private SDK work copy ...'
 $strippedSdk = & $php (Join-Path $repository 'tools\strip-sdk-debug.php') `

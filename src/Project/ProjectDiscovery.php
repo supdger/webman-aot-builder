@@ -18,7 +18,7 @@ final class ProjectDiscovery
     public const UNCLASSIFIED = 'unclassified';
 
     /**
-     * @param array<string,string> $dynamicPhp Exact third-party path to SHA-256 registrations.
+     * @param array<string,string> $dynamicPhp Registered third-party view adapter paths and their runtime policy identities.
      */
     public function __construct(
         private readonly string $projectDirectory,
@@ -101,7 +101,7 @@ final class ProjectDiscovery
             }
             $this->scanRoot($root['path'], $root['owner'], $files);
         }
-        foreach ($this->dynamicPhp as $path => $digest) {
+        foreach ($this->dynamicPhp as $path => $policy) {
             if (!isset($files[$path])
                 || $files[$path]['category'] !== self::THIRD_PARTY_DYNAMIC_PHP
             ) {
@@ -165,16 +165,24 @@ final class ProjectDiscovery
         if ($basename === '.ds_store' || $basename === 'readme.md') {
             return self::SOURCE_METADATA;
         }
-        if (isset($this->dynamicPhp[$path])) {
+        if (array_key_exists($path, $this->dynamicPhp)) {
             if (!str_starts_with($path, 'vendor/')
-                || preg_match('/^[a-f0-9]{64}$/D', $this->dynamicPhp[$path]) !== 1
-                || hash_file('sha256', $this->absolute($path)) !== $this->dynamicPhp[$path]
+                || $this->dynamicPhp[$path] !== 'runtime.third-party-dynamic.v1'
+                || preg_match('~^vendor/workerman/webman-framework/src/support/view/(Blade|Raw|ThinkPHP|Twig)\.php$~D', $path, $view) !== 1
             ) {
                 throw new ConfigurationException(
                     "registered third-party dynamic PHP drifted: {$path}"
                 );
             }
+            $source = file_get_contents($this->absolute($path));
+            if (!is_string($source)) {
+                throw new ConfigurationException("registered third-party view adapter cannot be read: {$path}");
+            }
+            (new WebmanViewAdapterPolicy())->validate($source, $view[1]);
             return self::THIRD_PARTY_DYNAMIC_PHP;
+        }
+        if ($path === 'support/Setup.php' && $this->isComposerSetup()) {
+            return self::INSTALL_ONLY;
         }
         if (str_starts_with($normalized, 'vendor/saithink/saiadmin/src/orm/')) {
             return self::INSTALL_ONLY;
@@ -251,6 +259,115 @@ final class ProjectDiscovery
         }
 
         return self::UNCLASSIFIED;
+    }
+
+    private function isComposerSetup(): bool
+    {
+        $composerFile = $this->absolute('composer.json');
+        $composer = is_file($composerFile) && !is_link($composerFile)
+            ? json_decode((string) file_get_contents($composerFile), true)
+            : null;
+        if (!is_array($composer)) {
+            return false;
+        }
+        foreach (['post-create-project-cmd', 'setup-webman'] as $event) {
+            $commands = $composer['scripts'][$event] ?? [];
+            if (!in_array('support\\Setup::run', (array) $commands, true)) {
+                return false;
+            }
+        }
+        foreach (array_merge($composer['autoload']['files'] ?? [], $composer['autoload-dev']['files'] ?? []) as $file) {
+            if (is_string($file) && str_ends_with(str_replace('\\', '/', $file), 'support/Setup.php')) {
+                return false;
+            }
+        }
+        $source = file_get_contents($this->absolute('support/Setup.php'));
+        if (!is_string($source)) {
+            return false;
+        }
+        try {
+            $tokens = token_get_all($source, TOKEN_PARSE);
+        } catch (\ParseError) {
+            return false;
+        }
+        $tokens = array_values(array_filter($tokens, static fn(array|string $token): bool =>
+            !is_array($token) || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+        ));
+        $text = static fn(array|string $token): string => is_array($token) ? $token[1] : $token;
+        $namespace = false;
+        $class = false;
+        $hasRun = false;
+        for ($index = 0, $count = count($tokens); $index < $count; $index++) {
+            $token = $tokens[$index];
+            if (is_array($token) && $token[0] === T_OPEN_TAG) {
+                continue;
+            }
+            if (is_array($token) && in_array($token[0], [T_NAMESPACE, T_USE, T_DECLARE], true)) {
+                $declaration = '';
+                $kind = $token[0];
+                while (++$index < $count && $tokens[$index] !== ';') {
+                    $declaration .= $text($tokens[$index]);
+                }
+                if ($kind === T_NAMESPACE) {
+                    if ($namespace || $declaration !== 'support') { return false; }
+                    $namespace = true;
+                } elseif ($kind === T_DECLARE && $declaration !== '(strict_types=1)') {
+                    return false;
+                }
+                continue;
+            }
+            if (is_array($token) && $token[0] === T_FINAL) {
+                continue;
+            }
+            if (is_array($token) && $token[0] === T_CLASS && !$class) {
+                if (!$namespace || $text($tokens[++$index] ?? '') !== 'Setup'
+                    || ($tokens[++$index] ?? '') !== '{'
+                ) { return false; }
+                $class = true;
+                $depth = 1;
+                while (++$index < $count && $depth > 0) {
+                    $entry = $tokens[$index];
+                    if ($entry === '{' || (is_array($entry) && in_array($entry[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true))) {
+                        $depth++;
+                    } elseif ($entry === '}') {
+                        $depth--;
+                    }
+                    if ($depth === 1 && is_array($entry) && $entry[0] === T_PUBLIC
+                        && ($tokens[$index + 1][0] ?? null) === T_STATIC
+                        && ($tokens[$index + 2][0] ?? null) === T_FUNCTION
+                        && ($tokens[$index + 3][0] ?? null) === T_STRING
+                        && strtolower($tokens[$index + 3][1]) === 'run'
+                        && ($tokens[$index + 4] ?? null) === '('
+                    ) { $hasRun = true; }
+                }
+                $index--;
+                continue;
+            }
+            return false;
+        }
+        if (!$class || !$hasRun) {
+            return false;
+        }
+        foreach (['app', 'support', 'config', 'plugin'] as $directory) {
+            $root = $this->absolute($directory);
+            if (!is_dir($root)) { continue; }
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS)) as $file) {
+                if (!$file->isFile() || strtolower($file->getExtension()) !== 'php'
+                    || $file->getPathname() === $this->absolute('support/Setup.php')
+                ) { continue; }
+                if ($file->isLink()) { return false; }
+                foreach (token_get_all((string) file_get_contents($file->getPathname())) as $entry) {
+                    if (!is_array($entry)) { continue; }
+                    if (($entry[0] === T_STRING && strtolower($entry[1]) === 'setup')
+                        || (in_array($entry[0], [T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
+                            && strtolower(ltrim($entry[1], '\\')) === 'support\\setup')
+                        || ($entry[0] === T_CONSTANT_ENCAPSED_STRING
+                            && preg_match('~(?:support[\\\\/]+Setup|Setup(?:\.php)?[\'\"])~i', $entry[1]) === 1)
+                    ) { return false; }
+                }
+            }
+        }
+        return true;
     }
 
     private function assertSaiAdminInstallationSources(): void

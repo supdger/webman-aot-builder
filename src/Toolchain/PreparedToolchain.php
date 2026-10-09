@@ -10,7 +10,7 @@ use WebmanAotBuilder\Cli\UnavailableException;
 final class PreparedToolchain
 {
     /**
-     * @return array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string}
+     * @return array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string,sdkContext:array{sdkDirectory:string,sdkSha256:string,derivationSha256:string,toolchainLockSha256:string,toolchainLockFile:string,phpVersionId:int,deepcloneEnabled:bool}}
      */
     public function load(
         string $manifestPath,
@@ -93,12 +93,18 @@ final class PreparedToolchain
         ) {
             throw new ConfigurationException('prepared static SDK fingerprint differs');
         }
-        if (is_array($sdkPolicy)) {
-            (new SdkArchiveGuard())->assertDerivation($sdk, $sdkPolicy);
+        if (!is_array($sdkPolicy)) {
+            throw new ConfigurationException('prepared static SDK has no selected derivation approval');
         }
+        (new SdkArchiveGuard())->assertDerivation($sdk, $sdkPolicy);
+        $capabilities = (new StaticTargetLayout())->runtimeCapabilities($sdk);
+        $tools['sdkContext'] = ['sdkDirectory' => $sdk, 'sdkSha256' => $expected,
+            'derivationSha256' => $sdkPolicy['derivationSha256'], 'toolchainLockSha256' => $lockDigest,
+            'toolchainLockFile' => (string) realpath($lockFile),
+            'phpVersionId' => $capabilities['phpVersionId'], 'deepcloneEnabled' => $capabilities['deepcloneEnabled']];
         $tools['sdkSha256'] = $expected;
 
-        /** @var array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string} $tools */
+        /** @var array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string,sdkContext:array{sdkDirectory:string,sdkSha256:string,derivationSha256:string,toolchainLockSha256:string,toolchainLockFile:string,phpVersionId:int,deepcloneEnabled:bool}} $tools */
         return $tools;
     }
 

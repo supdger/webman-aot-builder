@@ -2,22 +2,10 @@
   "schema": "webman-aot-builder-upstream-generator-lock-v1",
   "status": "prototype-only",
   "packages": {
-    "nikic/fast-route": {
-      "version": "1.3.1",
-      "reference": "7476684f39bb9124b3be69ed3d84b66723920298"
-    },
-    "workerman/coroutine": {
-      "version": "v1.1.6",
-      "reference": "918c10be5270a74f91ff77cc66b6a821cc456a25"
-    },
-    "workerman/webman-framework": {
-      "version": "v2.2.4",
-      "reference": "b080c9f470f9811999c94ae6fab3871f7792d891"
-    },
-    "workerman/workerman": {
-      "version": "v5.2.2",
-      "reference": "a0866601af066c0eab5a2f7b9aef8bdda8fa1911"
-    }
+    "nikic/fast-route": {},
+    "workerman/coroutine": {},
+    "workerman/webman-framework": {},
+    "workerman/workerman": {}
   },
   "generator": {
     "repository": "supdger/webman-typephp",
@@ -30,236 +18,125 @@
   },
   "entrypointMapping": {
     "source": "vendor/workerman/webman-framework/src/support/bootstrap.php",
-    "sourceSha256": "0c71c1e472e9c7873f2560b9345350347638c78116aee18c69a9f47c9b59229f",
     "replacement": "main.php",
-    "replacementSha256": "179bd48dcbcbe81accc456c8cb57a3c0a478b02ea774f6c7d2587f7025e9c56e",
     "policy": "upstream.webman-bootstrap-entrypoint.v1"
   },
   "dynamicPhp": {
-    "vendor/workerman/webman-framework/src/support/view/Blade.php": "e546e508971f41eb583d2a282d05b8ba35f9b7cf2a60cd658645512b846c7239",
-    "vendor/workerman/webman-framework/src/support/view/Raw.php": "fcb2e1e604c4dd56cfe3a878fff38b34a46cf718da43d91d244ee6141aa95e4c",
-    "vendor/workerman/webman-framework/src/support/view/ThinkPHP.php": "c07a8300089838416c97f88424a43fbd894be252933e0cdd9e78fead47728e53",
-    "vendor/workerman/webman-framework/src/support/view/Twig.php": "a8d4b47f638942bd6fb8537b2841c523986e648d330cc9299394811bd4cef922"
+    "vendor/workerman/webman-framework/src/support/view/Blade.php": "runtime.third-party-dynamic.v1",
+    "vendor/workerman/webman-framework/src/support/view/Raw.php": "runtime.third-party-dynamic.v1",
+    "vendor/workerman/webman-framework/src/support/view/ThinkPHP.php": "runtime.third-party-dynamic.v1",
+    "vendor/workerman/webman-framework/src/support/view/Twig.php": "runtime.third-party-dynamic.v1"
   },
   "installOnly": {
     "vendor/workerman/webman-framework/src/support/Plugin.php": {
-      "sourceSha256": "902dabf8ecbcf47ebc8696d39ae904d3fa631ad5a1baa812bb4a9e72825c3fa6",
       "policy": "webman.composer-installer.v1"
     }
   },
   "optionalAdaptations": {
     "symfony/polyfill-deepclone": {
       "rule": "symfony.deepclone-php84-fallback.v1",
-      "version": "v1.42.0",
-      "reference": "70ba0627efc68e97ea392843458a2dd9d6dbd156",
-      "sdkSha256": "47705a92ff965250fb197087dddf8745da46a29249b0d6d0d1e40cc5b958d9f0",
-      "derivationSha256": "6bd209ab980650e80c908df098a53d73f87108c784d7f00fa7e1c74a0b96b319",
-      "files": {
-        "bootstrap.php": "18ecc97e1cc4bb01c94ecb5a90625f8cdebd705cea43490c1895818c746f0369",
-        "bootstrap81.php": "f285e676d2f2ae97e221e7c472f8ba90e95d15835aa8c987239247268725249a",
-        "Resources/stubs/ClassNotFoundException.php": "7fdf21dcc2e09bd6a015ed46e2b1f5207acb77ef38904d4d7c06b0fc087c0ae9",
-        "Resources/stubs/NotInstantiableException.php": "4a91a9e3cf000bdbef2e05b4a0600ae498c43a73dd60f0b4e8ce1b34991435f6",
-        "DeepClone.php": "ac14fa09d48582a37b868d0b3a6dc5854afc95f2f7c377963453238ca1642869"
-      }
+      "sdkPolicy": "selected.prepared-toolchain-sdk.v1"
     },
     "monolog/monolog": {
       "path": "vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php",
-      "version": "2.11.1",
-      "reference": "bf2403f591c5a431b6e0e1170cbadd3d64499564",
-      "sourceSha256": "731ed1b263428ebba3ddd194a5f41e01e6c3ce8b8a22bd8c67e7f96776bd5ac5",
-      "adaptedSha256": "c1d20d1ebfcaf657e6668c0ea3d9ac7750ffd782c0d4ec1d3450f2df63d6aa62",
       "rule": "monolog.web-processor-global-reference.v1"
     },
     "symfony/native-intl-polyfill": {
       "rule": "symfony.native-intl-polyfill.v1",
       "packages": {
-        "symfony/polyfill-intl-grapheme": {
-          "version": "v1.41.0",
-          "reference": "bb899c1db0aa8127dc3afe8cda4a67eb24915f8d",
-          "bootstrapSha256": "e51c7890e24f9104a86421b570fafc170d3c9a9237b60bda1938b384b0a19a00"
-        },
-        "symfony/polyfill-intl-idn": {
-          "version": "v1.42.0",
-          "reference": "51b5ff5ba85452b31ec6f55490b08148612339d9",
-          "bootstrapSha256": "235b2ec58965606763d4939d9adecf447064056589ccf14840a8401685a89a85"
-        },
-        "symfony/polyfill-intl-normalizer": {
-          "version": "v1.42.0",
-          "reference": "aa20edea75bd9c48cfecc8360922e5a6e5c44502",
-          "bootstrapSha256": "94fdd20bc0e35705fec054797d1a7f3f0f13cde9832782033eb2508fac7d6a0d"
-        }
+        "symfony/polyfill-intl-grapheme": {},
+        "symfony/polyfill-intl-idn": {},
+        "symfony/polyfill-intl-normalizer": {}
       },
       "shadows": {
-        "grapheme": {"sourceSha256": "edca87b203d993d0c68164e015f1aa35c7e9f5bda1b41e18f57f05a3239d63e1"},
-        "idn": {"sourceSha256": "2ceb55fec004a138f57780825ef5c9b35d35820a1d32a9bfd94ae42fb85ee057"},
-        "normalizer": {"sourceSha256": "f967d0c8dc18119eae82319c16a1d89c8c3d3e342298e1c4e0e0f638951f0194"}
-      },
-      "adaptedGraphemeSha256": "6904b982be5c476b50c81ea8f5fc8e5218bc268041461ee3ec7f3f670778c7d0"
-    },
-    "nesbot/carbon": {
-      "baseVersion": "3.13.2",
-      "supportedVersions": [
-        "3.13.2",
-        "3.14.0",
-        "3.14.1"
-      ],
-      "versions": {
-        "3.14.1": {
-          "reference": "34e9109535165bf1d7ff17a610492372ae73a896",
-          "sourcePath": "vendor/nesbot/carbon/src/Carbon/CarbonPeriod.php",
-          "sourceSha256": "f32639af4549777fd27f9f856086237fbc08d621cc885dbae9cf68da12a0b64e",
-          "replacements": {
-            "CarbonInterval::year()": "CarbonInterval::__callStatic('year', [])"
-          }
-        }
+        "grapheme": {},
+        "idn": {},
+        "normalizer": {}
       }
-    }
+    },
+    "nesbot/carbon": {}
   },
   "runtimeResources": {
-    "webman/captcha": {
-      "version": "v1.0.5",
-      "reference": "0b2645b813466e4e70bff311511364080bad2ec5",
-      "builderSha256": "306dabba038981082886a335571abdffa996406870db09606486a0794c63ef41",
-      "fonts": {
-        "captcha0.ttf": "da4281dc7db17a3dfce64a62ced92875c5895340055ec8ba24a3914eb97b349d",
-        "captcha1.ttf": "31a52ab4b2f576f99cfe52d758214458aa1206739a26c3a75f16000160f60ec9",
-        "captcha2.ttf": "e27b479dfd595696bbd72c7167447e3f27ebf7d171ebc9b753151afe54d17031",
-        "captcha3.ttf": "e337ada1698a32481459f918e164e57f6b8a4ea8499fd6ebed0b0fbc6288f91c",
-        "captcha4.ttf": "62523df9964670f58702447cea589158de9d7fbbfdfd34e7007f19c2120bf4c1"
-      }
-    }
+    "webman/captcha": "runtime.captcha-font-resources.v1"
   },
   "mappings": {
     "vendor/nikic/fast-route/src/functions.php": {
-      "shadow": ".typephp/build/fast-route-functions.php",
-      "sourceSha256": "9254012e02a3a3b0f75360ac122e0e7ced796c61d1f57ad59747ec00d6b6fc7f",
-      "shadowSha256": "c5ca5efe972fb1cadfb370837cc8799e2849624dd435a451b9fb80f70304b025"
+      "shadow": ".typephp/build/fast-route-functions.php"
     },
     "vendor/workerman/coroutine/src/Barrier.php": {
-      "shadow": ".typephp/build/coroutine-barrier.php",
-      "sourceSha256": "60f5f2ae05aacdc04f617c658b2ddccfb3ca04ccedb02c5ab233fea489222557",
-      "shadowSha256": "2cb725008d08c43c7477bb52e3fe9bac0cc5fce48f6d7f6b868e49b792855f9c"
+      "shadow": ".typephp/build/coroutine-barrier.php"
     },
     "vendor/workerman/coroutine/src/Barrier/BarrierInterface.php": {
-      "shadow": ".typephp/build/coroutine-barrier-interface.php",
-      "sourceSha256": "e3379b834e9db8bc006de87ee15bb928b8016646e3f2d82e5f349abcc3d76f3d",
-      "shadowSha256": "d7da0bcc1a7a8fef7341c8ea7f0440d54753fdd64467502c38e854e9135c4a04"
+      "shadow": ".typephp/build/coroutine-barrier-interface.php"
     },
     "vendor/workerman/coroutine/src/Barrier/Swoole.php": {
-      "shadow": ".typephp/build/coroutine-barrier-swoole.php",
-      "sourceSha256": "3727fdfd479a1d500ac40cef692cd47888b7ad432fb67ea6e3f456f3414dca1d",
-      "shadowSha256": "a9c11963bef0a41770877d15197516968cdc7fec7c56607d88747153cf8fe0be"
+      "shadow": ".typephp/build/coroutine-barrier-swoole.php"
     },
     "vendor/workerman/coroutine/src/Barrier/Fiber.php": {
-      "shadow": ".typephp/build/coroutine-barrier-fiber.php",
-      "sourceSha256": "e399feef47ea442a6bb4b065a2790da80ac529417a15e60120faa9bc09cb912b",
-      "shadowSha256": "e81849ddfefdec372f8a280a73f99b62ea613105465423cffb70a454c859dc69"
+      "shadow": ".typephp/build/coroutine-barrier-fiber.php"
     },
     "vendor/workerman/coroutine/src/Channel/Fiber.php": {
-      "shadow": ".typephp/build/coroutine-channel-fiber.php",
-      "sourceSha256": "3c3ecca5fc2a99b43d6a1bf2e517093a2c84ce80173fd78086e56bf950890873",
-      "shadowSha256": "6849f904cd21d1220ea30d830a541974aa9c304b9edaced302a6d859fd817cff"
+      "shadow": ".typephp/build/coroutine-channel-fiber.php"
     },
     "vendor/workerman/coroutine/src/Context.php": {
-      "shadow": ".typephp/build/coroutine-context.php",
-      "sourceSha256": "0a4e87e17a59624d3d36c12be27f3d4c1d3abaed1eeb0e9f4028cdea253f71de",
-      "shadowSha256": "de72222138bb58f631c1c044d8f84c628182424bd5c4ad4179f39ca93017efea"
+      "shadow": ".typephp/build/coroutine-context.php"
     },
     "vendor/workerman/coroutine/src/Context/Fiber.php": {
-      "shadow": ".typephp/build/coroutine-context-fiber.php",
-      "sourceSha256": "f8a4995424f706a51a99f80668163d88f8d951e3f3e21e5043ec5d89c0f03432",
-      "shadowSha256": "2ff7242aab2f0869c659ba63966776145c1eb4c53750cc7865016a3dfbe71ca3"
+      "shadow": ".typephp/build/coroutine-context-fiber.php"
     },
     "vendor/workerman/coroutine/src/Coroutine.php": {
-      "shadow": ".typephp/build/coroutine-coroutine.php",
-      "sourceSha256": "0dab45ed32dda9211cd44d79941f4b442218b879bece2e80d122355866e554c2",
-      "shadowSha256": "cdac564759bb6e7d906c6ab6f63eb1e4129aec0475b361b2da56b62dd21c779c"
+      "shadow": ".typephp/build/coroutine-coroutine.php"
     },
     "vendor/workerman/coroutine/src/Coroutine/Fiber.php": {
-      "shadow": ".typephp/build/coroutine-fiber.php",
-      "sourceSha256": "a8038bdbd8eb6236b9bbbc6d335e9b00cdc66259c6ac9e2846abc80502fdb1eb",
-      "shadowSha256": "89cf48b41da5cd9acc7caddbdfc9e5f05399154530da79eb20af09f056e2186a"
+      "shadow": ".typephp/build/coroutine-fiber.php"
     },
     "vendor/workerman/coroutine/src/Parallel.php": {
-      "shadow": ".typephp/build/coroutine-parallel.php",
-      "sourceSha256": "2148ce3d1b89dd2269763727da64b7b4175d750b6af0f2dd94702484c2888211",
-      "shadowSha256": "6c2ddf691d765b75e16e0b95ca645edb064dcd53dac18affa1aa23cc33682231"
+      "shadow": ".typephp/build/coroutine-parallel.php"
     },
     "vendor/workerman/coroutine/src/Pool.php": {
-      "shadow": ".typephp/build/workerman-coroutine-pool.php",
-      "sourceSha256": "9801c59a5aa68fbb864b86ff0e20d63dbe99ae3cb218fdf0134519ea637b0b34",
-      "shadowSha256": "2f61753071aae8ea2736ddea2a6fc84c4d332b291d2127cd3685465a2c8b73f6"
+      "shadow": ".typephp/build/workerman-coroutine-pool.php"
     },
     "vendor/workerman/coroutine/src/WaitGroup.php": {
-      "shadow": ".typephp/build/coroutine-wait-group.php",
-      "sourceSha256": "95b2b82c01bfe54d7d35b75336314140b95751586e2a35bddd472dfa03b0e251",
-      "shadowSha256": "d2afe58d948c1a82ce680cb9d93f132e8abf69e5d89f0e3066566e6e42be5117"
+      "shadow": ".typephp/build/coroutine-wait-group.php"
     },
     "vendor/workerman/webman-framework/src/App.php": {
-      "shadow": ".typephp/build/webman-app.php",
-      "sourceSha256": "f8130a3f12520ef243ae345a67dab014d4ad2f732547d147d07106bf39d6e3f0",
-      "shadowSha256": "09ce8749c6a3f9ef18ef7f38bc94d7bd8ee892a73a930d5e3fc46bb831dc111f"
+      "shadow": ".typephp/build/webman-app.php"
     },
     "vendor/workerman/webman-framework/src/Config.php": {
-      "shadow": ".typephp/build/webman-config.php",
-      "sourceSha256": "5695e30a03a432c85ff0718163a2de2f9b81840e05e81e6bf309f77175d3bcbb",
-      "shadowSha256": "dc545921117fa6e3e62420da38ae28b1fc3d4d3a30f6181d6b716abad5681083"
+      "shadow": ".typephp/build/webman-config.php"
     },
     "vendor/workerman/webman-framework/src/File.php": {
-      "shadow": ".typephp/build/webman-file.php",
-      "sourceSha256": "7f7daee7b2429a92bf37d8d4a114c22558bb570ab0b4f65cfec1fb77a53b3d7f",
-      "shadowSha256": "44fef816921915089158fca381e3be81b01fe37b61121f256c53957eeca95a1f"
+      "shadow": ".typephp/build/webman-file.php"
     },
     "vendor/workerman/webman-framework/src/Route/Route.php": {
-      "shadow": ".typephp/build/webman-route.php",
-      "sourceSha256": "c8f224f1bc5a2e8c2340240cc48ce24ca5297f10a7bd4c3dc719f18a0e9a1271",
-      "shadowSha256": "e8b414103ce87f1d376c6af33d40a0db8388970181311d7cf04644eb16c54eae"
+      "shadow": ".typephp/build/webman-route.php"
     },
     "vendor/workerman/webman-framework/src/support/helpers.php": {
-      "shadow": ".typephp/build/helpers.php",
-      "sourceSha256": "d41b7261e54a6245c9b28bc6783c1377bf1bc3b2a81e6a1a4447af05be3c462d",
-      "shadowSha256": "265d40d4a6789f54a9eee99a5290f657595c3a3af92d0c2a1de4082e84ddde01"
+      "shadow": ".typephp/build/helpers.php"
     },
     "vendor/workerman/workerman/src/Connection/AsyncTcpConnection.php": {
-      "shadow": ".typephp/build/workerman-async-tcp-connection.php",
-      "sourceSha256": "ddc403ff74f0482165eacd16f4c92e45b1a5c5d0f83382e4bcbe59bd65739fa9",
-      "shadowSha256": "9cf9aed1a2b7824150ef29879f2549ead1df6473bfe7a2c7ca85cd5b559872d8"
+      "shadow": ".typephp/build/workerman-async-tcp-connection.php"
     },
     "vendor/workerman/workerman/src/Connection/TcpConnection.php": {
-      "shadow": ".typephp/build/workerman-tcp-connection.php",
-      "sourceSha256": "b879f8d92204911dd1e90d006fa1a80bc524ef7bd3ef031c75a71b2c4403d572",
-      "shadowSha256": "7c433d8d30da7f85bb9cbd3c6281faf8c64316386046ff777df04ae769c0eedc"
+      "shadow": ".typephp/build/workerman-tcp-connection.php"
     },
     "vendor/workerman/workerman/src/Events/Select.php": {
-      "shadow": ".typephp/build/workerman-select.php",
-      "sourceSha256": "8fe36009e71be9c345ba78d0643c8c6f8176b949f27c9873dd76326eda9daf64",
-      "shadowSha256": "cc2e3fc769ff7adda816e6ef5badbadb8a18f77e6e89cd46ea503a3f57cae088"
+      "shadow": ".typephp/build/workerman-select.php"
     },
     "vendor/workerman/workerman/src/Protocols/Http/Session.php": {
-      "shadow": ".typephp/build/http-session.php",
-      "sourceSha256": "20d6ee61a10d28611173a2fd17506ac7cb0e9ba1c2f09c3403b8c6045a7695f0",
-      "shadowSha256": "d17e2d502c2af307dfa3b2f9a225bc00f83d10df92249221593d92fa4873c335"
+      "shadow": ".typephp/build/http-session.php"
     },
     "vendor/workerman/workerman/src/Protocols/Http/Session/FileSessionHandler.php": {
-      "shadow": ".typephp/build/http-session-file-handler.php",
-      "sourceSha256": "837512eff78bdc189afa3d628a9978fdfe8c9ae3f6154ad8071e8d1626222686",
-      "shadowSha256": "ed79972c45c61944044ae81eb0554a37507985403333a7200125f036f775f16e"
+      "shadow": ".typephp/build/http-session-file-handler.php"
     },
     "vendor/workerman/workerman/src/Protocols/Websocket.php": {
-      "shadow": ".typephp/build/workerman-websocket.php",
-      "sourceSha256": "35bd5da4938f1af1adf1f75aa3666ab5c272ce6d20400a30affc407ec6ea1a28",
-      "shadowSha256": "58c85f6778820864ae5b8d77ab1a9bef049dfc615854b11b344d86157761c5f6"
+      "shadow": ".typephp/build/workerman-websocket.php"
     },
     "vendor/workerman/workerman/src/Timer.php": {
-      "shadow": ".typephp/build/workerman-timer.php",
-      "sourceSha256": "859c6a1d666083e018cf364049a05c39f8496291642294ab5f37aab693d71ec8",
-      "shadowSha256": "a691c57285857958a2d535cafb9c4bc9586063a8c7663c4e5c26cc2cc6e2e8e5"
+      "shadow": ".typephp/build/workerman-timer.php"
     },
     "vendor/workerman/workerman/src/Worker.php": {
-      "shadow": ".typephp/build/workerman-worker.php",
-      "sourceSha256": "70c34def8cf717851dec463e1b8f488caf80a045e1f1d9cdd9b847d4bef31d75",
-      "shadowSha256": "37e364bec170a998311b0d1f649b3cf2c0721d44d8a39abb94c4bf51d8dffd74",
-      "adaptedShadowSha256": "fbfa3cec5dd2dd7f5cc1209d0061219834e3bcd447ba440e75d8168fa36dfc0d"
+      "shadow": ".typephp/build/workerman-worker.php"
     }
   }
 }

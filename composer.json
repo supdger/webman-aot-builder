@@ -4,9 +4,9 @@
   "type": "composer-plugin",
   "license": "MIT",
   "require": {
-    "php": ">=8.1",
-    "composer-plugin-api": "^2.0",
-    "composer": ">=2.5.3"
+    "php": ">=8.0",
+    "composer-plugin-api": "*",
+    "composer": "*"
   },
   "extra": {
     "class": "Supdger\\WebmanAotInstaller\\Plugin",
@@ -56,6 +56,6 @@
   },
   "dist": {
     "type": "zip",
-    "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.1/webman-aot-builder-0.4.1-composer.zip"
+    "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.3/webman-aot-builder-0.4.3-composer.zip"
   }
 }
