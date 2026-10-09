@@ -9,7 +9,7 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class CompilerCoverageAudit
 {
     /**
-     * @param array{source:string,sourceSha256:string,replacement:string,replacementSha256:string,policy:string}|null $entrypointMapping
+     * @param array{source:string,sourceSha256:string,replacement:string,replacementSha256:string,policy:string,projectSourceSha256?:string}|null $entrypointMapping
      */
     public function __construct(private readonly ?array $entrypointMapping = null)
     {
@@ -135,7 +135,11 @@ final class CompilerCoverageAudit
                     && ($entry['owner'] ?? null) === 'project')
             )
             && ($entry['policy'] ?? null) === $mapping['policy']
-            && ($entry['sourceSha256'] ?? null) === $mapping['sourceSha256']
+            && ($entry['sourceSha256'] ?? null) === (
+                ($entry['path'] ?? null) === 'support/bootstrap.php'
+                    ? ($mapping['projectSourceSha256'] ?? $mapping['sourceSha256'])
+                    : $mapping['sourceSha256']
+            )
             && $replacement === $mapping['replacement']
             && $replacementDigest === $mapping['replacementSha256'];
     }

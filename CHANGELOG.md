@@ -2,6 +2,13 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.3](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.3)
+
+- 依赖兼容性按本次源码、API 与目标 ABI 校验；取消消费项目的版本上限、精确标签及历史源码命中总数拒绝。
+- 修复 Workerman、Carbon、Symfony 与数据库等兼容转换的作用域，保留无关方法、回调及分支。
+- TypePHP 编译运行时按实际扩展、API 与语法能力检查；保留批准材料摘要、补丁链和目标 ABI 校验。
+- macOS、Windows 和 Composer 完整运行时统一更新至 0.4.3，并保留 Composer 下载断点续传。
+
 ## [v0.4.2](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.2) — 2026-10-09
 
 - 完整包下载失败或取消后保留进度，自动重试及下次启动从已有字节继续；取消固定 30 分钟总时长限制，保留连接与无数据超时。

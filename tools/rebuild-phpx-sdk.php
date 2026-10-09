@@ -82,6 +82,26 @@ function sdkVerifySource(string $baseline, string $candidate, array $rules, stri
     }
     return hash('sha256', json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
 }
+function sdkToolDigest(array $entries, string $tool): string
+{
+    $path = 'prepared/llvm/bin/' . $tool;
+    $seen = [];
+    while (($entries[$path]['type'] ?? null) === 'link') {
+        $target = $entries[$path]['target'] ?? null;
+        if (isset($seen[$path]) || !is_string($target)
+            || preg_match('/^[A-Za-z0-9._+-]+$/D', $target) !== 1 || in_array($target, ['.', '..'], true)) {
+            throw new RuntimeException('Selected LLVM tool link is unsafe or cyclic: ' . $tool);
+        }
+        $seen[$path] = true;
+        $path = 'prepared/llvm/bin/' . $target;
+    }
+    $digest = $entries[$path]['sha256'] ?? null;
+    if (($entries[$path]['type'] ?? null) !== 'file' || !is_string($digest)
+        || preg_match('/^[a-f0-9]{64}$/D', $digest) !== 1) {
+        throw new RuntimeException('Selected LLVM tool material identity is missing: ' . $tool);
+    }
+    return $digest;
+}
 function sdkVerifySysroot(string $archive, string $root, array $expected): array
 {
     if (hash_file('sha256', $archive) !== $expected['sha256']) { throw new RuntimeException('Sysroot input component archive differs'); }
@@ -98,7 +118,7 @@ function sdkVerifySysroot(string $archive, string $root, array $expected): array
     }
     ksort($entries, SORT_STRING); $actual = sdkTree($root);
     if ($entries === [] || $actual !== $entries) { throw new RuntimeException('Sysroot bytes or link targets differ from the locked input component'); }
-    return ['archiveSha256' => $expected['sha256'], 'manifestSha256' => $expected['manifestSha256'], 'treeSha256' => hash('sha256', json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)), 'tools' => ['clang' => $manifest['entries']['prepared/llvm/bin/clang-19']['sha256'] ?? null, 'objcopy' => $manifest['entries']['prepared/llvm/bin/llvm-objcopy']['sha256'] ?? null]];
+    return ['archiveSha256' => $expected['sha256'], 'manifestSha256' => $expected['manifestSha256'], 'treeSha256' => hash('sha256', json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)), 'tools' => ['clang' => sdkToolDigest($manifest['entries'], 'clang'), 'objcopy' => sdkToolDigest($manifest['entries'], 'llvm-objcopy')]];
 }
 
 try {
@@ -135,12 +155,18 @@ try {
     // The minimal installed compiler omits examples and tests. Build from fresh complete
     // official trees, applying only manifest-authorized after bytes from the candidate.
     $inputTypephp = $typephp; $inputPhpx = $phpx;
-    sdkVerifySource($baseline . '/typephp-0.9.2/src', $inputTypephp . '/src', $rules, 'src/', []);
-    sdkVerifySource($baseline . '/phpx-2.9.1', $inputPhpx, $rules, 'vendor/swoole/phpx/', ['full-static/sdk', 'full-static/sdk-before-032', 'full-static/build']);
+    $sourceRoots = [];
+    foreach (['typephp', 'phpx'] as $component) {
+        $roots = glob($baseline . '/' . $component . '-*', GLOB_ONLYDIR) ?: [];
+        if (count($roots) !== 1 || is_link($roots[0])) { throw new RuntimeException('Source archive requires one safe ' . $component . ' root'); }
+        $sourceRoots[$component] = $roots[0];
+    }
+    sdkVerifySource($sourceRoots['typephp'] . '/src', $inputTypephp . '/src', $rules, 'src/', []);
+    sdkVerifySource($sourceRoots['phpx'], $inputPhpx, $rules, 'vendor/swoole/phpx/', ['full-static/sdk', 'full-static/sdk-before-032', 'full-static/build']);
     $sourceOutput = $output . '/source'; mkdir($sourceOutput, 0700);
-    $typephp = $sourceOutput . '/typephp-0.9.2'; sdkCopy($baseline . '/typephp-0.9.2', $typephp);
+    $typephp = $sourceOutput . '/' . basename($sourceRoots['typephp']); sdkCopy($sourceRoots['typephp'], $typephp);
     mkdir($typephp . '/vendor', 0755); mkdir($typephp . '/vendor/swoole', 0755);
-    $phpx = $typephp . '/vendor/swoole/phpx'; sdkCopy($baseline . '/phpx-2.9.1', $phpx);
+    $phpx = $typephp . '/vendor/swoole/phpx'; sdkCopy($sourceRoots['phpx'], $phpx);
     foreach ($rules as $rule) {
         $target = $typephp . '/' . $rule['path']; $candidate = $inputTypephp . '/' . $rule['path'];
         if (!is_file($target) || is_link($target) || hash_file('sha256', $target) !== $rule['beforeSha256']) {
@@ -152,8 +178,8 @@ try {
     }
     (new TypePhpPatchSourceVerifier())->verify($typephp, $manifest);
     $sourceIdentity = [
-        'typephpTreeSha256' => sdkVerifySource($baseline . '/typephp-0.9.2', $typephp, $rules, '', ['vendor']),
-        'phpxTreeSha256' => sdkVerifySource($baseline . '/phpx-2.9.1', $phpx, $rules, 'vendor/swoole/phpx/', []),
+        'typephpTreeSha256' => sdkVerifySource($sourceRoots['typephp'], $typephp, $rules, '', ['vendor']),
+        'phpxTreeSha256' => sdkVerifySource($sourceRoots['phpx'], $phpx, $rules, 'vendor/swoole/phpx/', []),
     ];
     $minimalLock = json_decode(file_get_contents($repository . '/toolchain/minimal-components.lock.json'), true, flags: JSON_THROW_ON_ERROR);
     $sysrootInput = $lock['evidence']['patchedSdk']['sysrootInput'] ?? $minimalLock['components']['macos-arm64'];
@@ -175,10 +201,7 @@ try {
         || hash_file('sha256', $options['clang++']) !== $sysrootIdentity['tools']['clang']) {
         throw new RuntimeException('SDK C++ compiler differs from the locked original component');
     }
-    $clangVersion = shell_exec(escapeshellarg($options['clang']) . ' --version');
-    if (!is_string($clangVersion) || !preg_match('/^clang version 19\.1\.7(?:\s|$)/', $clangVersion)) {
-        throw new RuntimeException('SDK producer requires the locked Clang 19.1.7');
-    }
+    (new WebmanAotBuilder\Toolchain\ToolchainCapabilities())->assertCxx($options['clang++']);
     fwrite(STDERR, "[sdk] Verified official source archives and guarded patched source\n");
     $extraction = $output . '/upstream'; mkdir($extraction, 0700);
     sdkRun(['/usr/bin/tar', '-xf', $options['upstream-sdk-archive'], '-C', $extraction]);
@@ -199,7 +222,8 @@ try {
     }
     fwrite(STDERR, "[sdk] Verified and normalized the locked ncurses header for both hosts\n");
     $build = $output . '/build';
-    $cxx = '-isystem "' . $options['sysroot'] . '/usr/include/c++/12.2.1" -isystem "' . $options['sysroot'] . '/usr/include/c++/12.2.1/x86_64-alpine-linux-musl"';
+    $layout = (new WebmanAotBuilder\Toolchain\StaticTargetLayout())->sysroot($options['sysroot']);
+    $cxx = '-isystem "' . $layout['cxx'] . '" -isystem "' . $layout['targetInclude'] . '"';
     $prefixes = ' -ffile-prefix-map="' . $phpx . '=/usr/src/phpx" -ffile-prefix-map="' . $sdk . '=/usr/src/sdk" -ffile-prefix-map="' . $options['sysroot'] . '=/usr/src/sysroot"';
     fwrite(STDERR, "[sdk] Configure Linux x86_64 musl runtime\n");
     sdkRun([$options['cmake'], '-S', $phpx . '/full-static', '-B', $build,
@@ -253,7 +277,7 @@ try {
     foreach (['clang', 'clang++', 'ar', 'ranlib', 'cmake', 'objcopy'] as $name) {
         $versionOutput = (string) shell_exec(escapeshellarg($options[$name]) . ' --version');
         if (preg_match('/(?:LLVM|clang|cmake) version ([0-9.]+)/', $versionOutput, $match) !== 1) {
-            throw new RuntimeException('SDK producer tool version is unknown: ' . $name);
+            $match[1] = trim($versionOutput);
         }
         $tools[$name] = ['sha256' => hash_file('sha256', $options[$name]), 'version' => $match[1]];
     }

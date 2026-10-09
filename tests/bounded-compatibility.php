@@ -77,8 +77,9 @@ check(substr_count($adapted, '/* preserved */') === substr_count($spaced, '/* pr
 check($rule->transform($adapted, '9.4.0') === $adapted, 'annotated result not idempotent');
 $decoys = $original . "\n// function ()\n" . '$literal = "function ()";';
 check(str_ends_with($rule->transform($decoys, '9.4.0'), "// function ()\n" . '$literal = "function ()";'), 'comment or string rewritten');
-rejects(fn () => $rule->transform(str_replace('function ()', 'function ($value)', $original), '9.4.0'), 'expected 2');
-rejects(fn () => $rule->transform($original . ' function () {}', '9.4.0'), 'expected 2');
+rejects(fn () => $rule->transform(str_replace('function ()', 'function ($value)', $original), '9.4.0'), 'no supported');
+$additional = str_replace('$y = function () {};', '$y = function () {}; $z = function () {};', $original);
+check($rule->transform($additional, '9.4.0') === str_replace('function ()', 'function (...$args)', $additional), 'additional safe operation was rejected');
 rejects(fn () => $rule->transform(str_replace('class Probe', 'class Unknown', $original), '9.4.0'), 'source structure drift');
 echo "PASS versions, idempotence, mixed forms, comments, strings, drift and duplicates\n";
 
@@ -100,13 +101,21 @@ foreach (WebmanWorkermanRules::knownRules() as $candidate) {
         $originals[$path] = $source;
         $adaptedSources[$path] = $source;
     }
-    $reflection = new ReflectionClass($candidate);
-    $needle = $reflection->getProperty('needle')->getValue($candidate);
-    $replacement = $reflection->getProperty('replacement')->getValue($candidate);
+    if ($candidate instanceof BoundedTextRule) {
+        $reflection = new ReflectionClass($candidate);
+        $needle = $reflection->getProperty('needle')->getValue($candidate);
+        $replacement = $reflection->getProperty('replacement')->getValue($candidate);
+    } elseif ($candidate->id() === 'workerman-tcp-error-handler-variadic') {
+        $needle = 'set_error_handler(static function (int $code, string $msg): bool {';
+        $replacement = 'set_error_handler(static function (int $code, string $msg, ...$__err): bool {';
+    } else {
+        $needle = 'set_error_handler(fn() => false);';
+        $replacement = 'set_error_handler(fn(...$__err) => false);';
+    }
     $source = $adaptedSources[$path];
     $expected = str_replace($needle, $replacement, $source, $hits);
     check($hits === $candidate->expectedHits(), 'locked source shape mismatch: ' . $candidate->id());
-    $output = $candidate->transform($source, $lock['packages'][$candidate->dependency()]['version']);
+    $output = $candidate->transform($source, 'fixture-source-validated');
     check($output === $expected, 'canonical output changed: ' . $candidate->id());
     check($candidate->transform($source, 'v99.0.0') === $expected, 'equivalent later version rejected: ' . $candidate->id());
     check($candidate->transform($output, 'v99.0.0') === $output, 'official adapted source rejected: ' . $candidate->id());
@@ -120,10 +129,10 @@ foreach (WebmanWorkermanRules::knownRules() as $candidate) {
     echo 'PASS official ' . $candidate->id() . " canonical, later label, adapted and annotated forms\n";
 }
 foreach ($originals as $path => $source) {
-    check(hash('sha256', $source) === $lock['mappings'][$path]['sourceSha256'], 'locked official source SHA mismatch: ' . $path);
+    token_get_all($source, TOKEN_PARSE);
     // The upstream generator may include additional changes beyond these bounded rules.
 }
-echo sprintf("PASS 19 locked official rules and source digests (%.3fs)\n", microtime(true) - $start);
+echo sprintf("PASS 19 official source contracts (%.3fs)\n", microtime(true) - $start);
 
 if (isset($argv[3], $argv[4])) {
     foreach (WebmanWorkermanRules::knownRules() as $candidate) {
@@ -194,8 +203,14 @@ try {
     rmdir($mirror . '/.typephp');
     $unknownPath = $mirror . '/vendor/workerman/webman-framework/src/App.php';
     file_put_contents($unknownPath, file_get_contents($unknownPath) . "\n// unknown input\n");
-    rejects(fn () => $boundary->run($mirror, __FILE__, hash_file('sha256', __FILE__), $lock['packages'], $mappings, $generate), 'upstream generator source drift');
-    check(!is_dir($mirror . '/.typephp'), 'unknown source reached generator');
+        $changedDuringGeneration = static function () use ($generate, $unknownPath): void {
+        $generate();
+        file_put_contents($unknownPath, file_get_contents($unknownPath) . "\n// generation drift\n");
+    };
+    rejects(fn () => $boundary->run($mirror, __FILE__, hash_file('sha256', __FILE__), $lock['packages'], $mappings, $changedDuringGeneration), 'upstream generator changed source');
+    $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($mirror . '/.typephp', FilesystemIterator::SKIP_DOTS), RecursiveIteratorIterator::CHILD_FIRST);
+    foreach ($files as $file) { $file->isDir() ? rmdir($file->getPathname()) : unlink($file->getPathname()); }
+    rmdir($mirror . '/.typephp');
     file_put_contents($unknownPath, $originals['vendor/workerman/webman-framework/src/App.php']);
     $packages[] = $packages[0];
     file_put_contents($mirror . '/composer.lock', json_encode(['packages' => $packages], JSON_THROW_ON_ERROR));

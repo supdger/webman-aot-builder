@@ -74,8 +74,9 @@ try {
         throw new RuntimeException('normalized CLI PHP signing failed: ' . trim($message));
     }
     $version = trim((string) shell_exec(escapeshellarg($argv[2]) . ' -n -r ' . escapeshellarg('echo PHP_VERSION;')));
-    if ($version !== '8.4.25') {
-        throw new RuntimeException('normalized CLI PHP did not execute as PHP 8.4.25');
+    $capability = proc_open([$argv[2], dirname(__DIR__) . '/tools/check-toolchain-capabilities.php', 'php', $argv[2]], [0 => STDIN, 1 => STDERR, 2 => STDERR], $pipes);
+    if (!is_resource($capability) || proc_close($capability) !== 0) {
+        throw new RuntimeException('normalized CLI PHP lacks required compiler runtime capabilities');
     }
     echo json_encode([
         'schema' => 'webman-aot-builder-macos-cli-runtime-normalization-v1',

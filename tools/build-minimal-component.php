@@ -268,8 +268,7 @@ foreach (['php-driver', 'sysroot', 'typephp-source'] as $directory) {
         $relative = str_replace('\\', '/', substr($item->getPathname(), strlen($generation) + 1));
         if ($relative === 'prepared/sysroot/usr/lib/bfd-plugins/liblto_plugin.so') {
             if (!$item->isLink()
-                || readlink($item->getPathname())
-                    !== '//usr/libexec/gcc/x86_64-alpine-linux-musl/12.2.1/liblto_plugin.so'
+                || preg_match('~^//usr/libexec/gcc/x86_64-alpine-linux-musl/[^/]+/liblto_plugin\.so$~D', (string) readlink($item->getPathname())) !== 1
             ) {
                 throw new RuntimeException('locked sysroot bfd plugin link drifted');
             }
@@ -289,15 +288,18 @@ foreach (['php-driver', 'sysroot', 'typephp-source'] as $directory) {
     }
 }
 
-$llvmRelative = $host === 'macos-arm64'
-    ? 'llvm'
-    : 'llvm-payload/clang+llvm-19.1.7-x86_64-pc-windows-msvc';
+$llvmRelative = 'llvm';
+if ($host !== 'macos-arm64') {
+    $roots = glob($prepared . '/llvm-payload/*', GLOB_ONLYDIR) ?: [];
+    if (count($roots) !== 1 || is_link($roots[0])) { throw new RuntimeException('prepared LLVM needs one safe payload root'); }
+    $llvmRelative = 'llvm-payload/' . basename($roots[0]);
+}
 $llvm = $prepared . '/' . $llvmRelative;
 if (!is_dir($llvm) || is_link($llvm)) {
     throw new RuntimeException('prepared LLVM directory is missing or unsafe');
 }
 $llvmTools = $host === 'macos-arm64'
-    ? ['clang++', 'clang', 'clang-19', 'ld.lld', 'lld', 'llvm-nm', 'llvm-objcopy']
+    ? ['clang++', 'clang', 'ld.lld', 'lld', 'llvm-nm', 'llvm-objcopy']
     : ['clang++.exe', 'clang.exe', 'ld.lld.exe', 'lld.exe', 'lld-link.exe', 'llvm-ar.exe',
         'llvm-nm.exe', 'llvm-objcopy.exe', 'llvm-ranlib.exe'];
 foreach ($llvmTools as $name) {
@@ -306,8 +308,25 @@ foreach ($llvmTools as $name) {
         throw new RuntimeException("required LLVM tool is missing: {$name}");
     }
     $selected['prepared/' . $llvmRelative . '/bin/' . $name] = $path;
+    $linkedTool = $path;
+    $seenLinks = [];
+    while (is_link($linkedTool)) {
+        $linkTarget = readlink($linkedTool);
+        $target = is_string($linkTarget) ? dirname($linkedTool) . '/' . $linkTarget : '';
+        if (isset($seenLinks[$linkedTool]) || !is_string($linkTarget)
+            || $linkTarget === '' || str_starts_with($linkTarget, '/')
+            || str_contains($linkTarget, '\\') || !is_file($target)
+            || realpath(dirname($target)) !== realpath($llvm . '/bin')) {
+            throw new RuntimeException("required LLVM tool target is unsafe: {$name}");
+        }
+        $seenLinks[$linkedTool] = true;
+        $selected['prepared/' . $llvmRelative . '/bin/' . basename($target)] = $target;
+        $linkedTool = $target;
+    }
 }
-$clangResources = $llvm . '/lib/clang/19';
+$resourceRoots = glob($llvm . '/lib/clang/*', GLOB_ONLYDIR) ?: [];
+if (count($resourceRoots) !== 1) { throw new RuntimeException('selected LLVM needs one resource directory'); }
+$clangResources = $resourceRoots[0];
 if (!is_dir($clangResources) || is_link($clangResources)) {
     throw new RuntimeException('locked Clang resource directory is missing');
 }

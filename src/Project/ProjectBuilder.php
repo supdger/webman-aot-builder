@@ -50,6 +50,9 @@ final class ProjectBuilder
         $source = (new SourceTreeSnapshot($project))->capture();
         $compatibilitySha256 = $this->digest($compatibilityLockFile);
         $toolchainSha256 = $this->digest($toolchainLockFile);
+        if (($tools['sdkContext']['toolchainLockSha256'] ?? null) !== $toolchainSha256
+            || realpath($tools['sdkContext']['toolchainLockFile'] ?? '') !== realpath($toolchainLockFile)
+        ) { throw new ConfigurationException('selected SDK context belongs to a different build toolchain lock'); }
         $compilerPatchSha256 = (new TypePhpPatchManifestFingerprint())
             ->digest($compilerPatchManifestFile);
         $composerSha256 = $this->digest($project . '/composer.lock');
@@ -77,20 +80,23 @@ final class ProjectBuilder
             $compatibilityLockFile,
             $profile->name(),
             'webman-server',
-            $tools['phpx'] . '/full-static/sdk'
+            $tools['phpx'] . '/full-static/sdk',
+            $tools['sdkContext'] ?? []
         );
         $beforeStage?->__invoke('overlay');
         (new FullStaticProjectOverlay())->apply(
             $generated['projectFile'],
             $tools['sysroot'],
-            $profile->name()
+            $profile->name(),
+            $tools['phpx'] . '/full-static/sdk'
         );
         $beforeStage?->__invoke('coverage');
         (new GeneratedProjectCoveragePlanner())->plan(
             $mirror,
             $profile,
             $compatibilityLockFile,
-            $generated['coverageMappings']
+            $generated['coverageMappings'],
+            $generated['adaptations']
         );
         $extensionNames = array_keys($extensions);
         sort($extensionNames, SORT_STRING);
@@ -151,7 +157,8 @@ final class ProjectBuilder
             ],
             $host,
             beforeStage: $beforeStage,
-            generatedMappings: $generated['coverageMappings']
+            generatedMappings: $generated['coverageMappings'],
+            generatedAdaptations: $generated['adaptations']
         );
         $workspace->finishAttempt($paths['build']);
         return [

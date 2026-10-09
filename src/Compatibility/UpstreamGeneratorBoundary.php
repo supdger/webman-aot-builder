@@ -51,14 +51,11 @@ final class UpstreamGeneratorBoundary
                 throw new ConfigurationException("invalid upstream generator mapping: {$source}");
             }
             $targets[$shadow] = true;
-            $this->assertDigest($entry['sourceSha256'] ?? '');
-            $this->assertDigest($entry['shadowSha256'] ?? '');
             $path = $this->inside($mirror, $source);
-            if ($this->digestFile($path, $source) !== $entry['sourceSha256']) {
-                throw new ConfigurationException("upstream generator source drift: {$source}");
-            }
+            $expected[$source]['sourceSha256'] = $this->digestFile($path, $source);
         }
 
+        $sourceDigests = $this->sourceDigests($mirror);
         $generate();
 
         if (!is_dir($generatedRoot)
@@ -69,6 +66,14 @@ final class UpstreamGeneratorBoundary
         }
         if (hash_file('sha256', $generatorFile) !== $generatorSha256) {
             throw new ConfigurationException('upstream generator changed during execution');
+        }
+        $afterSources = $this->sourceDigests($mirror);
+        if ($afterSources !== $sourceDigests) {
+            foreach (array_unique(array_merge(array_keys($sourceDigests), array_keys($afterSources))) as $path) {
+                if (($sourceDigests[$path] ?? null) !== ($afterSources[$path] ?? null)) {
+                    throw new ConfigurationException('upstream generator changed source input: ' . $path);
+                }
+            }
         }
         $actual = [];
         $iterator = new \RecursiveIteratorIterator(
@@ -87,8 +92,8 @@ final class UpstreamGeneratorBoundary
                 $actual[$relative] = true;
             }
         }
-        if ($saiAdminGenerated) {
-            $this->includeSaiAdminGenerated($mirror, $expected, $actual);
+        if (class_exists(\Tinywan\Typephp\Compiler\ProjectGenerator::class, false)) {
+            $this->includeSaiAdminGenerated($mirror, $expected, $actual, $sourceDigests, $saiAdminGenerated);
             $targets = [];
             foreach ($expected as $entry) {
                 $targets[$entry['shadow']] = true;
@@ -125,8 +130,11 @@ final class UpstreamGeneratorBoundary
                 );
             }
             $shadowPath = $this->inside($mirror, $shadow);
-            if ($this->digestFile($shadowPath, $shadow) !== $entry['shadowSha256']) {
-                throw new ConfigurationException("upstream generator shadow drift: {$shadow}");
+            $entry['shadowSha256'] = $this->digestFile($shadowPath, $shadow);
+            if (isset($entry['contractSha256'])
+                && (!is_string($entry['contractSha256']) || !hash_equals($entry['contractSha256'], $entry['shadowSha256']))
+            ) {
+                throw new ConfigurationException('upstream generator shadow violates its source conversion contract: ' . $shadow);
             }
             try {
                 token_get_all((string) file_get_contents($shadowPath), TOKEN_PARSE);
@@ -155,7 +163,7 @@ final class UpstreamGeneratorBoundary
      * @param array<string,array{shadow:string,sourceSha256:string,shadowSha256:string}> $expected
      * @param array<string,true> $actual
      */
-    private function includeSaiAdminGenerated(string $mirror, array &$expected, array $actual): void
+    private function includeSaiAdminGenerated(string $mirror, array &$expected, array $actual, array $sourceDigests, bool $saiAdminGenerated): void
     {
         $generator = \Tinywan\Typephp\Compiler\ProjectGenerator::class;
         $maps = [
@@ -178,38 +186,43 @@ final class UpstreamGeneratorBoundary
                 $this->addSaiAdminDeclaration($declared, $source, $shadow);
             }
         }
-        $coveragePath = $mirror . '/.typephp/build/source-coverage.json';
-        $coverageContents = is_file($coveragePath) && !is_link($coveragePath)
-            ? file_get_contents($coveragePath)
-            : false;
-        if (!is_string($coverageContents)) {
-            throw new ConfigurationException('SaiAdmin generated business coverage is missing');
+        foreach ((new $generator($mirror))->discoverProjectGuardedSources() as $source => $shadow) {
+            $this->addSaiAdminDeclaration($declared, $source, $shadow);
         }
-        try {
-            $coverage = json_decode($coverageContents, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException $exception) {
-            throw new ConfigurationException(
-                'SaiAdmin generated business coverage is invalid',
-                previous: $exception
-            );
-        }
-        if (!is_array($coverage)
-            || ($coverage['profile'] ?? null) !== 'saiadmin'
-            || !is_array($coverage['files'] ?? null)
-        ) {
-            throw new ConfigurationException('SaiAdmin generated business coverage shape drifted');
-        }
-        foreach ($coverage['files'] as $entry) {
-            if (!is_array($entry) || ($entry['mode'] ?? null) !== 'generated') {
-                continue;
+        if ($saiAdminGenerated) {
+            $coveragePath = $mirror . '/.typephp/build/source-coverage.json';
+            $coverageContents = is_file($coveragePath) && !is_link($coveragePath)
+                ? file_get_contents($coveragePath)
+                : false;
+            if (!is_string($coverageContents)) {
+                throw new ConfigurationException('SaiAdmin generated business coverage is missing');
             }
-            $source = $entry['path'] ?? null;
-            if (!is_string($source)
-                || !preg_match('~^(app|support|plugin/[A-Za-z0-9_-]+)/(?:[A-Za-z0-9_./-]+)\.php$~D', $source)
+            try {
+                $coverage = json_decode($coverageContents, true, flags: JSON_THROW_ON_ERROR);
+            } catch (\JsonException $exception) {
+                throw new ConfigurationException(
+                    'SaiAdmin generated business coverage is invalid',
+                    previous: $exception
+                );
+            }
+            if (!is_array($coverage)
+                || ($coverage['profile'] ?? null) !== 'saiadmin'
+                || !is_array($coverage['files'] ?? null)
             ) {
-                throw new ConfigurationException('SaiAdmin business shadow has an unsafe source');
+                throw new ConfigurationException('SaiAdmin generated business coverage shape drifted');
             }
-            $this->addSaiAdminDeclaration($declared, $source, $entry['compiled_path'] ?? null);
+            foreach ($coverage['files'] as $entry) {
+                if (!is_array($entry) || ($entry['mode'] ?? null) !== 'generated') {
+                    continue;
+                }
+                $source = $entry['path'] ?? null;
+                if (!is_string($source)
+                    || !preg_match('~^(app|support|plugin/[A-Za-z0-9_-]+)/(?:[A-Za-z0-9_./-]+)\.php$~D', $source)
+                ) {
+                    throw new ConfigurationException('SaiAdmin business shadow has an unsafe source');
+                }
+                $this->addSaiAdminDeclaration($declared, $source, $entry['compiled_path'] ?? null);
+            }
         }
         $compilerInputs = $this->readCompilerInputs($mirror);
         foreach ($actual as $shadow => $_) {
@@ -232,7 +245,7 @@ final class UpstreamGeneratorBoundary
             $this->assertRelativePhp($shadow, 'shadow');
             $expected[$source] = [
                 'shadow' => $shadow,
-                'sourceSha256' => $this->digestFile($this->inside($mirror, $source), $source),
+                'sourceSha256' => $sourceDigests[$source] ?? throw new ConfigurationException("upstream generator source was not present before generation: {$source}"),
                 'shadowSha256' => $this->digestFile($this->inside($mirror, $shadow), $shadow),
             ];
         }
@@ -287,6 +300,21 @@ final class UpstreamGeneratorBoundary
         return $lists;
     }
 
+    /** @return array<string,string> */
+    private function sourceDigests(string $mirror): array
+    {
+        $digests = [];
+        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($mirror, \FilesystemIterator::SKIP_DOTS));
+        foreach ($files as $file) {
+            if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') { continue; }
+            $path = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
+            if ($path === 'main.php' || str_starts_with($path, '.typephp/build/')) { continue; }
+            $digests[$path] = $this->digestFile($this->inside($mirror, $path), $path);
+        }
+        ksort($digests, SORT_STRING);
+        return $digests;
+    }
+
     private function isBuildMirror(string $path): bool
     {
         return str_contains(
@@ -330,8 +358,8 @@ final class UpstreamGeneratorBoundary
                 $installed[$package['name']] = $package;
             }
         }
-        // Package labels are evidence; the complete source and generated output
-        // digests below determine whether this dependency shape is supported.
+        // Package labels are diagnostic evidence. The verified generator's
+        // conversion contracts determine support; per-run digests guard integrity.
         foreach (array_keys($expected) as $name) {
             $actual = $installed[$name] ?? null;
             if (!is_array($actual)

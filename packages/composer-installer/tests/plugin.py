@@ -181,13 +181,24 @@ try:
     check("allow-plugins" not in config.get("config", {}),
           "无人首次安装 optional 插件不预写信任配置")
     no_menu(path, ["global", "exec", "--", "webman-aot", "--version"], tty=False)
-    path = fixture("composer-version-gate")
+    for name, platform in [
+        ("low-version-capable", {"composer": "0.0.1", "composer-plugin-api": "0.0.1"}),
+        ("future-version-capable", {"composer": "999.0.0", "composer-plugin-api": "999.0.0"}),
+    ]:
+        path = fixture(name)
+        seed = json.loads((path / "global" / "composer.json").read_text())
+        seed["config"] = {"platform": platform}
+        (path / "global" / "composer.json").write_text(json.dumps(seed) + "\n")
+        code, output = invoke(path, ["global", "require", package + ":" + version, "-n"], tty=False)
+        check(code == 0 and menu not in output,
+              "实际 solver 接受 " + name + " 平台标签；实际执行仍为当前 Composer")
+    path = fixture("unsupported-php-syntax")
     seed = json.loads((path / "global" / "composer.json").read_text())
-    seed["config"] = {"platform": {"composer": "2.5.2"}}
+    seed["config"] = {"platform": {"php": "7.4.0"}}
     (path / "global" / "composer.json").write_text(json.dumps(seed) + "\n")
     code, output = invoke(path, ["global", "require", package + ":" + version, "-n"], tty=False)
-    check(code != 0 and "composer >=2.5.3" in output and menu not in output,
-          "实际 solver 拒绝低于 optional 支持门的 Composer 平台版本")
+    check(code != 0 and "php >=8.0" in output and menu not in output,
+          "不支持 match 语法的 PHP 平台明确拒绝")
     if previous:
         path = fixture("upgrade")
         code, output = invoke(path, ["global", "require", package + ":0.3.6"])

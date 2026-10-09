@@ -30,7 +30,8 @@
         {
             "path": "src/CompilerBase.php",
             "beforeSha256": "f67b86b42ee6f6e868ffa78316263828d2ebc2caa89f950b5d6cb50f968668a4",
-            "afterSha256": "40049353541979b70f58a63f5e8358b702f693f786a3435155d2e0b56f42c6bf"
+            "afterSha256": "39c173c57588e9d5dab558fb97728ef384bb4ef49ff49915c0f314870c72b282",
+            "preparedBeforeSha256": "40049353541979b70f58a63f5e8358b702f693f786a3435155d2e0b56f42c6bf"
         },
         {
             "path": "src/Generator/AnonClassGenerator.php",
@@ -161,6 +162,11 @@
             "path": "src/Backend/GccLikeBackend.php",
             "beforeSha256": "05818ac6450042e36682d4c5bd70af88932e3c487654dfccd2d452ab55380a50",
             "afterSha256": "6fcbb627745fa5e89784ad0d265c1c40b11b17d5b63d271012e5c67cee4f2f0c"
+        },
+        {
+            "path": "composer.json",
+            "beforeSha256": "41f71deb4de119cd6cafcfa2e86c3652016f0c3c3f33c43006ef0e930139ebe9",
+            "afterSha256": "7c7abfac8ae837bf63585946c759b19a3f2b6a45d917fc84ebedc318c1c74fdc"
         }
     ],
     "reason": "Derive the Linux musl target from the locked SDK, register locked static PECL modules, map generated source identities to a host-independent prefix including arginfo attributes, separate host filesystem behavior from Linux target code generation, normalize Windows object paths for Clang response files, preserve PCNTL and OpenSSL output references when build-host PHP lacks target extensions, avoid requiring Windows host PHP import libraries when linking the independent full-static target SDK, classify target builtins, preserve native-parent covariance and dynamic method dispatch, avoid speculative loop type probes before foreach variables exist, include declarations for unqualified calls that can fall back to global PHP functions, preserve runtime constant, object-default and fixed global reference semantics in generated C++, resolve full-static __DIR__ and __FILE__ from the portable runtime directory, keep embedded anonymous-class return and parent types valid on both build hosts, use portable anonymous-class source embedding for full-static output regardless of host OPcache, resolve PHP_EOL, PHP_MAXPATHLEN and tokenizer IDs from the Linux target rather than the build host, exclude Windows-only SAPI functions from Linux target builtins, internal functions and reflection metadata, and sort scanned source paths using portable separators. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Resolve and quote compiler executable paths containing spaces through target probing, native compilation, precompiled headers and linking while preserving explicitly configured compiler arguments."

@@ -150,6 +150,10 @@ try {
             $resumeEvidence = Join-Path $WorkRoot 'resumable-native'
             $installedRuntime = Join-Path $installHome 'current\runtime'
             $installedPhp = Join-Path $installedRuntime 'php.exe'
+            $preparedManifests = @(Get-ChildItem -LiteralPath (Join-Path $installHome 'toolchains\versions') -Filter 'prepared-toolchain.json' -Recurse -File)
+            if ($preparedManifests.Count -ne 1) { throw 'Installed selected SDK manifest is missing or ambiguous.' }
+            Invoke-Native 'installed selected SDK authority regression' $installedPhp @(
+                '-n',(Join-Path $repository 'tests\selected-sdk-generator.php'),$preparedManifests[0].FullName) $installedRuntime
             $env:WEBMAN_AOT_CALLER_CWD = $repository
             Invoke-Native 'installed runtime resumable native regression' $installedPhp @(
                 '-c','php.ini','-d','extension_dir=ext','..\app\tools\windows-php-bootstrap.php',

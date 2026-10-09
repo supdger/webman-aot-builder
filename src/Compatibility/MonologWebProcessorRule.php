@@ -58,21 +58,28 @@ final class MonologWebProcessorRule
             throw new ConfigurationException('Monolog WebProcessor package or rule drifted');
         }
         $source = file_get_contents($sourcePath);
-        if (!is_string($source)
-            || !is_string($policy['sourceSha256'] ?? null)
-            || !hash_equals($policy['sourceSha256'], hash('sha256', $source))
-            || substr_count($source, self::ORIGINAL) !== 1
-            || str_contains($source, self::REPLACEMENT)
-        ) {
-            throw new ConfigurationException('Monolog WebProcessor source structure drifted');
+        if (!is_string($source)) {
+            throw new ConfigurationException('Monolog WebProcessor source is unreadable');
         }
-        $adapted = str_replace(self::ORIGINAL, self::REPLACEMENT, $source);
+        try {
+            token_get_all($source, TOKEN_PARSE);
+            $adapted = (new BoundedTextRule(
+                'monolog.web-processor-global-reference.v1',
+                'monolog/monolog',
+                self::SOURCE,
+                new MinimumVersion('1.0.0'),
+                ['namespace Monolog\\Processor;', 'class WebProcessor', 'function __construct('],
+                self::ORIGINAL,
+                self::REPLACEMENT,
+                1,
+                [self::REPLACEMENT],
+                ['__construct']
+            ))->transform($source, $matches[0]['version']);
+            token_get_all($adapted, TOKEN_PARSE);
+        } catch (\ParseError $exception) {
+            throw new ConfigurationException('Monolog WebProcessor source structure drifted', previous: $exception);
+        }
         $digest = hash('sha256', $adapted);
-        if (!is_string($policy['adaptedSha256'] ?? null)
-            || !hash_equals($policy['adaptedSha256'], $digest)
-        ) {
-            throw new ConfigurationException('Monolog WebProcessor adaptation digest drifted');
-        }
         if (file_put_contents($sourcePath, $adapted) === false) {
             throw new ConfigurationException('Monolog WebProcessor adaptation cannot be written');
         }

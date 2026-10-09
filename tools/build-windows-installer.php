@@ -10,8 +10,8 @@ require dirname(__DIR__) . '/src/Toolchain/Downloader.php';
 require dirname(__DIR__) . '/src/Toolchain/NativeDownloader.php';
 require dirname(__DIR__) . '/src/Version.php';
 
-if (PHP_VERSION_ID < 80400 || !extension_loaded('zip') || !extension_loaded('Phar')) {
-    fwrite(STDERR, "PHP 8.4 or newer with zip and Phar is required.\n");
+if (PHP_INT_SIZE !== 8 || !class_exists(ZipArchive::class) || !class_exists(Phar::class)) {
+    fwrite(STDERR, "64-bit PHP with ZIP and Phar capabilities is required.\n");
     exit(1);
 }
 

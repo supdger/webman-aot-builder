@@ -168,6 +168,7 @@ final class MinimalComponent
             throw new ConfigurationException('installed minimal component host or lock differs');
         }
         $this->assertEntries($entries);
+        $sourceReplacements = null;
         foreach ($entries as $name => $entry) {
             $path = $generation . '/' . $name;
             if ($entry['type'] === 'directory') {
@@ -183,13 +184,51 @@ final class MinimalComponent
                 continue;
             }
             $digest = is_file($path) && !is_link($path) ? hash_file('sha256', $path) : false;
-            if (!is_string($digest) || !hash_equals($entry['sha256'], $digest)
-                || filesize($path) !== $entry['size']
-                || is_executable($path) !== $entry['executable']
-            ) {
+            if (is_string($digest) && hash_equals($entry['sha256'], $digest)
+                && filesize($path) === $entry['size'] && is_executable($path) === $entry['executable']
+            ) { continue; }
+            $sourceReplacements ??= $this->candidateSourceReplacements($generation);
+            $reviewedSource = isset($sourceReplacements[$name])
+                && (hash_equals($entry['sha256'], $sourceReplacements[$name]['beforeSha256'])
+                    || (isset($sourceReplacements[$name]['preparedBeforeSha256'])
+                        && hash_equals($entry['sha256'], $sourceReplacements[$name]['preparedBeforeSha256'])))
+                && is_string($digest)
+                && hash_equals($sourceReplacements[$name]['afterSha256'], $digest);
+            if (!is_string($digest) || is_executable($path) !== $entry['executable']
+                || (!$reviewedSource && (!hash_equals($entry['sha256'], $digest) || filesize($path) !== $entry['size']))) {
                 throw new UnavailableException("installed minimal component file differs: {$name}");
             }
         }
+    }
+
+    /** @return array<string,array{beforeSha256:string,afterSha256:string}> */
+    private function candidateSourceReplacements(string $generation): array
+    {
+        $manifestFile = dirname(__DIR__, 2) . '/toolchain/patches/typephp/0.9.2/manifest.json';
+        (new TypePhpPatchManifestFingerprint())->digest($manifestFile);
+        $manifest = json_decode(file_get_contents($manifestFile), true, flags: JSON_THROW_ON_ERROR);
+        $preparedFile = $generation . '/prepared/prepared-toolchain.json';
+        $prepared = is_file($preparedFile) && !is_link($preparedFile)
+            ? json_decode(file_get_contents($preparedFile), true, flags: JSON_THROW_ON_ERROR)
+            : null;
+        $typephp = is_array($prepared) ? ($prepared['typephp'] ?? null) : null;
+        if (!is_string($typephp) || preg_match('~^[A-Za-z0-9._/-]+$~D', $typephp) !== 1
+            || in_array('..', explode('/', $typephp), true)
+            || in_array('.', explode('/', $typephp), true)
+            || in_array('', explode('/', $typephp), true)
+        ) {
+            throw new ConfigurationException('minimal component selected TypePHP source is unsafe');
+        }
+        $replacements = [];
+        foreach ($manifest['rules'] as $rule) {
+            $replacement = [
+                'beforeSha256' => $rule['beforeSha256'],
+                'afterSha256' => $rule['afterSha256'],
+            ];
+            if (isset($rule['preparedBeforeSha256'])) { $replacement['preparedBeforeSha256'] = $rule['preparedBeforeSha256']; }
+            $replacements['prepared/' . $typephp . '/' . $rule['path']] = $replacement;
+        }
+        return $replacements;
     }
 
     /**

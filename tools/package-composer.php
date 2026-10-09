@@ -33,12 +33,16 @@ try {
             throw new RuntimeException('Invalid locked native runtime asset: ' . $host);
         }
     }
+    if ($runtimeVersion !== $version) {
+        throw new RuntimeException('Composer release must bind the same native runtime version.');
+    }
     $name = 'webman-aot-builder-' . $version . '-composer';
     $metadata = json_decode((string) file_get_contents($root . '/composer.json'), true, flags: JSON_THROW_ON_ERROR);
     if (($metadata['name'] ?? null) !== 'supdger/webman-aot-builder'
         || ($metadata['type'] ?? null) !== 'composer-plugin'
-        || ($metadata['require']['composer-plugin-api'] ?? null) !== '^2.0'
-        || ($metadata['require']['composer'] ?? null) !== '>=2.5.3'
+        || ($metadata['require']['composer-plugin-api'] ?? null) !== '*'
+        || ($metadata['require']['composer'] ?? null) !== '*'
+        || ($metadata['require']['php'] ?? null) !== '>=8.0'
         || ($metadata['extra']['class'] ?? null) !== 'Supdger\\WebmanAotInstaller\\Plugin'
         || ($metadata['extra']['plugin-optional'] ?? null) !== true
         || ($metadata['bin'] ?? null) !== ['packages/composer-installer/bin/webman-aot']

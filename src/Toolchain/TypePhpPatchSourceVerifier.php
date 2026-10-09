@@ -26,7 +26,8 @@ final class TypePhpPatchSourceVerifier
         }
         if (!is_array($rules)
             || ($rules['component'] ?? null) !== 'typephp-source'
-            || ($rules['version'] ?? null) !== '0.9.2'
+            || !is_string($rules['version'] ?? null)
+            || $rules['version'] === ''
             || !is_array($rules['rules'] ?? null)
             || $rules['rules'] === []
         ) {
@@ -37,9 +38,13 @@ final class TypePhpPatchSourceVerifier
             $path = is_array($rule) ? ($rule['path'] ?? null) : null;
             $digest = is_array($rule) ? ($rule['afterSha256'] ?? null) : null;
             if (!is_string($path)
-                || preg_match('~^(?:src|vendor)/[A-Za-z0-9._/-]+$~D', $path) !== 1
+                || preg_match('~^(?:composer\.json|(?:src|vendor)/[A-Za-z0-9._/-]+)$~D', $path) !== 1
                 || in_array('..', explode('/', $path), true)
                 || isset($seen[$path])
+                || (array_key_exists('preparedBeforeSha256', $rule)
+                    && (!is_string($rule['preparedBeforeSha256'])
+                        || preg_match('/^[a-f0-9]{64}$/D', $rule['preparedBeforeSha256']) !== 1
+                        || $rule['preparedBeforeSha256'] === ($rule['afterSha256'] ?? null)))
                 || !is_string($digest)
                 || preg_match('/^[a-f0-9]{64}$/D', $digest) !== 1
             ) {

@@ -30,6 +30,7 @@ final class DistributionAssembler
      * @param list<string> $sensitiveMarkers
      * @param (\Closure(string):void)|null $beforeStage
      * @param list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> $generatedMappings
+     * @param array<string,string> $generatedAdaptations
      * @return array{path:string,previous:?string,verification:array<string,mixed>}
      */
     public function assemble(
@@ -42,7 +43,8 @@ final class DistributionAssembler
         string $host,
         array $sensitiveMarkers = [],
         ?\Closure $beforeStage = null,
-        array $generatedMappings = []
+        array $generatedMappings = [],
+        array $generatedAdaptations = []
     ): array {
         $project = realpath($projectDirectory);
         $mirror = realpath($mirrorDirectory);
@@ -97,7 +99,8 @@ final class DistributionAssembler
             $mirror,
             $profile,
             $compatibilityLockFile,
-            $generatedMappings
+            $generatedMappings,
+            $generatedAdaptations
         );
         foreach ($plan['resources']->entries() as $resource) {
             if ($resource['kind'] !== 'file') {

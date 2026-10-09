@@ -29,8 +29,8 @@ $installerPath = 'vendor/workerman/webman-framework/src/support/Plugin.php';
 $workerPath = 'vendor/workerman/workerman/src/Worker.php';
 $installer = file_get_contents($webman . '/src/support/Plugin.php');
 $worker = file_get_contents($workerman . '/src/Worker.php');
-ensure(hash('sha256', $installer) === $lock['installOnly'][$installerPath]['sourceSha256'], 'official installer digest changed');
-ensure(hash('sha256', $worker) === $lock['mappings'][$workerPath]['sourceSha256'], 'official Worker digest changed');
+token_get_all($installer, TOKEN_PARSE);
+token_get_all($worker, TOKEN_PARSE);
 $adaptedWorker = $worker;
 foreach (WebmanWorkermanRules::knownRules() as $rule) {
     if (in_array($rule->id(), ['workerman-worker-pid-runtime-path', 'workerman-worker-target-loadavg-call'], true)) {
@@ -55,9 +55,9 @@ mkdir(dirname($mirror . '/' . $installerPath), 0700, true);
 $started = microtime(true);
 try {
     foreach ([
-        'original' => [$installer, $lock['installOnly'][$installerPath]['sourceSha256'], null],
+        'original' => [$installer, hash('sha256', $installer), null],
         'verified-whitespace' => [$annotated, hash('sha256', $annotated), null],
-        'unverified-whitespace' => [$annotated, $lock['installOnly'][$installerPath]['sourceSha256'], 'source digest drifted'],
+        'equivalent-whitespace-with-baseline-lock' => [$annotated, hash('sha256', $installer), null],
         'wrong-helper-literal' => [str_replace("'/helpers.php'", "'/unknown.php'", $installer), null, 'source structure drifted'],
         'wrong-event-variable' => [str_replace('function install($event)', 'function install($other)', $installer), null, 'source structure drifted'],
     ] as $name => [$contents, $digest, $errorMarker]) {
@@ -67,7 +67,7 @@ try {
         file_put_contents($mirror . '/.typephp/build/workerman-worker.php', $worker);
         file_put_contents($mirror . '/project.linux.yml', "sources:\n  - .typephp/build/workerman-worker.php\nignore:\n  - vendor/workerman/webman-framework/src/support/helpers.php\n");
         try {
-            $result = (new GeneratedProjectAdapter())->apply($mirror, $candidateLock);
+            $result = (new GeneratedProjectAdapter())->apply($mirror, $candidateLock, [['path' => $workerPath, 'shadow' => '.typephp/build/workerman-worker.php', 'shadowSha256' => hash('sha256', $worker)]]);
             ensure($errorMarker === null, 'installer unknown shape accepted: ' . $name);
             ensure($result['installOnlySourceSha256'] === hash('sha256', $contents), 'installer evidence digest changed');
             ensure($result['workerShadowSha256'] === hash('sha256', $adaptedWorker), 'worker output digest changed');
@@ -86,4 +86,4 @@ try {
     }
     rmdir($root);
 }
-echo sprintf("PASS completed in %.3fs; original lock still refuses unverified changed bytes\n", microtime(true) - $started);
+echo sprintf("PASS completed in %.3fs; installer structures checked; baseline bytes are not a version gate\n", microtime(true) - $started);

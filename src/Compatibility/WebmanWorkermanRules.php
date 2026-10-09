@@ -27,7 +27,8 @@ final class WebmanWorkermanRules
                 'return static function () use ($allowHeader) {',
                 'return static function (...$arguments) use ($allowHeader) {',
                 1,
-                ['return static function (...$arguments) use ($allowHeader) {']
+                ['return static function (...$arguments) use ($allowHeader) {'],
+                ['defaultRouteMethodNotAllowedResponse']
             ),
             new BoundedTextRule(
                 'webman-fallback-handler-variadic',
@@ -38,7 +39,8 @@ final class WebmanWorkermanRules
                 'return Route::getFallback($plugin, $status) ?: function () {',
                 'return Route::getFallback($plugin, $status) ?: function (...$arguments) {',
                 1,
-                ['return Route::getFallback($plugin, $status) ?: function (...$arguments) {']
+                ['return Route::getFallback($plugin, $status) ?: function (...$arguments) {'],
+                ['getFallback']
             ),
             new BoundedTextRule(
                 'webman-include-handler-variadic',
@@ -49,7 +51,8 @@ final class WebmanWorkermanRules
                 'static::collectCallbacks($key, [function () use ($file) {',
                 'static::collectCallbacks($key, [function (...$arguments) use ($file) {',
                 1,
-                ['static::collectCallbacks($key, [function (...$arguments) use ($file) {']
+                ['static::collectCallbacks($key, [function (...$arguments) use ($file) {'],
+                ['findFile']
             ),
             new BoundedTextRule(
                 'webman-object-switch-terminal',
@@ -67,7 +70,8 @@ final class WebmanWorkermanRules
                     . "                return (string)\$data;\n"
                     . "            default:",
                 1,
-                ["                return (string)\$data;\n            default:"]
+                ["                return (string)\$data;\n            default:"],
+                ['stringify']
             ),
             new BoundedTextRule(
                 'webman-file-error-handler-variadic',
@@ -78,7 +82,8 @@ final class WebmanWorkermanRules
                 'set_error_handler(function ($type, $msg) use (&$error) {',
                 'set_error_handler(function ($type, $msg, ...$__err) use (&$error) {',
                 1,
-                ['set_error_handler(function ($type, $msg, ...$__err) use (&$error) {']
+                ['set_error_handler(function ($type, $msg, ...$__err) use (&$error) {'],
+                ['move']
             ),
             new BoundedTextRule(
                 'webman-config-directory-object',
@@ -89,7 +94,8 @@ final class WebmanWorkermanRules
                 'if (is_dir($file) ||',
                 'if ($file->isDir() ||',
                 1,
-                ['if ($file->isDir() ||']
+                ['if ($file->isDir() ||'],
+                ['loadFromDir']
             ),
             new BoundedTextRule(
                 'webman-config-path-string',
@@ -100,7 +106,8 @@ final class WebmanWorkermanRules
                 'substr($file, 0, -4)',
                 'substr((string) $file, 0, -4)',
                 1,
-                ['substr((string) $file, 0, -4)']
+                ['substr((string) $file, 0, -4)'],
+                ['loadFromDir']
             ),
             new BoundedTextRule(
                 'webman-config-include-path-string',
@@ -111,18 +118,20 @@ final class WebmanWorkermanRules
                 '$config = include $file;',
                 '$config = include (string) $file;',
                 2,
-                ['$config = include (string) $file;']
+                ['$config = include (string) $file;'],
+                ['loadFromDir', 'read']
             ),
             new BoundedTextRule(
                 'workerman-timer-signal-variadic',
                 'workerman/workerman',
                 'vendor/workerman/workerman/src/Timer.php',
                 new MinimumVersion('5.2.1'),
-                ['public static function init(?EventInterface $event = null): void', 'public static function signalHandle(): void'],
+                ['public static function init(?EventInterface $event = null): void', 'public static function signalHandle('],
                 'pcntl_signal(SIGALRM, self::signalHandle(...), false);',
                 'pcntl_signal(SIGALRM, static fn (...$__sig) => self::signalHandle(), false);',
                 1,
-                ['pcntl_signal(SIGALRM, static fn (...$__sig) => self::signalHandle(), false);']
+                ['pcntl_signal(SIGALRM, static fn (...$__sig) => self::signalHandle(), false);'],
+                ['init']
             ),
             new BoundedTextRule(
                 'workerman-select-signal-variadic',
@@ -133,7 +142,8 @@ final class WebmanWorkermanRules
                 'pcntl_signal($signal, fn () => $this->safeCall($this->signalEvents[$signal], [$signal]));',
                 'pcntl_signal($signal, fn (...$__sig) => $this->safeCall($this->signalEvents[$signal], [$signal]));',
                 1,
-                ['pcntl_signal($signal, fn (...$__sig) => $this->safeCall($this->signalEvents[$signal], [$signal]));']
+                ['pcntl_signal($signal, fn (...$__sig) => $this->safeCall($this->signalEvents[$signal], [$signal]));'],
+                ['onSignal']
             ),
             new BoundedTextRule(
                 'workerman-worker-pid-runtime-path',
@@ -144,7 +154,8 @@ final class WebmanWorkermanRules
                 '$file = __DIR__ . "/../../$unique_prefix.pid";',
                 '$file = getcwd() . "/vendor/workerman/$unique_prefix.pid";',
                 1,
-                ['$file = getcwd() . "/vendor/workerman/$unique_prefix.pid";']
+                ['$file = getcwd() . "/vendor/workerman/$unique_prefix.pid";'],
+                ['init']
             ),
             new BoundedTextRule(
                 'workerman-worker-target-loadavg-call',
@@ -155,7 +166,8 @@ final class WebmanWorkermanRules
                 "array_map(round(...), sys_getloadavg(), [2, 2, 2])",
                 "array_map(round(...), call_user_func('sys_getloadavg'), [2, 2, 2])",
                 1,
-                ["array_map(round(...), call_user_func('sys_getloadavg'), [2, 2, 2])"]
+                ["array_map(round(...), call_user_func('sys_getloadavg'), [2, 2, 2])"],
+                ['writeStatisticsToStatusFile']
             ),
             new BoundedTextRule(
                 'workerman-worker-error-suppressor-variadic',
@@ -166,7 +178,8 @@ final class WebmanWorkermanRules
                 'set_error_handler(static fn (): bool => true);',
                 'set_error_handler(static fn (...$__err): bool => true);',
                 7,
-                ['set_error_handler(static fn (...$__err): bool => true);']
+                ['set_error_handler(static fn (...$__err): bool => true);'],
+                ['*']
             ),
             new BoundedTextRule(
                 'workerman-worker-error-handler-variadic',
@@ -177,7 +190,8 @@ final class WebmanWorkermanRules
                 'set_error_handler(function ($code, $msg) {',
                 'set_error_handler(function ($code, $msg, ...$__err) {',
                 1,
-                ['set_error_handler(function ($code, $msg, ...$__err) {']
+                ['set_error_handler(function ($code, $msg, ...$__err) {'],
+                ['checkPortAvailable']
             ),
             new BoundedTextRule(
                 'workerman-worker-walk-stop-variadic',
@@ -188,7 +202,8 @@ final class WebmanWorkermanRules
                 'array_walk($workers, static fn (Worker $worker) => $worker->stop(false));',
                 'array_walk($workers, static fn (Worker $worker, ...$__walk) => $worker->stop(false));',
                 1,
-                ['array_walk($workers, static fn (Worker $worker, ...$__walk) => $worker->stop(false));']
+                ['array_walk($workers, static fn (Worker $worker, ...$__walk) => $worker->stop(false));'],
+                ['stopAll']
             ),
             new BoundedTextRule(
                 'workerman-worker-walk-pid-variadic',
@@ -199,41 +214,23 @@ final class WebmanWorkermanRules
                 'array_walk($workerPidArray, static fn ($pid) => posix_kill($pid, $sig));',
                 'array_walk($workerPidArray, static fn ($pid, ...$__walk) => posix_kill($pid, $sig));',
                 1,
-                ['array_walk($workerPidArray, static fn ($pid, ...$__walk) => posix_kill($pid, $sig));']
+                ['array_walk($workerPidArray, static fn ($pid, ...$__walk) => posix_kill($pid, $sig));'],
+                ['reload']
             ),
             new BoundedTextRule(
                 'workerman-worker-signal-variadic',
                 'workerman/workerman',
                 'vendor/workerman/workerman/src/Worker.php',
                 new MinimumVersion('5.2.1'),
-                ['class Worker', 'function signalHandler(int $signal)'],
+                ['class Worker', 'function signalHandler(int $signal'],
                 'pcntl_signal($signal, static::signalHandler(...), false);',
                 'pcntl_signal($signal, static fn (...$__sig) => static::signalHandler($__sig[0]), false);',
                 1,
-                ['pcntl_signal($signal, static fn (...$__sig) => static::signalHandler($__sig[0]), false);']
+                ['pcntl_signal($signal, static fn (...$__sig) => static::signalHandler($__sig[0]), false);'],
+                ['installSignal', 'reinstallSignal']
             ),
-            new BoundedTextRule(
-                'workerman-tcp-error-handler-variadic',
-                'workerman/workerman',
-                'vendor/workerman/workerman/src/Connection/TcpConnection.php',
-                new MinimumVersion('5.2.1'),
-                ['class TcpConnection', 'stream_socket_enable_crypto($socket, true, $type)'],
-                'set_error_handler(static function (int $code, string $msg): bool {',
-                'set_error_handler(static function (int $code, string $msg, ...$__err): bool {',
-                1,
-                ['set_error_handler(static function (int $code, string $msg, ...$__err): bool {']
-            ),
-            new BoundedTextRule(
-                'workerman-async-tcp-error-handler-variadic',
-                'workerman/workerman',
-                'vendor/workerman/workerman/src/Connection/AsyncTcpConnection.php',
-                new MinimumVersion('5.2.1'),
-                ['class AsyncTcpConnection', 'STATUS_CONNECTING'],
-                'set_error_handler(fn() => false);',
-                'set_error_handler(fn(...$__err) => false);',
-                1,
-                ['set_error_handler(fn(...$__err) => false);']
-            ),
+            new WorkermanCallbackRule('tcp'),
+            new WorkermanCallbackRule('async-tcp'),
         ];
     }
 }
