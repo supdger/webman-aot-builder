@@ -100,7 +100,7 @@ v0.4.1 已移除部分业务依赖的显式版本门禁；SaiAdmin profile 的�
 
 v0.4.3 按实际源码、API 和 ABI 能力处理兼容性，不按消费项目的版本上下限、精确标签、历史文件摘要或固定替换次数拒绝；保留批准的下载材料、补丁链与 SDK 完整性检查。转换限定真实方法、分支及变量角色，保留无关方法和闭包。TypePHP 编译器取消 PHP 8.6 上限并检查实际运行能力；其 property hooks 源码需要 PHP 8.4 语法，与 Composer 入口分别校验。
 
-当前兼容修复已完成隔离全新构建：1,621 个 C++ 单元全部编译（零复用）、链接和打包，独立 `verify` 通过 40 个产物文件、55 个 direct 和 11 个 shadow。该结果证明构建宿主上的结构与完整性。[0.4.3 Windows 原生 CI](https://github.com/supdger/webman-aot-builder/actions/runs/37924101467) 已通过两种包的构建、离线准备、隔离安装与版本自检，以及许可证、镜像恢复和工作区回归。Linux 原生应用运行、用户 Windows 实机和完整业务仍须实测；已有宿主须自行升级。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
+当前兼容修复已完成隔离全新构建：1,621 个 C++ 单元全部编译（零复用）、链接和打包，独立 `verify` 通过 40 个产物文件、55 个 direct 和 11 个 shadow。该结果证明构建宿主上的结构与完整性。[0.4.3 Windows 原生 CI](https://github.com/supdger/webman-aot-builder/actions/runs/37928594459) 已通过两种包的构建、离线准备、隔离安装与版本自检，以及许可证、Intl 函数提供者、源码范围、镜像恢复和工作区回归。Linux 原生应用运行、用户 Windows 实机和完整业务仍须实测；已有宿主须自行升级。适用范围及剩余编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
 
 构建副本激活遇到短暂文件占用时会有限重试；持续失败会保留系统原因和重试建议。目标目录冲突或源码在重试期间变化仍会停止。原生 Windows CI 已验证真实文件占用后的恢复、永久失败清理、短路径别名及并发源码变化拒绝；这不代表用户已有宿主升级验收。
 
