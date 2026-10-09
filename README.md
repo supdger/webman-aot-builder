@@ -22,7 +22,7 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 0.4.3 Composer 入口要求 PHP 支持实际使用的 PHP 8 语法（manifest 为 >=8.0），Composer 按公共接口能力检查，不设置历史 2.5.3 下限或插件 API 主版本上界。先按目标项目自身要求安装 Composer 依赖，备好 `vendor/`，在 macOS 终端或 Windows PowerShell 运行：
 
 ```sh
-composer global require supdger/webman-aot-builder
+composer global require "supdger/webman-aot-builder:*"
 ```
 
 入口版本 0.4.3 使用对应 0.4.3 完整运行时；旧入口 0.3.7 仍绑定 0.3.2。首次 Composer 询问插件信任时输入 `y`，自动进入引导。引导自动识别开发机系统，准备对应完整运行时；选择开始或导入完整包，再输入或拖入 Webman / SaiAdmin 后端根目录的完整路径。该目录须包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`。

@@ -308,6 +308,21 @@ foreach ($llvmTools as $name) {
         throw new RuntimeException("required LLVM tool is missing: {$name}");
     }
     $selected['prepared/' . $llvmRelative . '/bin/' . $name] = $path;
+    $linkedTool = $path;
+    $seenLinks = [];
+    while (is_link($linkedTool)) {
+        $linkTarget = readlink($linkedTool);
+        $target = is_string($linkTarget) ? dirname($linkedTool) . '/' . $linkTarget : '';
+        if (isset($seenLinks[$linkedTool]) || !is_string($linkTarget)
+            || $linkTarget === '' || str_starts_with($linkTarget, '/')
+            || str_contains($linkTarget, '\\') || !is_file($target)
+            || realpath(dirname($target)) !== realpath($llvm . '/bin')) {
+            throw new RuntimeException("required LLVM tool target is unsafe: {$name}");
+        }
+        $seenLinks[$linkedTool] = true;
+        $selected['prepared/' . $llvmRelative . '/bin/' . basename($target)] = $target;
+        $linkedTool = $target;
+    }
 }
 $resourceRoots = glob($llvm . '/lib/clang/*', GLOB_ONLYDIR) ?: [];
 if (count($resourceRoots) !== 1) { throw new RuntimeException('selected LLVM needs one resource directory'); }
