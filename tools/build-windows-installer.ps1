@@ -222,6 +222,19 @@ try {
         'extension=zip'
     ) | Set-Content -LiteralPath $ini -Encoding ascii
 
+    if ($env:WEBMAN_AOT_RELEASE_COVERAGE_CHECK -eq '1' -and $Flavor -eq 'small') {
+        Write-Output '[regression] Locked native PHP generated coverage before package creation.'
+        $env:TEMP = $previousTemp
+        $env:TMP = $previousTmp
+        try {
+            & $php -n (Join-Path $repository 'tests\generated-coverage.php')
+            if ($LASTEXITCODE -ne 0) { throw "Native generated coverage failed: $LASTEXITCODE" }
+        } finally {
+            $env:TEMP = $temporary
+            $env:TMP = $temporary
+        }
+    }
+
     if ($Guided) {
         # Keep user-facing logs/results outside the temporary PHP extraction cleaned below.
         $env:TEMP = $previousTemp

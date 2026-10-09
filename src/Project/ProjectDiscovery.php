@@ -17,13 +17,20 @@ final class ProjectDiscovery
     public const SOURCE_METADATA = 'source-metadata';
     public const UNCLASSIFIED = 'unclassified';
 
+    private readonly string $projectDirectory;
+
     /**
      * @param array<string,string> $dynamicPhp Registered third-party view adapter paths and their runtime policy identities.
      */
     public function __construct(
-        private readonly string $projectDirectory,
+        string $projectDirectory,
         private readonly array $dynamicPhp = []
     ) {
+        $root = !is_link($projectDirectory) ? realpath($projectDirectory) : false;
+        if (!is_string($root) || !is_dir($root)) {
+            throw new ConfigurationException('project discovery root is missing or unsafe');
+        }
+        $this->projectDirectory = $root;
     }
 
     public function discover(ProjectProfile $profile): DiscoveryResult
@@ -398,9 +405,9 @@ final class ProjectDiscovery
 
     private function relative(string $path): string
     {
-        $root = rtrim(realpath($this->projectDirectory) ?: $this->projectDirectory, '/\\');
-        $normalizedRoot = str_replace('\\', '/', $root);
-        $normalizedPath = str_replace('\\', '/', $path);
+        $root = rtrim($this->projectDirectory, DIRECTORY_SEPARATOR);
+        $normalizedRoot = str_replace(DIRECTORY_SEPARATOR, '/', $root);
+        $normalizedPath = str_replace(DIRECTORY_SEPARATOR, '/', $path);
         $prefix = $normalizedRoot . '/';
         if (!str_starts_with($normalizedPath, $prefix)) {
             throw new ConfigurationException("discovered path escaped project root: {$path}");
@@ -411,7 +418,7 @@ final class ProjectDiscovery
 
     private function absolute(string $relativePath): string
     {
-        return rtrim($this->projectDirectory, '/\\')
+        return rtrim($this->projectDirectory, DIRECTORY_SEPARATOR)
             . DIRECTORY_SEPARATOR
             . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
     }

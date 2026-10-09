@@ -113,7 +113,9 @@ final class SdkArchiveGuard
 
     private function headerTreeDigest(string $root): string
     {
-        if (!is_dir($root) || is_link($root)) { throw new \RuntimeException('patched SDK headers are missing'); }
+        $resolvedRoot = !is_link($root) ? realpath($root) : false;
+        if (!is_string($resolvedRoot) || !is_dir($resolvedRoot)) { throw new \RuntimeException('patched SDK headers are missing'); }
+        $root = $resolvedRoot;
         $entries = [];
         $visit = static function (string $directory, string $prefix) use (&$visit, &$entries, $root): void {
             foreach (new \DirectoryIterator($directory) as $entry) {
@@ -123,7 +125,7 @@ final class SdkArchiveGuard
                     $target = readlink($entry->getPathname());
                     $resolved = realpath($entry->getPathname());
                     if (!is_string($target) || str_starts_with($target, '/') || !is_string($resolved)
-                        || !str_starts_with(str_replace('\\', '/', $resolved), str_replace('\\', '/', $root) . '/')) {
+                        || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', $resolved), str_replace(DIRECTORY_SEPARATOR, '/', $root) . '/')) {
                         throw new \RuntimeException('patched SDK header link is unsafe: ' . $path);
                     }
                     $entries[$path] = ['type' => 'link', 'target' => $target];

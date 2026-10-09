@@ -63,6 +63,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_REVISION: ${{ inputs.revision }}
           RELEASE_VERSION: ${{ inputs.version }}
+          WEBMAN_AOT_RELEASE_COVERAGE_CHECK: '1'
         run: |
           & .\tools\build-release-windows.ps1 `
             -Revision $env:RELEASE_REVISION `
