@@ -523,6 +523,9 @@ final class InstallerPackager
         $roots = [];
         $entries = [];
         foreach (explode("\n", rtrim($listing, "\n")) as $entry) {
+            if (PHP_OS_FAMILY === 'Windows' && str_ends_with($entry, "\r")) {
+                $entry = substr($entry, 0, -1);
+            }
             $entry = rtrim($entry, '/');
             $parts = explode('/', $entry);
             if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._+-]*$/D', $parts[0]) !== 1

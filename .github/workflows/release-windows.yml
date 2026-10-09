@@ -87,7 +87,7 @@ jobs:
             if ($actual -ne $lock.runtimes.'windows-x86_64'.binarySha256) { throw 'Packaged mirror regression runtime differs from its lock.' }
             Push-Location $runtime
             try {
-              foreach ($test in @('tests\project-mirror.php','tests\resumable-workspace.php')) {
+              foreach ($test in @('tests\installer-source-licenses.php','tests\project-mirror.php','tests\resumable-workspace.php')) {
                 Write-Host "[regression] Native Windows $test"
                 & $php -n (Join-Path $repository $test)
                 if ($LASTEXITCODE -ne 0) { throw "Native Windows $test failed: $LASTEXITCODE" }
