@@ -440,7 +440,7 @@ YAML;
     {
         $file = $project . '/' . $relative;
         $real = realpath($file);
-        if (!is_string($real) || !str_starts_with($real, rtrim((string) realpath($project), '/') . '/')
+        if (!is_string($real) || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', $real), rtrim(str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($project)), '/') . '/')
             || !is_file($file) || is_link($file)) {
             throw new ConfigurationException("optional source is missing or unsafe: {$relative}");
         }

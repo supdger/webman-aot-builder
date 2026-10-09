@@ -12,6 +12,7 @@ final class StaticTargetLayout
     public function sysroot(string $directory): array
     {
         $root = realpath($directory);
+        $root = is_string($root) ? str_replace(DIRECTORY_SEPARATOR, '/', $root) : $root;
         if (!is_string($root) || is_link($directory) || !is_file($root . '/usr/lib/libstdc++.a')) {
             throw new ConfigurationException('selected musl sysroot is missing or lacks the C++ runtime');
         }
@@ -20,7 +21,7 @@ final class StaticTargetLayout
             $cxx = $root . '/usr/include/c++/' . basename($gcc);
             $include = $cxx . '/x86_64-alpine-linux-musl';
             foreach ([$gcc . '/crtbegin.o', $gcc . '/libgcc.a', $cxx . '/vector', $include . '/bits/c++config.h'] as $file) {
-                if (!is_file($file) || is_link($file) || !str_starts_with((string) realpath($file), $root . '/')) {
+                if (!is_file($file) || is_link($file) || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($file)), $root . '/')) {
                     continue 2;
                 }
             }
@@ -30,7 +31,7 @@ final class StaticTargetLayout
             if (preg_match('/["\r\n\x00-\x1f]/', $gcc . $cxx . $include) === 1) {
                 throw new ConfigurationException('selected sysroot compiler paths cannot be quoted safely');
             }
-            $layouts[] = ['gcc' => str_replace('\\', '/', $gcc), 'cxx' => str_replace('\\', '/', $cxx), 'targetInclude' => str_replace('\\', '/', $include)];
+            $layouts[] = ['gcc' => str_replace(DIRECTORY_SEPARATOR, '/', $gcc), 'cxx' => str_replace(DIRECTORY_SEPARATOR, '/', $cxx), 'targetInclude' => str_replace(DIRECTORY_SEPARATOR, '/', $include)];
         }
         if (count($layouts) !== 1) {
             throw new ConfigurationException('selected sysroot requires one complete matching GCC/header ABI layout');
@@ -41,9 +42,10 @@ final class StaticTargetLayout
     public function phpVersion(string $sdk): string
     {
         $root = realpath($sdk);
+        $root = is_string($root) ? str_replace(DIRECTORY_SEPARATOR, '/', $root) : $root;
         $header = $sdk . '/include/php/main/php_version.h';
         if (!is_string($root) || is_link($sdk) || !is_file($header) || is_link($header)
-            || !str_starts_with((string) realpath($header), $root . '/')) {
+            || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($header)), $root . '/')) {
             throw new ConfigurationException('selected SDK PHP ABI header is missing or unsafe');
         }
         $source = file_get_contents($header);
@@ -70,7 +72,7 @@ final class StaticTargetLayout
     public function runtimeCapabilities(string $sdk): array
     {
         $version = $this->phpVersion($sdk);
-        $root = (string) realpath($sdk);
+        $root = str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($sdk));
         $source = (string) file_get_contents($root . '/include/php/main/php_version.h');
         if (preg_match_all('/^#define[ \t]+PHP_VERSION_ID[ \t]+([0-9]+)[ \t]*$/m', $source, $ids) !== 1
             || preg_match_all('/^#define[ \t]+PHP_RELEASE_VERSION[ \t]+([0-9]+)[ \t]*$/m', $source, $releases) !== 1) {
@@ -83,7 +85,7 @@ final class StaticTargetLayout
         }
         $redisHeader = $root . '/include/php/ext/redis/php_redis.h';
         if (!is_file($redisHeader) || is_link($redisHeader)
-            || !str_starts_with((string) realpath($redisHeader), $root . '/')) {
+            || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($redisHeader)), $root . '/')) {
             throw new ConfigurationException('selected SDK Redis runtime capability header is missing or unsafe');
         }
         $redis = (string) file_get_contents($redisHeader);
@@ -164,7 +166,7 @@ final class StaticTargetLayout
     private function runtimeHeader(string $root, string $relative): string
     {
         $file = $root . $relative;
-        if (!is_file($file) || is_link($file) || !str_starts_with((string) realpath($file), $root . '/')) {
+        if (!is_file($file) || is_link($file) || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', (string) realpath($file)), $root . '/')) {
             throw new ConfigurationException('selected SDK runtime capability header is missing or unsafe: ' . $relative);
         }
         return (string) file_get_contents($file);
