@@ -2,7 +2,7 @@
 
 通过 Composer 在同一终端选择准备组件、项目目录、构建和校验。支持 macOS Apple Silicon、Windows x64；入口 0.4.3 自动识别开发机，使用对应的 0.4.3 完整运行时。
 
-0.4.3 入口要求 PHP 支持 match 等实际使用的 PHP 8 语法（manifest 为 >=8.0）；Composer 与插件 API 不设版本上下限，按实际公共接口、事件和调用能力检查。实际验证为 PHP 8.4.18/Composer 2.9.5/macOS，标签模拟不等于 Composer 3 或 PHP 8.0 原生已验证，Windows 真机仍未验收。私有 TypePHP 编译器取消 PHP 8.6 上限，按扩展、函数、反射、解析器 API 和语法能力判断；其源码使用 property hooks，必要语法为 PHP 8.4，与本 Composer 入口分别校验。新候选已完成隔离全新 Linux ELF 构建及独立结构/完整性 verify；Linux 原生应用运行、Windows 原生与业务未验收。0.4.1 原生运行时的 Windows CI 已通过安装及续编，记录见[测试与验证范围](https://github.com/supdger/webman-aot-builder/wiki/Verification)。运行 `composer global require "supdger/webman-aot-builder:*"`，首次接受 Composer 本身的插件信任询问后，包安装和自动加载完成即打开已有引导。包归属为 [supdger/webman-aot-builder（Packagist）](https://packagist.org/packages/supdger/webman-aot-builder)。
+0.4.3 入口要求 PHP 支持 match 等实际使用的 PHP 8 语法（manifest 为 >=8.0）；Composer 与插件 API 不设版本上下限，按实际公共接口、事件和调用能力检查。实际验证为 PHP 8.4.18/Composer 2.9.5/macOS，标签模拟不等于 Composer 3 或 PHP 8.0 原生已验证，Windows 真机仍未验收。私有 TypePHP 编译器取消 PHP 8.6 上限，按扩展、函数、反射、解析器 API 和语法能力判断；其源码使用 property hooks，必要语法为 PHP 8.4，与本 Composer 入口分别校验。新候选已完成隔离全新 Linux ELF 构建及独立结构/完整性 verify；Linux 原生应用运行、用户 Windows 实机与完整业务仍未验收。[0.4.3 Windows 原生 CI](https://github.com/supdger/webman-aot-builder/actions/runs/37924101467) 已通过两种包的构建、离线准备、隔离安装与版本自检，以及许可证、镜像恢复和工作区回归；0.4.1 的 CI 另有续编记录，范围见[测试与验证范围](https://github.com/supdger/webman-aot-builder/wiki/Verification)。运行 `composer global require "supdger/webman-aot-builder:*"`，首次接受 Composer 本身的插件信任询问后，包安装和自动加载完成即打开已有引导。包归属为 [supdger/webman-aot-builder（Packagist）](https://packagist.org/packages/supdger/webman-aot-builder)。
 
 已安装时直接运行：
 
@@ -38,7 +38,7 @@ webman-aot setup --archive="/完整包所在目录/对应完整安装包" --non-
 
 下载中可用 Ctrl+C 取消，未完成内容保存在状态目录的 `cache/*.part`。断网或下载失败会最多自动重试 2 次，每次从已有字节续传；再次选择开始或运行同一命令也会继续下载，不限总下载时长。只有连接超过 20 秒或连续 120 秒几乎没有数据才超时；服务器拒绝续传时会明确提示并重新下载。完整包通过大小与 SHA-256 校验后才解包，损坏内容会清除。准备失败时原项目命令不会运行；已完成包缓存也可复用。准备成功后会重新执行原命令。0.4.0 的项目构建默认复用输入一致且大小、SHA-256 校验通过的完整编译单元；未完成或损坏的单元从头编译。引导失败后选择 `1` 继续编译、`2` 重选目录、`3` 全量重建、`0` 结束；每轮仍重新链接并验证最终产物。
 
-在项目根目录运行 `webman-aot build --fresh` 可让全部单元重新编译。对象缓存位于项目内 `.webman-aot-builder/cache/objects/`；失败 attempt 与缓存保留并占用磁盘，成功后清理本轮 attempt。`--fresh` 不清旧缓存或失败目录。Windows 与 PHP 8.1 的真实续编尚未验证。
+在项目根目录运行 `webman-aot build --fresh` 可让全部单元重新编译。对象缓存位于项目内 `.webman-aot-builder/cache/objects/`；失败 attempt 与缓存保留并占用磁盘，成功后清理本轮 attempt。`--fresh` 不清旧缓存或失败目录。Windows 原生 CI 已有续编记录；用户 Windows 实机和 PHP 8.1 原生续编仍未验收。
 
 构建器详细安装、兼容性与 Linux 部署要求见[现有 Wiki](https://github.com/supdger/webman-aot-builder/wiki)。旧安装不会自动获得 0.4.3 修复。Packagist 登记状态以[包页面](https://packagist.org/packages/supdger/webman-aot-builder)为准；没有自动镜像切换，网络不可用时使用已校验的本地完整包。
 
