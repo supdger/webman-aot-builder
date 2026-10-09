@@ -17,11 +17,14 @@ $rule = new ReflectionMethod(UpstreamProjectGenerator::class, 'assertIntlFunctio
 $generator = new UpstreamProjectGenerator();
 $caps = ['intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false];
 $cases = 0;
-$run = static function (string $name, string $php, array $capabilities, ?string $failure = null, string $ignore = '', bool $drift = false) use ($root, $sourcePath, $shadowPath, $rule, $generator, &$cases): void {
+$run = static function (string $name, string $php, array $capabilities, ?string $failure = null, string $ignore = '', bool $drift = false, string $mirrorSuffix = '') use ($root, $sourcePath, $shadowPath, $rule, $generator, &$cases): void {
     file_put_contents($root . '/' . $shadowPath, $php);
     file_put_contents($root . '/project.linux.yml', "name: probe\nsources:\n  - {$shadowPath}\nignore:\n{$ignore}\noutput:\n");
     $manifest = [['path' => $sourcePath, 'shadow' => $shadowPath, 'sourceSha256' => hash_file('sha256', $root . '/' . $sourcePath), 'shadowSha256' => $drift ? str_repeat('0', 64) : hash('sha256', $php)]];
-    try { $rule->invoke($generator, $root, $capabilities, $manifest); }
+    if ($cases === 0 && DIRECTORY_SEPARATOR === '\\') {
+        echo 'Native Intl paths ' . json_encode(['root' => $root, 'canonicalRoot' => realpath($root), 'canonicalShadow' => realpath($root . '/' . $shadowPath)], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES) . "\n";
+    }
+    try { $rule->invoke($generator, $root . $mirrorSuffix, $capabilities, $manifest); }
     catch (ConfigurationException $error) {
         if ($failure !== null && str_contains($error->getMessage(), $failure)) { ++$cases; echo "PASS {$name}\n"; return; }
         throw $error;
@@ -32,6 +35,9 @@ $run = static function (string $name, string $php, array $capabilities, ?string 
 $providers = '<?php function locale_is_right_to_left() {} function grapheme_levenshtein() {}';
 try {
     $run('two missing native functions have one selected provider each', $providers, $caps);
+    $run('canonical mirror accepts lexical dot alias', $providers, $caps, null, '', false, '/.');
+    $run('canonical mirror accepts parent alias', $providers, $caps, null, '', false, '/../' . basename($root));
+    $run('missing mirror rejected', $providers, $caps, 'mirror is missing or unsafe', '', false, '/missing');
     $run('missing RTL provider rejected', '<?php function grapheme_levenshtein() {}', $caps, 'locale_is_right_to_left expected 1');
     $run('missing Levenshtein provider rejected', '<?php function locale_is_right_to_left() {}', $caps, 'grapheme_levenshtein expected 1');
     $run('duplicate global provider rejected', $providers . ' function locale_is_right_to_left() {}', $caps, 'locale_is_right_to_left expected 1 global PHP declarations, got 2');

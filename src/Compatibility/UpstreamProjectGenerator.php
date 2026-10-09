@@ -227,12 +227,16 @@ final class UpstreamProjectGenerator
     /** Validate the two PHP85 Intl fallbacks against the selected SDK and final compiler input. */
     private function assertIntlFunctionProviders(string $mirror, array $capabilities, array $manifest): void
     {
-        $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $mirror);
         $active = false;
         foreach ($manifest as $mapping) {
             if (($mapping['path'] ?? null) === 'vendor/symfony/polyfill-php85/bootstrap.php') { $active = true; }
         }
         if (!$active) { return; }
+        $resolvedMirror = !is_link($mirror) ? realpath($mirror) : false;
+        if (!is_string($resolvedMirror) || !is_dir($resolvedMirror)) {
+            throw new ConfigurationException('PHP85 Intl provider mirror is missing or unsafe');
+        }
+        $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $resolvedMirror);
         foreach (['intlEnabled', 'nativeLocaleIsRightToLeft', 'nativeGraphemeLevenshtein'] as $key) {
             if (!is_bool($capabilities[$key] ?? null)) {
                 throw new ConfigurationException("PHP85 Intl provider target capability is missing: {$key}");

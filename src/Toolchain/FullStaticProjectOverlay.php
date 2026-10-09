@@ -260,7 +260,11 @@ YAML;
     /** Exclusion is permitted only for unused declarations or a standalone package example. */
     private function assertUnreferenced(string $project, array $excluded, bool $doctrine): void
     {
-        $project = str_replace(DIRECTORY_SEPARATOR, '/', $project);
+        $resolvedProject = !is_link($project) ? realpath($project) : false;
+        if (!is_string($resolvedProject) || !is_dir($resolvedProject)) {
+            throw new ConfigurationException('optional exclusion project is missing or unsafe');
+        }
+        $project = str_replace(DIRECTORY_SEPARATOR, '/', $resolvedProject);
         $paths = (new SourceTreeSnapshot($project))->captureWithFiles()['digests'];
         foreach (array_keys($paths) as $relative) {
             if (in_array($relative, $excluded, true)) {
