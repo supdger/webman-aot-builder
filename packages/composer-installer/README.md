@@ -36,13 +36,13 @@ webman-aot setup --archive="/完整包所在目录/对应完整安装包" --non-
 
 非交互环境不会等待输入。首次准备可显式使用 `webman-aot setup --yes --non-interactive`，或前述本地包命令；资源已准备后直接运行构建。全局选项必须放在 `doctor`、`build` 等原命令之前；原命令后所有参数（含 `--`）原样转交构建器。`setup` 自身的选项可放在后面。`--state-dir=目录` 将运行时、缓存和启动器全部放在指定目录，适合隔离测试。`--help`、`--version` 不联网，只说明入口和目标版本，不表示构建器已经安装。
 
-下载中可用 Ctrl+C 取消。准备失败时原项目命令不会运行；保留缓存方便重新校验重试。准备成功后会重新执行原命令。0.4.0 的项目构建默认复用输入一致且大小、SHA-256 校验通过的完整编译单元；未完成或损坏的单元从头编译。引导失败后选择 `1` 继续编译、`2` 重选目录、`3` 全量重建、`0` 结束；每轮仍重新链接并验证最终产物。
+下载中可用 Ctrl+C 取消，未完成内容保存在状态目录的 `cache/*.part`。断网或下载失败会最多自动重试 2 次，每次从已有字节续传；再次选择开始或运行同一命令也会继续下载，不限总下载时长。只有连接超过 20 秒或连续 120 秒几乎没有数据才超时；服务器拒绝续传时会明确提示并重新下载。完整包通过大小与 SHA-256 校验后才解包，损坏内容会清除。准备失败时原项目命令不会运行；已完成包缓存也可复用。准备成功后会重新执行原命令。0.4.0 的项目构建默认复用输入一致且大小、SHA-256 校验通过的完整编译单元；未完成或损坏的单元从头编译。引导失败后选择 `1` 继续编译、`2` 重选目录、`3` 全量重建、`0` 结束；每轮仍重新链接并验证最终产物。
 
 在项目根目录运行 `webman-aot build --fresh` 可让全部单元重新编译。对象缓存位于项目内 `.webman-aot-builder/cache/objects/`；失败 attempt 与缓存保留并占用磁盘，成功后清理本轮 attempt。`--fresh` 不清旧缓存或失败目录。Windows 与 PHP 8.1 的真实续编尚未验证。
 
 构建器详细安装、兼容性与 Linux 部署要求见[现有 Wiki](https://github.com/supdger/webman-aot-builder/wiki)。旧安装不会自动获得 0.4.1 修复。Packagist 登记状态以[包页面](https://packagist.org/packages/supdger/webman-aot-builder)为准；没有自动镜像切换，网络不可用时使用已校验的本地完整包。
 
-0.4.1 Composer 入口与配套完整运行时同为 0.4.1；旧入口 0.3.7 仍固定 0.3.2。根 `composer.json` 注册元数据的 bin/autoload 路径与小 ZIP 保持同样的 `packages/composer-installer/` 布局。普通 Composer 安装取得轻量 Release ZIP，`--prefer-source` 会下载完整源码仓库。
+0.4.2 Composer 入口继续绑定 0.4.1 完整运行时；仅入口下载流程更新，已有运行时可继续复用；旧入口 0.3.7 仍固定 0.3.2。根 `composer.json` 注册元数据的 bin/autoload 路径与小 ZIP 保持同样的 `packages/composer-installer/` 布局。普通 Composer 安装取得轻量 Release ZIP，`--prefer-source` 会下载完整源码仓库。
 
 当前入口提供统一卸载入口；旧 0.3.3 和原生 0.3.2 没有这个命令。请先更新 Composer 包，然后从代理完整路径启动：
 
