@@ -5,14 +5,14 @@
         "macos-arm64": {
             "filename": "webman-aot-builder-0.4.3-full-macos-arm64.tar.gz",
             "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.3/webman-aot-builder-0.4.3-full-macos-arm64.tar.gz",
-            "size": 264182724,
-            "sha256": "bb6754ad4d85ac4e2f632015e08376abad03f4cd69299928e656b2e56e3bbbfb"
+            "size": 264183008,
+            "sha256": "0eed069b68d229329bd893e3c819e5648d7b341a58f780a15939be700995ddbb"
         },
         "windows-x86_64": {
             "filename": "webman-aot-builder-0.4.3-full-windows-x86_64.zip",
             "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.3/webman-aot-builder-0.4.3-full-windows-x86_64.zip",
-            "size": 341189954,
-            "sha256": "38b5b81f6e48db6c54bdd76da155f98c98ecce8124a897bddc755a1ec9c86492"
+            "size": 341190806,
+            "sha256": "6353c292036e517032bec792f7e6b214a326bfb7b1b48c96873364c6f50ea391"
         }
     }
 }
