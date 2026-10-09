@@ -194,6 +194,9 @@ final class GeneratedProjectCoveragePlanner
             if (!isset($businessPaths[$source])) {
                 continue;
             }
+            if (!file_exists($mirror . '/' . $replacement) && !is_link($mirror . '/' . $replacement)) {
+                continue;
+            }
             if (!isset($businessPaths[$replacement])
                 || !$this->isSupportClass($mirror, $source, $name)
                 || !$this->isSupportClass($mirror, $replacement, $name)
@@ -353,13 +356,68 @@ final class GeneratedProjectCoveragePlanner
 
     private function isSupportClass(string $mirror, string $relative, string $name): bool
     {
+        if ($this->digest($mirror, $relative) === null) { return false; }
         $source = file_get_contents($mirror . '/' . $relative);
-        return is_string($source)
-            && preg_match('/\bnamespace\s+support\s*;/', $source) === 1
-            && preg_match(
-                '/\bclass\s+' . preg_quote($name, '/') . '\s+extends\s+\\\\Webman\\\\Http\\\\'
-                    . preg_quote($name, '/') . '\b/',
-                $source
-            ) === 1;
+        if (!is_string($source)) { return false; }
+        try { $tokens = token_get_all($source, TOKEN_PARSE); } catch (\ParseError) { return false; }
+        $tokens = array_values(array_filter($tokens, static fn(array|string $token): bool =>
+            !is_array($token) || !in_array($token[0], [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
+        ));
+        $text = static fn(array|string $token): string => is_array($token) ? $token[1] : $token;
+        $namespace = null;
+        $namespaceDepth = 0;
+        $depth = 0;
+        $aliases = [];
+        $found = 0;
+        foreach ($tokens as $index => $token) {
+            $id = is_array($token) ? $token[0] : null;
+            if ($id === T_NAMESPACE) {
+                if ($namespace !== null || $depth !== 0) { return false; }
+                $namespace = strtolower($text($tokens[$index + 1] ?? ''));
+                if ($namespace !== 'support' || !in_array($tokens[$index + 2] ?? null, [';', '{'], true)) { return false; }
+                $namespaceDepth = ($tokens[$index + 2] ?? null) === '{' ? 1 : 0;
+            }
+            if ($id === T_USE && $depth === $namespaceDepth && ($tokens[$index + 1] ?? null) !== '(') {
+                $declaration = '';
+                for ($cursor = $index + 1; isset($tokens[$cursor]) && $tokens[$cursor] !== ';'; ++$cursor) {
+                    $part = $tokens[$cursor];
+                    $declaration .= is_array($part) && $part[0] === T_AS ? ' as ' : $text($part);
+                }
+                if (!isset($tokens[$cursor])) { return false; }
+                if (in_array($tokens[$index + 1][0] ?? null, [T_FUNCTION, T_CONST], true)) { continue; }
+                $prefix = '';
+                if (str_contains($declaration, '{')) {
+                    if (preg_match('/^(.+\\\\)\{([^{}]+)\}$/D', $declaration, $group) !== 1) { return false; }
+                    $prefix = $group[1]; $declaration = $group[2];
+                }
+                foreach (explode(',', $declaration) as $import) {
+                    $parts = preg_split('/\s+as\s+/i', $import);
+                    if (!is_array($parts) || count($parts) > 2) { return false; }
+                    $target = ltrim($prefix . $parts[0], '\\');
+                    $alias = strtolower($parts[1] ?? substr($target, (int) strrpos('\\' . $target, '\\')));
+                    if ($alias === '' || isset($aliases[$alias])) { return false; }
+                    $aliases[$alias] = $target;
+                }
+            }
+            if ($id === T_CLASS && ($tokens[$index - 1][0] ?? null) !== T_DOUBLE_COLON
+                && is_array($tokens[$index + 1] ?? null) && $tokens[$index + 1][0] === T_STRING
+                && strcasecmp($tokens[$index + 1][1], $name) === 0
+            ) {
+                if ($namespace !== 'support' || $depth !== $namespaceDepth
+                    || ($tokens[$index + 2][0] ?? null) !== T_EXTENDS
+                ) { return false; }
+                $parent = $text($tokens[$index + 3] ?? '');
+                if (!str_starts_with($parent, '\\')) {
+                    $parts = explode('\\', $parent, 2);
+                    $parent = isset($aliases[strtolower($parts[0])])
+                        ? $aliases[strtolower($parts[0])] . (isset($parts[1]) ? '\\' . $parts[1] : '')
+                        : $namespace . '\\' . $parent;
+                }
+                if (strcasecmp(ltrim($parent, '\\'), 'Webman\\Http\\' . $name) !== 0 || ++$found !== 1) { return false; }
+            }
+            if ($token === '{') { ++$depth; }
+            if ($token === '}') { --$depth; }
+        }
+        return $found === 1;
     }
 }

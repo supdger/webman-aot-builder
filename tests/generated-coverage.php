@@ -128,6 +128,14 @@ try {
     unlink($mirror . '/' . $fontPrefix . 'Font/captcha5.ttf');
     echo "PASS actual expanded captcha font selection range\n";
     [$mappings, $adaptations] = $reset();
+    $fallbackYml = file_get_contents($mirror . '/project.linux.yml');
+    foreach (['Request', 'Response'] as $name) {
+        $put('vendor/workerman/webman-framework/src/support/' . $name . '.php', '<?php namespace support; class ' . $name . ' extends \\Webman\\Http\\' . $name . ' {}');
+    }
+    $put('project.linux.yml', str_replace('ignore:', "  - vendor/workerman/webman-framework/src/support/Request.php\n  - vendor/workerman/webman-framework/src/support/Response.php\nignore:", $fallbackYml));
+    ensure($run($mappings, $adaptations)['compiled'] === ['direct' => 3, 'shadow' => 3], 'framework support fallbacks without project overrides were not compiled directly');
+    echo "PASS actual framework Request and Response compile directly without project overrides\n";
+    $put('project.linux.yml', $fallbackYml);
     foreach (['Request', 'Response'] as $name) {
         $put('support/' . $name . '.php', '<?php namespace support; class ' . $name . ' extends \\Webman\\Http\\' . $name . ' {}');
         $put('vendor/workerman/webman-framework/src/support/' . $name . '.php', '<?php namespace support; class ' . $name . ' extends \\Webman\\Http\\' . $name . ' {}');
@@ -136,6 +144,27 @@ try {
     $put('project.linux.yml', str_replace('ignore:', "  - support/Request.php\n  - support/Response.php\nignore:\n  - vendor/workerman/webman-framework/src/support/Request.php\n  - vendor/workerman/webman-framework/src/support/Response.php", $supportYml));
     ensure($run($mappings, $adaptations)['compiled'] === ['direct' => 3, 'shadow' => 5], 'Webman support overrides were not covered');
     echo "PASS Webman compiled project support overrides framework fallbacks\n";
+    foreach (['use-alias', 'prefix-alias', 'group-use', 'comments-and-case', 'braced-namespace', 'unrelated-closure'] as $shape) {
+        foreach (['Request', 'Response'] as $name) {
+            $bytes = match ($shape) {
+                'use-alias' => '<?php namespace support; use Webman\\Http\\' . $name . ' as Base; class ' . $name . ' extends Base {}',
+                'prefix-alias' => '<?php namespace support; use Webman\\Http as Http; class ' . $name . ' extends Http\\' . $name . ' {}',
+                'group-use' => '<?php namespace support; use Webman\\Http\\{' . $name . ' as Base}; class ' . $name . ' extends Base {}',
+                'comments-and-case' => '<?php namespace SUPPORT; CLASS /* role */ ' . strtolower($name) . ' EXTENDS /* parent */ \\webman\\http\\' . strtolower($name) . ' {}',
+                'braced-namespace' => '<?php namespace support { class ' . $name . ' extends \\Webman\\Http\\' . $name . ' {} }',
+                'unrelated-closure' => '<?php namespace support; $x = 1; $closure = function () use ($x) { return $x; }; class ' . $name . ' extends \\Webman\\Http\\' . $name . ' {}',
+            };
+            $put('support/' . $name . '.php', $bytes);
+        }
+        ensure($run($mappings, $adaptations)['compiled'] === ['direct' => 3, 'shadow' => 5], 'support class token roles changed for ' . $shape);
+        echo "PASS actual Request and Response token roles {$shape}\n";
+    }
+    foreach (['<?php namespace support; /* class Request extends \\Webman\\Http\\Request {} */ class Request {}',
+        '<?php namespace support; $decoy = "class Request extends \\Webman\\Http\\Request {}"; class Request {}',
+        '<?php namespace support; if (false) { class Request extends \\Webman\\Http\\Request {} }'] as $invalid) {
+        $put('support/Request.php', $invalid);
+        reject(static fn() => $run($mappings, $adaptations), 'support override is missing or structurally invalid', 'comment, string or conditional support decoy');
+    }
     $put('support/Request.php', '<?php namespace support; class Request {}');
     reject(static fn() => $run($mappings, $adaptations), 'support override is missing or structurally invalid', 'invalid project support parent');
     foreach (['Request', 'Response'] as $name) {
