@@ -87,7 +87,7 @@ jobs:
             if ($actual -ne $lock.runtimes.'windows-x86_64'.binarySha256) { throw 'Packaged mirror regression runtime differs from its lock.' }
             Push-Location $runtime
             try {
-              foreach ($test in @('tests\installer-source-licenses.php','tests\project-mirror.php','tests\resumable-workspace.php')) {
+              foreach ($test in @('tests\installer-source-licenses.php','tests\intl-function-providers.php','tests\generator-source-scope.php','tests\project-mirror.php','tests\resumable-workspace.php')) {
                 Write-Host "[regression] Native Windows $test"
                 & $php -n (Join-Path $repository $test)
                 if ($LASTEXITCODE -ne 0) { throw "Native Windows $test failed: $LASTEXITCODE" }
@@ -98,7 +98,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-release-${{ inputs.version }}-${{ inputs.revision }}
-          path: ${{ runner.temp }}/release-packages/
+          path: |
+            ${{ runner.temp }}/release-packages/webman-aot-builder-${{ inputs.version }}-windows-x86_64.zip
+            ${{ runner.temp }}/release-packages/webman-aot-builder-${{ inputs.version }}-full-windows-x86_64.zip
+            ${{ runner.temp }}/release-packages/*.json
           if-no-files-found: error
           retention-days: 7
 

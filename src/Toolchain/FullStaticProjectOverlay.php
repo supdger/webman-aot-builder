@@ -260,6 +260,7 @@ YAML;
     /** Exclusion is permitted only for unused declarations or a standalone package example. */
     private function assertUnreferenced(string $project, array $excluded, bool $doctrine): void
     {
+        $project = str_replace(DIRECTORY_SEPARATOR, '/', $project);
         $paths = (new SourceTreeSnapshot($project))->captureWithFiles()['digests'];
         foreach (array_keys($paths) as $relative) {
             if (in_array($relative, $excluded, true)) {
@@ -273,8 +274,9 @@ YAML;
                             if (!is_string($path)) {
                                 throw new ConfigurationException("unsupported Composer autoload path: {$relative}");
                             }
-                            $base = dirname($project . '/' . $relative);
+                            $base = str_replace(DIRECTORY_SEPARATOR, '/', dirname($project . '/' . $relative));
                             $resolved = realpath($base . '/' . $path);
+                            $resolved = is_string($resolved) ? str_replace(DIRECTORY_SEPARATOR, '/', $resolved) : $resolved;
                             foreach ($excluded as $candidate) {
                                 $file = $project . '/' . $candidate;
                                 if (($resolved !== false && ($file === $resolved || str_starts_with($file, rtrim($resolved, '/') . '/')))

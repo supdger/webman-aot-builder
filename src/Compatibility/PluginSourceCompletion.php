@@ -20,6 +20,7 @@ final class PluginSourceCompletion
     public function apply(string $mirrorDirectory, string $profile, array $dynamicPhp, array $generatedMappings = []): ?string
     {
         $mirror = realpath($mirrorDirectory);
+        $mirror = is_string($mirror) ? str_replace(DIRECTORY_SEPARATOR, '/', $mirror) : $mirror;
         if (!is_string($mirror) || is_link($mirrorDirectory)
             || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
             || !in_array($profile, [ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
@@ -88,6 +89,7 @@ final class PluginSourceCompletion
     public function includes(string $mirrorDirectory, string $path): bool
     {
         $mirror = realpath($mirrorDirectory);
+        $mirror = is_string($mirror) ? str_replace(DIRECTORY_SEPARATOR, '/', $mirror) : $mirror;
         if (!is_string($mirror) || is_link($mirrorDirectory)
             || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
         ) { throw new ConfigurationException('compiler source selection requires an isolated project mirror'); }
@@ -186,8 +188,10 @@ final class PluginSourceCompletion
 
     private function sourceDirectory(string $scope, string $path): string
     {
-        $path = str_replace('\\', '/', $path);
+        $scope = str_replace(DIRECTORY_SEPARATOR, '/', $scope);
+        $path = str_replace(DIRECTORY_SEPARATOR, '/', $path);
         $resolved = realpath($path);
+        $resolved = is_string($resolved) ? str_replace(DIRECTORY_SEPARATOR, '/', $resolved) : $resolved;
         if (!is_string($resolved) || !is_dir($resolved)
             || ($resolved !== $scope && !str_starts_with($resolved, $scope . '/'))
             || !str_starts_with($path, $scope . '/')
@@ -195,7 +199,7 @@ final class PluginSourceCompletion
         $cursor = $scope;
         foreach (explode('/', substr($path, strlen($scope) + 1)) as $part) {
             if ($part === '' || $part === '.') { continue; }
-            $cursor = $part === '..' ? dirname($cursor) : $cursor . '/' . $part;
+            $cursor = $part === '..' ? str_replace(DIRECTORY_SEPARATOR, '/', dirname($cursor)) : $cursor . '/' . $part;
             if (($cursor !== $scope && !str_starts_with($cursor, $scope . '/')) || is_link($cursor)) {
                 throw new ConfigurationException('replacement dependency source directory is unsafe: ' . $path);
             }

@@ -227,6 +227,7 @@ final class UpstreamProjectGenerator
     /** Validate the two PHP85 Intl fallbacks against the selected SDK and final compiler input. */
     private function assertIntlFunctionProviders(string $mirror, array $capabilities, array $manifest): void
     {
+        $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $mirror);
         $active = false;
         foreach ($manifest as $mapping) {
             if (($mapping['path'] ?? null) === 'vendor/symfony/polyfill-php85/bootstrap.php') { $active = true; }
@@ -264,13 +265,14 @@ final class UpstreamProjectGenerator
             if ($covered($source, $selection[2])) { continue; }
             $absolute = $mirror . '/' . $source;
             $resolved = realpath($absolute);
+            $resolved = is_string($resolved) ? str_replace(DIRECTORY_SEPARATOR, '/', $resolved) : $resolved;
             if (!is_string($resolved) || !str_starts_with($resolved, $mirror . '/')) { throw new ConfigurationException('PHP85 Intl provider source escapes the mirror'); }
             if (is_link($absolute)) { throw new ConfigurationException('PHP85 Intl provider input is a symlink'); }
             if (is_file($absolute)) { $files[$source] = $absolute; continue; }
             if (!is_dir($absolute)) { throw new ConfigurationException("PHP85 Intl provider source is missing: {$source}"); }
             $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($absolute, \FilesystemIterator::SKIP_DOTS));
             foreach ($iterator as $file) {
-                $path = substr($file->getPathname(), strlen($mirror) + 1);
+                $path = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
                 if ($covered($path, $selection[2])) { continue; }
                 if ($file->isLink()) { throw new ConfigurationException('PHP85 Intl provider input is a symlink'); }
                 if ($file->isFile() && str_ends_with($path, '.php')) { $files[$path] = $file->getPathname(); }

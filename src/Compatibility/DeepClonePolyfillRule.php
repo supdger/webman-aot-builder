@@ -42,8 +42,10 @@ final class DeepClonePolyfillRule
             throw new ConfigurationException('deepclone package policy drifted');
         }
         $sdk = is_string($sdkDirectory) && !is_link($sdkDirectory) ? realpath($sdkDirectory) : false;
+        $selectedSdk = is_string($targetContext['sdkDirectory'] ?? null) && !is_link($targetContext['sdkDirectory'])
+            ? realpath($targetContext['sdkDirectory']) : false;
         if (!is_string($sdk) || !is_dir($sdk)
-            || ($targetContext['sdkDirectory'] ?? null) !== $sdk
+            || $selectedSdk !== $sdk
             || !is_int($targetContext['phpVersionId'] ?? null) || $targetContext['phpVersionId'] <= 0
             || !is_bool($targetContext['deepcloneEnabled'] ?? null)
         ) {
