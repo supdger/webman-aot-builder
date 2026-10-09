@@ -15,7 +15,25 @@ try {
     }
     $version = Supdger\WebmanAotInstaller\Installer::VERSION;
     $release = json_decode((string) file_get_contents($root . '/packages/composer-installer/resources/releases.json'), true, flags: JSON_THROW_ON_ERROR);
-    if (($release['version'] ?? null) !== $version) {
+    $runtimeVersion = $release['version'] ?? '';
+    if (($release['schema'] ?? null) !== 1 || !is_string($runtimeVersion)
+        || !preg_match('/^\d+\.\d+\.\d+$/D', $runtimeVersion)
+        || !is_array($release['packages'] ?? null)
+        || array_keys($release['packages']) !== ['macos-arm64', 'windows-x86_64']) {
+        throw new RuntimeException('Invalid locked native runtime release metadata.');
+    }
+    foreach ($release['packages'] as $host => $package) {
+        $filename = 'webman-aot-builder-' . $runtimeVersion . '-full-' . $host
+            . ($host === 'macos-arm64' ? '.tar.gz' : '.zip');
+        if (!is_array($package) || ($package['filename'] ?? null) !== $filename
+            || ($package['url'] ?? null) !== 'https://github.com/supdger/webman-aot-builder/releases/download/v'
+                . $runtimeVersion . '/' . $filename
+            || !is_int($package['size'] ?? null) || $package['size'] <= 0
+            || !is_string($package['sha256'] ?? null) || !preg_match('/^[a-f0-9]{64}$/D', $package['sha256'])) {
+            throw new RuntimeException('Invalid locked native runtime asset: ' . $host);
+        }
+    }
+    if ($runtimeVersion !== $version) {
         throw new RuntimeException('Composer release must bind the same native runtime version.');
     }
     $name = 'webman-aot-builder-' . $version . '-composer';
@@ -73,7 +91,7 @@ try {
     }
     file_put_contents($resolved . '/SHA256SUMS', hash_file('sha256', $archive) . '  ' . basename($archive) . PHP_EOL);
     fwrite(STDOUT, '[package] Verified ' . count($expected) . ' source-identical files, ' . filesize($archive) . ' bytes; ' . $archive . PHP_EOL);
-    fwrite(STDOUT, '[package] Native runtime binding: v' . $release['version'] . '; publish with the matching complete release assets.' . PHP_EOL);
+    fwrite(STDOUT, '[package] Native runtime binding: v' . $release['version'] . '; assets remain pinned by filename, size and SHA-256.' . PHP_EOL);
 } catch (Throwable $error) {
     fwrite(STDERR, '[package failed] ' . $error->getMessage() . PHP_EOL);
     exit(1);
