@@ -6,7 +6,7 @@ namespace WebmanAotBuilder\Project {
     function rmdir(string $directory): bool
     {
         $state = &$GLOBALS['cleanupFixture'];
-        if ($directory === ($state['directory'] ?? null)) {
+        if (str_replace('\\', '/', $directory) === str_replace('\\', '/', $state['directory'] ?? '')) {
             $state['calls']++;
             if ($state['mode'] === 'transient' && $state['calls'] === 1) {
                 file_put_contents($directory . '/.DS_Store', 'created after enumeration');
@@ -23,7 +23,7 @@ namespace WebmanAotBuilder\Project {
 
     function unlink(string $file): bool
     {
-        if ($file === ($GLOBALS['cleanupFixture']['heldFile'] ?? null)) {
+        if (str_replace('\\', '/', $file) === str_replace('\\', '/', $GLOBALS['cleanupFixture']['heldFile'] ?? '')) {
             $state = &$GLOBALS['cleanupFixture'];
             if (($state['mode'] ?? '') === 'unlink-replace-link' && !isset($state['replaced'])) {
                 $directory = dirname($file);
@@ -75,6 +75,7 @@ namespace {
     $started = microtime(true);
     $root = sys_get_temp_dir() . '/webman-aot-cleanup-' . bin2hex(random_bytes(8));
     mkdir($root, 0700);
+    $root = realpath($root);
     $workspace = new ProjectWorkspace($root);
     $attempt = static function () use ($workspace): string {
         $path = $workspace->prepare(str_repeat('a', 64), str_repeat('b', 64))['build'];
@@ -99,7 +100,7 @@ namespace {
             $workspace->finishAttempt($path);
             trigger_error('handler restored', E_USER_WARNING);
         } finally { restore_error_handler(); }
-        ensure(!is_dir($path) && $GLOBALS['cleanupFixture']['calls'] === 2, 'transient metadata race did not recover');
+        ensure(!is_dir($path) && $GLOBALS['cleanupFixture']['calls'] === 2, 'transient metadata race did not recover; rmdir calls=' . $GLOBALS['cleanupFixture']['calls']);
         ensure($warnings === ['handler restored'], 'rmdir warning leaked or previous error handler changed');
         echo "PASS actual metadata write between enumeration and rmdir recovers\n";
 

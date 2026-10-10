@@ -284,4 +284,8 @@ A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnost
 macOS 当前生产路径专项已确认：正常/失败输出和退出码保持，success orphan 返回 78、failure orphan 保留 7，取消保原异常且本任务进程退出，PHP owner 死亡后进程组退出，错误 owner 不执行用户命令；POSIX 已打开 FD 的 unlink 后仍可读取原内容符合系统语义。该结果不替代最后 macOS 实际包消费。Windows 原生源码快测第五轮 CI `38063593122`（提交 `573f95a2654bc3b45815981cb5b658833a2890dd`）已 completed/success，九个场景通过：原生 Job 七项与 FileShare.None 500ms 释放恢复、15s 持续占用有界失败，持续失败保留现场文件、dist 和 cache；独立尾核在进行。8.26 仅此原生源码 fixture 切片完成，Windows 最终两包产物内同九项及实际消费仍待，8.27 未完成。
 
 
-macOS 最新小包的实际生命周期专项及 Workspace（4.889 秒）已通过；完整包构包（37.0 秒）及私有安装完成，最终包内验收尚待。上述源码快测、小包专项和完整包安装是不同证明范围，不将其合并宣称 0.4.6 双平台最终包全通过或已正式公开。Windows 原生快测记录 https://github.com/supdger/webman-aot-builder/actions/runs/38063593122。
+最新 r7 增加并修复嵌套 ProcessOutput 取消反例：外层取消等待本任务监督收尾，owner 死亡每轮立即核对并清理专有进程组，TERM-resistant 内层进程不再残留；不作用于外部进程。源码修订 `c79a689e3946842f451eebb97509a51b061b3f05`，独立 12 项源码身份与 macOS 八场景通过。
+
+macOS 该修订实际轻量包 SHA `84ccd2fe9967ab149461ce9d55361f56c15c63e58c67763861b0f149c7994471`、完整包 SHA `ec24c002fc4c51cc20979fd223627bcbbb5990ea1aa60a7762a17f69f9d29e22`：各包私有 PHP 执行包内生命周期八场景退出 0，Workspace 分别 4.861/4.855 秒通过；receipt `/private/tmp/webman-aot-cleanup-046/mac-packaged-r7-result.json`，独立包尾核进行中。此前 573f95a 包或源码快测不作为 r7 最终包证明。
+
+Windows 原生十场景 CI https://github.com/supdger/webman-aot-builder/actions/runs/38064636992 已 success 并独立核，含新增嵌套 Job 场景（0.940 秒、三个 worker 均退出）、短暂句柄恢复及持续约 1.6 秒有界失败保留文件/cache。最终 Windows 两个 0.4.6 包 producer 和包内十场景仍待，双平台公开消费者/Release/Wiki 未完成，8.27/8.24 保持待办。
