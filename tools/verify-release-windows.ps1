@@ -65,6 +65,23 @@ function Read-CompiledUnitCount([string]$Text) {
     }
     return $count
 }
+function Read-VerifiedCheckpointCount([string]$Cache) {
+    $records = @(Get-ChildItem -LiteralPath $Cache -Filter complete.json -Recurse -File)
+    $keys = @{}
+    foreach ($file in $records) {
+        $record = [IO.File]::ReadAllText($file.FullName,$utf8) | ConvertFrom-Json
+        $directory = $file.Directory
+        $object = Get-Item -LiteralPath (Join-Path $directory.FullName 'object')
+        if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($object.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $record.schema -ne 'webman-aot-object-v1' -or $record.inputKey -cnotmatch '^[a-f0-9]{64}$' -or
+            $directory.Name -cnotmatch ('^'+$record.inputKey+'-[a-f0-9]{24}$') -or $keys.ContainsKey($record.inputKey) -or
+            ($record.size -isnot [int] -and $record.size -isnot [long]) -or $record.size -le 0 -or $object.Length -ne $record.size -or
+            $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $object.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $record.sha256) { throw 'Initial native checkpoint evidence is invalid or duplicated.' }
+        $keys[$record.inputKey] = $true
+    }
+    if ($keys.Count -le 2) { throw 'Initial build did not preserve its cacheable native units.' }
+    return $keys.Count
+}
 foreach ($count in @(109,110)) {
     $lines = @(for ($index = 1; $index -le $count; $index++) { "[$index/$count] 100% fixture.cc" })
     $text = ($lines -join "`n")+"`nSuccessfully compiled $count files`n[resume] Reused verified objects: 0`n"
@@ -171,6 +188,10 @@ try {
             if ($verify.scope -ne 'build-host-structure-and-integrity' -or $verify.staticStructure -ne 'pass' -or [IO.Path]::GetFullPath($verify.path) -ne $expectedDist -or -not [regex]::IsMatch($guidedText,'(?m)^\[成功\] 校验本次项目产物，耗时 .+，退出码 0\r?$')) { throw 'Full setup did not prove successful automatic verify for this fixture.' }
             [IO.File]::WriteAllText((Join-Path $WorkRoot 'logs\actual-verify-report.json'),($verify | ConvertTo-Json -Depth 5),$utf8)
             $receipt.verifyScope = $verify.scope; $receipt.verifyPath = $verify.path; $receipt.compiledFiles = $unitCount
+            $checkpointUnitCount = Read-VerifiedCheckpointCount (Join-Path $fixture '.webman-aot-builder\cache\objects')
+            if ($checkpointUnitCount -gt $unitCount) { throw 'Native checkpoints exceed the verified compilation plan.' }
+            $receipt.checkpointFiles = $checkpointUnitCount
+            Write-Host "[release] Verified complete native plan: $unitCount units; cacheable checkpoint plan: $checkpointUnitCount units."
             $resumeEvidence = Join-Path $WorkRoot 'resumable-native'
             $installedRuntime = Join-Path $installHome 'current\runtime'
             $installedPhp = Join-Path $installedRuntime 'php.exe'
@@ -186,8 +207,8 @@ try {
             $env:WEBMAN_AOT_CALLER_CWD = $null
             $resumeResults = Get-Content -LiteralPath (Join-Path $resumeEvidence 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($resumeResults.Count -ne 5 -or @($resumeResults | Where-Object { $_.exit -ne 0 }).Count -ne 0 -or
-                $resumeResults[0].reused -ne 0 -or $resumeResults[1].reused -ne $unitCount -or
-                $resumeResults[2].reused -ne ($unitCount-2) -or $resumeResults[3].reused -ne ($unitCount-1) -or
+                $resumeResults[0].reused -ne 0 -or $resumeResults[1].reused -ne $checkpointUnitCount -or
+                $resumeResults[2].reused -ne ($checkpointUnitCount-2) -or $resumeResults[3].reused -ne ($checkpointUnitCount-1) -or
                 $resumeResults[4].reused -ne 0) { throw 'Installed runtime resume/invalidation/fresh assertions failed.' }
             $resumeLogs = Join-Path $WorkRoot 'logs\resumable-native'
             [IO.Directory]::CreateDirectory($resumeLogs) | Out-Null
