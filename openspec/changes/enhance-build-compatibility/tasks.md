@@ -274,7 +274,7 @@ A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnost
 - [ ] 8.24 独验及 0.4.6 实际包消费、公开 Release/Composer/Wiki 验收；macOS 与 Windows 下列真实占用、进程及包消费要求全部通过后才公开，源码专项不替代安装包消费。
 - [x] 8.25 在 macOS 实测已打开文件及目录、延迟退出的本任务构建子进程和持续外部写入边界；POSIX unlink 可移除打开文件的目录项，不将其误作 Windows 句柄删除限制。构建器应等待或正确处理自己创建的进程，不能把自身生命周期缺口归责用户代码。
 - [x] 8.26 在原生 Windows 实测实际文件/目录句柄占用、短暂释放后恢复、持续占用或写入的有界失败，以及本任务进程退出后的清理；不能用 macOS 模拟结果代替。保护既有外部进程和资源，不承诺外部持续占用必能删除。
-- [ ] 8.27 用两平台最终 0.4.6 实际包完成安装、项目构建/链接/产物验证与清理、失败后恢复及续编；核对公开资产身份、进程退出与不遗留本任务资源，保留原项目和用户宿主安装。只有最终成功结果才能称该消费路径通过。
+- [x] 8.27 两平台最终 0.4.6 实际包的隔离安装与包内生命周期/清理门禁通过，证明范围和两包差异见下方 r12 记录；公开资产身份、实际项目构建/链接/产物验证与恢复消费仍由 8.24 收尾，不将包内 fixture 当作完整项目消费。
 
 用户 0.4.5 日志的 1,890 个 native 编译与链接退出 0，产物阶段后的 ProjectWorkspace 清理 rmdir 失败使整轮退出 78；不将其写成编译失败，也不从目录非空推断用户具体写入者。修复专项证明短暂新增目录项可以安全恢复，持续写入与权限失败仍拒绝。用户残留 attempt、原项目和宿主安装未改，现 dist 不存在，不能声称用户当前产物可用。编译器 51 个补丁与原 ABI 未变化；8.20 旧 nested finally return 缺口及 Linux 原生业务未验边界仍保留。
 
@@ -284,8 +284,10 @@ A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnost
 macOS 当前生产路径专项已确认：正常/失败输出和退出码保持，success orphan 返回 78、failure orphan 保留 7，取消保原异常且本任务进程退出，PHP owner 死亡后进程组退出，错误 owner 不执行用户命令；POSIX 已打开 FD 的 unlink 后仍可读取原内容符合系统语义。该结果不替代最后 macOS 实际包消费。Windows 原生源码快测第五轮 CI `38063593122`（提交 `573f95a2654bc3b45815981cb5b658833a2890dd`）已 completed/success，九个场景通过：原生 Job 七项与 FileShare.None 500ms 释放恢复、15s 持续占用有界失败，持续失败保留现场文件、dist 和 cache；独立尾核在进行。8.26 仅此原生源码 fixture 切片完成，Windows 最终两包产物内同九项及实际消费仍待，8.27 未完成。
 
 
-最新 r7 增加并修复嵌套 ProcessOutput 取消反例：外层取消等待本任务监督收尾，owner 死亡每轮立即核对并清理专有进程组，TERM-resistant 内层进程不再残留；不作用于外部进程。源码修订 `c79a689e3946842f451eebb97509a51b061b3f05`，独立 12 项源码身份与 macOS 八场景通过。
+最终修订为 `339fca369fd5c07fa03b5eb6b91bf9962973947e`（r12），目录每次重扫与递归 dispatch 固定 canonical/devino 身份；Windows 已知目录链接只处理链接节点，失败后重新核父 scope 和 is_link，含 dangling 目录链接。此前 c79/r7 包作为历史专项保留，不作最终包证明。
 
-macOS 该修订实际轻量包 SHA `84ccd2fe9967ab149461ce9d55361f56c15c63e58c67763861b0f149c7994471`、完整包 SHA `ec24c002fc4c51cc20979fd223627bcbbb5990ea1aa60a7762a17f69f9d29e22`：各包私有 PHP 执行包内生命周期八场景退出 0，Workspace 分别 4.861/4.855 秒通过；receipt `/private/tmp/webman-aot-cleanup-046/mac-packaged-r7-result.json`，独立包尾核进行中。此前 573f95a 包或源码快测不作为 r7 最终包证明。
+macOS 最终轻量/完整包分别 SHA `b2b1c9628673210d4b5432354d80d645c020a37bbe2534ef602e4b6ba9123257`、`e8e9e7c7fedc7d0b9f8fb0e6cbe5dece7ba4d38cdfb8974436f8ece020f6d1d5`，各自实际私有 PHP 执行包内八个生命周期场景退出 0，Workspace 分别 4.950/4.944 秒通过。原始 `/private/tmp/webman-aot-cleanup-046/mac-packaged-r12-result.json`，独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/workspace-finish/mac-packaged-r12-readback.json` success。
 
-Windows 原生十场景 CI https://github.com/supdger/webman-aot-builder/actions/runs/38064636992 已 success 并独立核，含新增嵌套 Job 场景（0.940 秒、三个 worker 均退出）、短暂句柄恢复及持续约 1.6 秒有界失败保留文件/cache。最终 Windows 两个 0.4.6 包 producer 和包内十场景仍待，双平台公开消费者/Release/Wiki 未完成，8.27/8.24 保持待办。
+Windows 最终同源 producer CI https://github.com/supdger/webman-aot-builder/actions/runs/38065992300 success，实际完整包十个生命周期场景与 Workspace（3.463 秒）通过；轻量包另有隔离安装且与完整包共有的 197 个 app/runtime 文件逐字节相同，轻量包另有 53 个 upgradebundle 文件。该证明不是两个包各自重复运行十项。原始 `/private/tmp/webman-aot-release-046-20261010/windows-packaged-r12-verification.json`，独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/workspace-finish/windows-packaged-r12-readback.json` success。
+
+最终本地两平台包的已确认生命周期和清理门禁闭合；公开资产冻结、实际公开项目消费者及 Release/Composer/Wiki 尚待，8.24 保持待办，不能把包内生命周期专项改写成新项目 Linux 业务或用户宿主通过。旧 PHP nested finally return 语义缺口不属于本次监督/清理修复。
