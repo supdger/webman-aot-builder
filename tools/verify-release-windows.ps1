@@ -203,6 +203,20 @@ finally {
         $cleanupErrors = @()
         $tempRoot = Join-Path $WorkRoot 'temp'
         try {
+            if ($fixture -and (Test-Path -LiteralPath $fixture)) {
+                $configurationIndex = 0
+                foreach ($configuration in Get-ChildItem -LiteralPath $fixture -Filter 'project.linux.yml' -Recurse -File -Force) {
+                    $configurationIndex++
+                    Copy-Item -LiteralPath $configuration.FullName -Destination (Join-Path $WorkRoot "logs\project-$configurationIndex.linux.yml")
+                    Write-Host '[diagnostic] Actual generated compiler source lists:'
+                    $sourceSection = $false
+                    foreach ($line in [IO.File]::ReadAllLines($configuration.FullName,$utf8)) {
+                        if ($line -eq 'sources:' -or $line -eq 'ignore:') { $sourceSection = $true; Write-Host $line; continue }
+                        if ($line -ne '' -and -not $line.StartsWith(' ')) { $sourceSection = $false }
+                        if ($sourceSection -and $line.StartsWith('  - ')) { Write-Host $line }
+                    }
+                }
+            }
             foreach ($evidenceName in @('resumable-native','resumable-parent')) {
                 $evidencePath = Join-Path $WorkRoot $evidenceName
                 if (Test-Path -LiteralPath $evidencePath) {
