@@ -2,6 +2,13 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.6](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.6)
+
+- 修复产物阶段后临时工作区清理遇到新增目录项时的 `Directory not empty`：文件和目录删除均先重新核安全性并重试，最多尝试六次。持续写入、删除权限不足或不安全目录仍失败并给出恢复说明，不无限重试或忽略清理错误。
+- 构建命令监督仅负责本次创建的进程。成功父进程退出后子进程仍未结束时，先有界收尾并明确失败；原失败退出码或取消异常保留，不强杀外部程序。macOS 随包原生监督组件不要求用户另装运行时，Windows 使用系统原生 Job。
+- 不修改编译器链、组件 ABI 或项目源码。0.4.5 用户日志中的编译与链接已成功，失败位于后续清理；这不表示当前用户目录已有可用产物。升级后通过原构建入口重试，按实际完成结果验收。
+- 原有组件校验复用、正常续编和原项目保护保持；验证范围继续见 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。Linux 应用运行及已知嵌套 finally return 边界不因本次清理修复改变。
+
 ## [v0.4.5](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.5)
 
 - 修复 Windows Composer 插件源码补齐的文件系统路径边界：PSR-4/PSR-0 扫描及匹配路径统一分隔符，避免同一文件形成混合斜杠入口而被覆盖检查拒绝；生产范围和输出覆盖校验继续保留。
