@@ -43,6 +43,11 @@ public static class CommandJob {
     [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateJobObject(IntPtr job,uint code);
     [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code);
     [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+    public static IntPtr NewJob() { return CreateJobObject(IntPtr.Zero, null); }
+    public static bool Start(string application, string command, ref Startup startup, out Process process) {
+        return CreateProcess(application, new StringBuilder(command), IntPtr.Zero, IntPtr.Zero, true,
+            0x204, IntPtr.Zero, null, ref startup, out process);
+    }
     public static string ReadCommand(string path) {
         using (var file = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
                 System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
@@ -80,7 +85,7 @@ try {
     if (-not [CommandJob]::GetProcessTimes($owner,[ref]$ownerCreation,[ref]$exitTime,[ref]$kernelTime,[ref]$userTime) -or
         -not [CommandJob]::GetProcessTimes($self,[ref]$selfCreation,[ref]$exitTime,[ref]$kernelTime,[ref]$userTime) -or
         $ownerCreation -gt $selfCreation -or [CommandJob]::WaitForSingleObject($owner,0) -ne 258) { throw 'Command owner has already exited or changed.' }
-    $job = [CommandJob]::CreateJobObject([IntPtr]::Zero,$null)
+    $job = [CommandJob]::NewJob()
     if ($job -eq [IntPtr]::Zero) { throw 'Cannot create command lifetime boundary.' }
     $limits = New-Object CommandJob+Limits
     $limits.basic.flags = 0x2000
@@ -90,8 +95,8 @@ try {
     $startup.size = [Runtime.InteropServices.Marshal]::SizeOf($startup)
     $startup.flags = 0x100
     $startup.input = [CommandJob]::GetStdHandle(-10); $startup.output = [CommandJob]::GetStdHandle(-11); $startup.error = [CommandJob]::GetStdHandle(-12)
-    $line = New-Object Text.StringBuilder (($arguments | ForEach-Object { [CommandJob]::Quote($_) }) -join ' ')
-    if (-not [CommandJob]::CreateProcess($arguments[0],$line,[IntPtr]::Zero,[IntPtr]::Zero,$true,0x204,[IntPtr]::Zero,$null,[ref]$startup,[ref]$process)) { throw ('Cannot start command: '+[Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
+    $line = ($arguments | ForEach-Object { [CommandJob]::Quote($_) }) -join ' '
+    if (-not [CommandJob]::Start($arguments[0],$line,[ref]$startup,[ref]$process)) { throw ('Cannot start command: '+[Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
     if (-not [CommandJob]::AssignProcessToJobObject($job,$process.handle)) { throw ('Cannot isolate command: '+[Runtime.InteropServices.Marshal]::GetLastWin32Error()) }
     $assigned = $true
     if ([CommandJob]::WaitForSingleObject($owner,0) -ne 258) { throw 'Command owner exited before command startup.' }
