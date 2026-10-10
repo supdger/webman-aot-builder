@@ -19,7 +19,7 @@ function ensure(bool $condition, string $message): void {
 function groupGone(string $file): void {
     ensure(is_file($file), 'command never entered its own group');
     $pid = trim((string) file_get_contents($file));
-    ensure(ctype_digit($pid), 'fixture group identity is invalid');
+    ensure(preg_match('/^[0-9]+$/D', $pid) === 1, 'fixture group identity is invalid');
     $process = proc_open(['/bin/kill', '-0', '-' . $pid], [0 => ['file','/dev/null','r'], 1 => ['file','/dev/null','w'], 2 => ['file','/dev/null','w']], $pipes);
     ensure(is_resource($process) && proc_close($process) !== 0, 'owned descendants remain');
 }
