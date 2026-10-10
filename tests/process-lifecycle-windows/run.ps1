@@ -108,6 +108,12 @@ try {
         Assert-Gone $records
         $receipt.cases += @{name=$name; result=$r; descendants=@(Records $records); aliveAfter=@()}
     }
+    $records=Join-Path $Evidence 'nested-pids'
+    $r=Run-Command 'nested' 'nested-cancel' @($worker,'root-stays',$records,'30000')
+    $owned += Records $records
+    Ensure ($r.cancelled -eq $true) 'nested callback exception preserved'
+    Assert-Gone $records
+    $receipt.cases += @{name='nested-job-cancellation'; result=$r; descendants=@(Records $records); aliveAfter=@()}
     $expected=@('', 'space argument', '中文', 'quote"argument', 'trailing\', '&|<>%!^')
     $r=Run-Command 'argv' 'run' (@($worker,'args')+$expected)
     $actual=@(($r.output.'1' -split "`r?`n" | Select-Object -SkipLast 1) | ForEach-Object { [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($_)) })

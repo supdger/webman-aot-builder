@@ -47,13 +47,17 @@ try {
         $record['success'] = true;
     } else {
         $command = json_decode(file_get_contents($input), true, flags: JSON_THROW_ON_ERROR);
+        if ($mode === 'nested-cancel') {
+            $command = [PHP_BINARY, '-c', dirname(PHP_BINARY) . '/php.ini', '-d', 'extension_dir=' . dirname(PHP_BINARY) . '/ext', __FILE__, $app, 'nested-worker', $input, $receipt . '.inner'];
+        }
         $output = [1 => '', 2 => ''];
         try {
             $code = WebmanAotBuilder\Cli\ProcessOutput::run(
                 $command, dirname($input), null, ['file', 'NUL', 'r'],
                 static function (int $index, string $chunk) use (&$output, $mode): void {
                     $output[$index] .= $chunk;
-                    if ($mode === 'callback-cancel' && str_contains($chunk, 'ROOTREADY')) {
+                    if ($mode === 'nested-worker') { fwrite($index === 1 ? STDOUT : STDERR, $chunk); }
+                    if (in_array($mode, ['callback-cancel', 'nested-cancel'], true) && str_contains($chunk, 'ROOTREADY')) {
                         throw new RuntimeException('owned callback cancellation');
                     }
                 },
@@ -63,7 +67,7 @@ try {
             );
             $record['exit'] = $code;
         } catch (RuntimeException $e) {
-            if ($mode !== 'callback-cancel' || $e->getMessage() !== 'owned callback cancellation') { throw $e; }
+            if (!in_array($mode, ['callback-cancel', 'nested-cancel'], true) || $e->getMessage() !== 'owned callback cancellation') { throw $e; }
             $record['cancelled'] = true;
         }
         $record['output'] = $output;

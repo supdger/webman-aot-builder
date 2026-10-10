@@ -90,7 +90,7 @@ int main(int argc, char **argv) {
             fputs("[清理] 本次命令的子进程未退出，正在停止并保留构建恢复信息。\n", stderr);
             kill(-child, SIGTERM);
         }
-        if (stopping && elapsed - stop_time >= 1.0) kill(-child, SIGKILL);
+        if (stopping && (getppid() != owner || elapsed - stop_time >= 1.0)) kill(-child, SIGKILL);
         if (stopping && elapsed - stop_time >= 4.0) {
             fputs("[失败] 本次命令仍有未退出的子进程；请保留构建目录和日志后重试。\n", stderr);
             result = 78;

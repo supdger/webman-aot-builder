@@ -26,6 +26,12 @@ function groupGone(string $file): void {
 function command(string $root, string $name, string $end): array {
     return ['/bin/sh', '-c', 'echo $$ > "$1"; /bin/sh -c "sleep 20 & wait" & echo ready; ' . $end, 'fixture', $root . '/' . $name . '.group'];
 }
+if (($argv[3] ?? '') === '--nested-worker') {
+    ProcessOutput::run(['/bin/sh', '-c', 'echo $$ > "$1"; trap "" TERM; /bin/sh -c \'trap "" TERM; sleep 20 & wait\' & echo nested-ready; wait', 'fixture', $root . '/nested.group'],
+        null, null, ['file','/dev/null','r'],
+        static function(int $index, string $text): void { fwrite($index === 1 ? STDOUT : STDERR, $text); }, static fn() => null);
+    exit(0);
+}
 if (($argv[3] ?? '') === '--owner-worker') {
     ProcessOutput::run(command($root, 'owner', 'wait'), null, null, ['file','/dev/null','r'],
         static function(int $index, string $text) use ($root): void { file_put_contents($root . '/owner.ready', $text); }, static fn() => null);
@@ -51,6 +57,13 @@ try {
     throw new RuntimeException('callback cancellation ignored');
 } catch(RuntimeException $error) { ensure($error->getMessage()==='fixture cancellation','original cancellation changed'); }
 groupGone($root.'/cancel.group'); echo "PASS callback cancellation reaps child and grandchild\n";
+try {
+    ProcessOutput::run([PHP_BINARY,'-n',__FILE__,$app,$root,'--nested-worker'],null,null,['file','/dev/null','r'],
+        static function(int $index,string $text):void { if(str_contains($text,'nested-ready')){throw new RuntimeException('nested cancellation');} },static fn()=>null);
+    throw new RuntimeException('nested cancellation ignored');
+} catch(RuntimeException $error) { ensure($error->getMessage()==='nested cancellation','nested cancellation changed'); }
+groupGone($root.'/nested.group'); echo "PASS nested cancellation reaps TERM-resistant descendants\n";
+
 $owner = proc_open([PHP_BINARY,'-n',__FILE__,$app,$root,'--owner-worker'],[0=>['file','/dev/null','r'],1=>['file',$root.'/owner.log','w'],2=>['file',$root.'/owner.log','a']],$pipes);
 ensure(is_resource($owner),'owner fixture failed'); $deadline=microtime(true)+5;
 while(!is_file($root.'/owner.ready')) {

@@ -272,8 +272,8 @@ A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnost
 
 - [x] 8.23 修复清理目录枚举与 rmdir 之间出现新目录项的可复现竞态；每次重试重新检查原有目录安全性并重扫，六次有界失败仍报告。真实 .DS_Store 新增竞态恢复、持续普通文件写入、unlink 失败、POSIX 0500 权限、外部 symlink 与根替换边界专项通过，旧 resumable-workspace 回归通过。初版源码记录 `/private/tmp/webman-aot-cleanup-046/fixed-source.json`，正式 1.681 秒退出 0，既有回归 0.17 秒退出 0。
 - [ ] 8.24 独验及 0.4.6 实际包消费、公开 Release/Composer/Wiki 验收；macOS 与 Windows 下列真实占用、进程及包消费要求全部通过后才公开，源码专项不替代安装包消费。
-- [ ] 8.25 在 macOS 实测已打开文件及目录、延迟退出的本任务构建子进程和持续外部写入边界；POSIX unlink 可移除打开文件的目录项，不将其误作 Windows 句柄删除限制。构建器应等待或正确处理自己创建的进程，不能把自身生命周期缺口归责用户代码。
-- [ ] 8.26 在原生 Windows 实测实际文件/目录句柄占用、短暂释放后恢复、持续占用或写入的有界失败，以及本任务进程退出后的清理；不能用 macOS 模拟结果代替。保护既有外部进程和资源，不承诺外部持续占用必能删除。
+- [x] 8.25 在 macOS 实测已打开文件及目录、延迟退出的本任务构建子进程和持续外部写入边界；POSIX unlink 可移除打开文件的目录项，不将其误作 Windows 句柄删除限制。构建器应等待或正确处理自己创建的进程，不能把自身生命周期缺口归责用户代码。
+- [x] 8.26 在原生 Windows 实测实际文件/目录句柄占用、短暂释放后恢复、持续占用或写入的有界失败，以及本任务进程退出后的清理；不能用 macOS 模拟结果代替。保护既有外部进程和资源，不承诺外部持续占用必能删除。
 - [ ] 8.27 用两平台最终 0.4.6 实际包完成安装、项目构建/链接/产物验证与清理、失败后恢复及续编；核对公开资产身份、进程退出与不遗留本任务资源，保留原项目和用户宿主安装。只有最终成功结果才能称该消费路径通过。
 
 用户 0.4.5 日志的 1,890 个 native 编译与链接退出 0，产物阶段后的 ProjectWorkspace 清理 rmdir 失败使整轮退出 78；不将其写成编译失败，也不从目录非空推断用户具体写入者。修复专项证明短暂新增目录项可以安全恢复，持续写入与权限失败仍拒绝。用户残留 attempt、原项目和宿主安装未改，现 dist 不存在，不能声称用户当前产物可用。编译器 51 个补丁与原 ABI 未变化；8.20 旧 nested finally return 缺口及 Linux 原生业务未验边界仍保留。
@@ -281,4 +281,7 @@ A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnost
 
 0.4.6 进一步将文件 unlink 与目录 rmdir 均纳入六次有界安全重试，持续外部占用仍明确保留错误，不强杀外部程序。ProcessOutput 接平台原生本任务进程监督：macOS 随包原生组件不要求用户另装运行时；Windows 使用系统 PowerShell 原生 Job，按 owner PID/identity 核对后才启动。成功父退出后仍有子进程不结束时有界收尾并报失败，原失败码与取消异常保持。
 
-macOS 当前生产路径专项已确认：正常/失败输出和退出码保持，success orphan 返回 78、failure orphan 保留 7，取消保原异常且本任务进程退出，PHP owner 死亡后进程组退出，错误 owner 不执行用户命令；POSIX 已打开 FD 的 unlink 后仍可读取原内容符合系统语义。该结果不替代最后 macOS 实际包消费。Windows FileShare.None 短暂 500ms/持续 15s、原生 Job 子进程及 owner kill fixture 等待原生 CI，8.26/8.27 未完成，不能先宣称 Windows 通过。
+macOS 当前生产路径专项已确认：正常/失败输出和退出码保持，success orphan 返回 78、failure orphan 保留 7，取消保原异常且本任务进程退出，PHP owner 死亡后进程组退出，错误 owner 不执行用户命令；POSIX 已打开 FD 的 unlink 后仍可读取原内容符合系统语义。该结果不替代最后 macOS 实际包消费。Windows 原生源码快测第五轮 CI `38063593122`（提交 `573f95a2654bc3b45815981cb5b658833a2890dd`）已 completed/success，九个场景通过：原生 Job 七项与 FileShare.None 500ms 释放恢复、15s 持续占用有界失败，持续失败保留现场文件、dist 和 cache；独立尾核在进行。8.26 仅此原生源码 fixture 切片完成，Windows 最终两包产物内同九项及实际消费仍待，8.27 未完成。
+
+
+macOS 最新小包的实际生命周期专项及 Workspace（4.889 秒）已通过；完整包构包（37.0 秒）及私有安装完成，最终包内验收尚待。上述源码快测、小包专项和完整包安装是不同证明范围，不将其合并宣称 0.4.6 双平台最终包全通过或已正式公开。Windows 原生快测记录 https://github.com/supdger/webman-aot-builder/actions/runs/38063593122。
