@@ -6,11 +6,23 @@
 
 已安装时直接运行：
 
+macOS 终端：
+
 ```sh
-composer global exec -- webman-aot guide
+php "$(composer global config bin-dir --absolute)/webman-aot" guide
 ```
 
-选择开始会自动复用资源或准备当前开发机的完整包；也可导入已下载包、结束。准备成功后进入原有项目菜单，输入或拖入项目完整路径，构建成功自动校验并显示产物位置；失败可继续编译、重选目录、全量重建或结束。无需查 bin、修改 PATH 或先查版本。包安装与项目流程结果分别显示，Composer 后续安全审计照常执行。只有终端中单独全局 require 本包会自动引导；其他包、局部项目、其他 Composer 命令、`--no-plugins`、`--no-scripts`、`--dry-run`、`--no-update`、`--no-install`、非交互与 CI 不自动打开菜单。拒绝信任后仍可使用上方显式命令；插件不会自行更改信任配置。
+Windows PowerShell：
+
+```powershell
+$aotBin = (composer global config bin-dir --absolute).Trim()
+if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
+php (Join-Path $aotBin 'webman-aot') guide
+```
+
+直接 PHP 入口不受 `composer global exec` 默认 300 秒子进程超时限制，适合下载完整包及长时间交互；无需修改 Composer 全局超时。
+
+选择开始会自动复用资源或准备当前开发机的完整包；也可导入已下载包、结束。准备成功后进入原有项目菜单，输入或拖入项目完整路径，构建成功自动校验并显示产物位置；失败可继续编译、重选目录、全量重建或结束。命令自动取得代理路径，无需修改 PATH 或先查版本。包安装与项目流程结果分别显示，Composer 后续安全审计照常执行。只有终端中单独全局 require 本包会自动引导；其他包、局部项目、其他 Composer 命令、`--no-plugins`、`--no-scripts`、`--dry-run`、`--no-update`、`--no-install`、非交互与 CI 不自动打开菜单。拒绝信任后仍可使用上方显式命令；插件不会自行更改信任配置。
 
 已配置 Composer 命令目录的终端也可直接运行 `webman-aot`。非终端无参仅提示入口，不准备资源。显式 `guide` 只在确认为已连接控制台时恢复交互；`--non-interactive`、`COMPOSER_NO_INTERACTION=1` 或 `CI=1` 阻止恢复和隐式准备。
 
@@ -56,7 +68,20 @@ composer global require "supdger/webman-aot-builder:*" --no-scripts
 
 ```sh
 composer global exec -- webman-aot --version
-composer global exec -- webman-aot guide
+```
+
+macOS 终端：
+
+```sh
+php "$(composer global config bin-dir --absolute)/webman-aot" guide
+```
+
+Windows PowerShell：
+
+```powershell
+$aotBin = (composer global config bin-dir --absolute).Trim()
+if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
+php (Join-Path $aotBin 'webman-aot') guide
 ```
 
 选择“开始”准备该入口对应的完整运行时；已就绪则复用。只更新入口不表示运行环境已升级。选择结束可暂不升级运行环境。安装器保留被替换的旧运行时备份；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
@@ -83,7 +108,7 @@ $aotBin = (composer global config bin-dir --absolute).Trim()
 & (Join-Path $aotBin 'webman-aot.bat') --version
 ```
 
-此清理流程用 `--no-scripts` 先跳过自动项目菜单。按列表对旧原生版本、旧公开命令和历史备份选择 `y`；对“Composer 全局包（supdger/webman-aot-builder）”选择 `n` 保留新入口。需要清空已有 Composer 私有运行时以重新准备时，单独确认该状态项；安装锁与用户文件保留。若也选了卸载 Composer 全局包，需再次运行首行安装命令，然后重新取得命令目录。清理后运行 `composer global exec -- webman-aot guide`，按同一菜单准备资源并选择项目。上述参数不修改用户 PATH，旧空 PATH 目录可另行核对整理。
+此清理流程用 `--no-scripts` 先跳过自动项目菜单。按列表对旧原生版本、旧公开命令和历史备份选择 `y`；对“Composer 全局包（supdger/webman-aot-builder）”选择 `n` 保留新入口。需要清空已有 Composer 私有运行时以重新准备时，单独确认该状态项；安装锁与用户文件保留。若也选了卸载 Composer 全局包，需再次运行首行安装命令，然后重新取得命令目录。清理后在同一 PowerShell 窗口运行 `php (Join-Path $aotBin 'webman-aot') guide`，按同一菜单准备资源并选择项目。上述参数不修改用户 PATH，旧空 PATH 目录可另行核对整理。
 
 先只读查看类型、静态版本和绝对路径，再逐项输入 `y` 卸载、回车保留或 `q` 结束；非交互环境始终保留。入口不会先下载或安装运行时。自定义状态目录使用 `webman-aot uninstall --state-dir="目录"`；自定义原生目录可用 `--home="目录"`、命令目录用 `--bin-dir="目录"`。仅清理可确认归属的选中对象，未知旧入口保留并显示精确路径；Composer 全局包由 Composer 移除这一包，其他全局工具保留。Composer 状态根的 `setup.lock` 与额外用户文件保留，避免并发安装换锁；项目产物、独立安装根的共享工具链与 PATH 保留；卸载 Composer 私有运行时会同时移除其内部工具链、日志及缓存，之后构建需重新准备。旧备份命令不会恢复；失败返回非零并列出残留。
 

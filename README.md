@@ -30,8 +30,18 @@ composer global require "supdger/webman-aot-builder:*"
 
 下次使用：
 
+macOS 终端：
+
 ```sh
-composer global exec -- webman-aot guide
+php "$(composer global config bin-dir --absolute)/webman-aot" guide
+```
+
+Windows PowerShell：
+
+```powershell
+$aotBin = (composer global config bin-dir --absolute).Trim()
+if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
+php (Join-Path $aotBin 'webman-aot') guide
 ```
 
 升级或修复丢失的 Composer 入口，始终使用同一条命令，无需先卸载：
@@ -46,10 +56,25 @@ composer global require "supdger/webman-aot-builder:*" --no-scripts
 
 ```sh
 composer global exec -- webman-aot --version
-composer global exec -- webman-aot guide
+```
+
+macOS 终端：
+
+```sh
+php "$(composer global config bin-dir --absolute)/webman-aot" guide
+```
+
+Windows PowerShell：
+
+```powershell
+$aotBin = (composer global config bin-dir --absolute).Trim()
+if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
+php (Join-Path $aotBin 'webman-aot') guide
 ```
 
 选择“开始”准备该入口对应的完整运行时；已就绪则复用。只更新入口不表示运行环境已升级。选择结束可暂不升级运行环境。安装器保留被替换的旧运行时备份；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
+
+直接 PHP 入口不受 `composer global exec` 默认 300 秒子进程超时限制，适合下载完整包及长时间交互；无需修改 Composer 全局超时。
 
 ### 方式二：原生安装包
 

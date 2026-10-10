@@ -100,3 +100,13 @@ v0.3.4实际公开发行结果：
 衔接验证曾发现并保留失败证据：`composer global exec -- webman-aot guide` 在真实 PTY 子进程 stdin/stdout 非TTY、`/dev/tty` 不可打开；COMPOSER_NO_INTERACTION/CI 为空，并非自动化标记阻止。相同夹具直接 PHP 代理 guide 正常显示对应目标版本和菜单；两种状态选择结束均保留运行环境。进一步在正常授权隔离环境核对 controllingTTY：pty.fork 子进程与 Composer exec 的 stdin/stdout 均为TTY，/dev/tty 可打开，Composer exec guide 与直接 PHP proxy guide 均正常开菜单/选择结束；因此前次失效属于工具 sandbox 权限限制，不是已证实产品缺陷。日志 `/private/tmp/webman-aot-upgrade-20261010/guide-control-terminal-unrestricted.log`。README 升级衔接使用已实测可用的统一官方 `composer global exec -- webman-aot guide`；直接 PHP 代理只作受限 sandbox 对照，卸载仍使用它进行逐项确认。没有修改 Console 执行器。未在本轮执行真实完整运行时升级或 Windows PowerShell。
 
 公开 Wiki 受影响两页由独立文档子任务准备于 `/tmp/webman-aot-public-docs-candidate-20261010`（Install/Upgrade-Uninstall），已纠正原源码 cwd+exit 卸载块及 update 升级块，区分入口恢复和运行时准备；本地链接检查 20 页 0 errors、1 既有导航 warning。未发布，实际发布须另按本轮任务授权边界处理。
+
+
+## 7. 长下载入口超时文档修复（2026-10-10）
+
+用户按已公开升级流程运行 `composer global exec -- webman-aot guide`，准备完整包时触发 Composer 默认 300 秒子进程超时。产品验收目标：用户通过已安装入口准备资源或等待菜单时，不再被这个外层总时长限制中断；沿用现有下载校验与状态恢复，不将入口修复冒称完整运行时升级。
+
+- [x] 7.1 两份 README 和 Wiki 的 Install/Upgrade-Uninstall 独立 guide 示例改为直接 PHP Composer 代理；分别给 macOS/PowerShell 命令，不修改全局超时配置。
+- [x] 7.2 现有真实 Composer PTY 回归增加缩短超时对照。PHP 8.4/Composer 2.9.5/macOS 隔离 ZIP 安装后，仅等待菜单：`COMPOSER_PROCESS_TIMEOUT=1` 时 Composer exec 在约 1.26 秒超时；相同环境直接 PHP 代理等待 2 秒再选择结束，约 2.17 秒退出 0。4 项检查通过，运行时哨兵保留，无下载或运行时写入，临时 HOME/global/cache 清理完成。
+
+验证命令：`python3 packages/composer-installer/tests/plugin.py /private/tmp/webman-aot-guide-timeout-20261010/webman-aot-builder-0.4.3-composer.zip --guide-timeout-only`。这是缩短超时模拟，不是等待真实 300 秒或完整下载验收；Windows PowerShell 仅静态核对，未作 Windows 原生运行。候选只改文档、现有测试与本任务记录；不执行用户宿主 guide/setup，不处理其完整包缓存，不修改生产执行器，不包含跨版本组件复用修复。
