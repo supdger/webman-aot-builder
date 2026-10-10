@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Cli;
 
+require_once __DIR__ . '/ProcessSupervisor.php';
+
 /** Poll regular files: Windows anonymous process pipes cannot be made reliably nonblocking. */
 final class ProcessOutput
 {
@@ -17,6 +19,7 @@ final class ProcessOutput
     {
         $files = [];
         $process = null;
+        $commandFile = null;
         try {
             foreach ([1, 2] as $index) {
                 $files[$index] = tmpfile();
@@ -24,6 +27,7 @@ final class ProcessOutput
                     throw new \RuntimeException('unable to create private process output file');
                 }
             }
+            $command = ProcessSupervisor::command($command, $directory, $environment, $commandFile);
             $process = proc_open($command, [0 => $input, 1 => $files[1], 2 => $files[2]], $pipes, $directory, $environment, ['bypass_shell' => true]);
             if (!is_resource($process)) {
                 throw new \RuntimeException('unable to start process');
@@ -65,9 +69,22 @@ final class ProcessOutput
             }
         } finally {
             if (is_resource($process)) {
+                if (PHP_OS_FAMILY === 'Windows' && is_resource($commandFile)) {
+                    rewind($commandFile);
+                    ftruncate($commandFile, 0);
+                    fwrite($commandFile, 'cancel');
+                    fflush($commandFile);
+                    $deadline = microtime(true) + 6;
+                    do {
+                        $status = proc_get_status($process);
+                        if (!$status['running']) { break; }
+                        usleep(20000);
+                    } while (microtime(true) < $deadline);
+                }
                 proc_terminate($process);
                 proc_close($process);
             }
+            if (is_resource($commandFile)) { fclose($commandFile); }
             foreach ($files as $file) {
                 if (is_resource($file)) {
                     fclose($file); // tmpfile removes its private file on close, including failures.

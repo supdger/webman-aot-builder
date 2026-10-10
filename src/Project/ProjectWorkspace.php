@@ -188,19 +188,59 @@ final class ProjectWorkspace
             if ($entry->isDir() && !$entry->isLink()) {
                 $this->removeDirectory($entry->getPathname());
             } else {
-                unlink($entry->getPathname());
+                $path = $entry->getPathname();
+                $reason = 'file removal failed';
+                $removed = false;
+                for ($attempt = 0; $attempt < 6; $attempt++) {
+                    set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
+                        $reason = $message;
+                        return true;
+                    }, E_WARNING);
+                    try { $removed = unlink($path); }
+                    finally { restore_error_handler(); }
+                    if ($removed) { break; }
+                    clearstatcache(true, $path);
+                    if (!file_exists($path) && !is_link($path)) { $removed = true; break; }
+                    if ($attempt < 5) { usleep(50000 * (2 ** $attempt)); }
+                }
+                if (!$removed) {
+                    $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', str_replace($path, '<file>', $reason)) ?? 'file removal failed';
+                    throw new ConfigurationException("unable to remove workspace file after 6 attempts: {$path}; " . substr($reason, 0, 400));
+                }
             }
         }
     }
 
     private function removeDirectory(string $directory): void
     {
-        if (!is_dir($directory) || is_link($directory)) {
-            throw new ConfigurationException("workspace directory is unsafe: {$directory}");
+        $reason = 'directory removal failed';
+        for ($attempt = 0; $attempt < 6; $attempt++) {
+            clearstatcache(true, $directory);
+            if (!is_dir($directory) || is_link($directory)) {
+                throw new ConfigurationException("workspace directory is unsafe: {$directory}");
+            }
+            $this->removeContents($directory);
+            set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
+                $reason = $message;
+                return true;
+            }, E_WARNING);
+            try {
+                $removed = rmdir($directory);
+            } finally {
+                restore_error_handler();
+            }
+            if ($removed) {
+                return;
+            }
+            if ($attempt < 5) {
+                usleep(50000 * (2 ** $attempt));
+            }
         }
-        $this->removeContents($directory);
-        if (!rmdir($directory)) {
-            throw new ConfigurationException("unable to remove workspace directory: {$directory}");
-        }
+        $reason = str_replace($directory, '<directory>', $reason);
+        $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', $reason) ?? 'directory removal failed';
+        throw new ConfigurationException(
+            "unable to remove workspace directory after 6 attempts: {$directory}; " . substr($reason, 0, 400)
+            . '; close programs writing to the build workspace, check directory permissions, and retry webman-aot build'
+        );
     }
 }

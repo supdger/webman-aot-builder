@@ -131,6 +131,7 @@ final class InstallerPackager
         }
         $stage = $workspace . '/macos-arm64';
         $this->stageApplication($stage, $typePhpLicense);
+        $this->stageProcessSupervisor($stage, true);
         $this->createDirectory($stage . '/payload/runtime/bin');
         if (!copy($runtimePath, $stage . '/payload/runtime/bin/php')) {
             throw new RuntimeException('unable to stage macOS private PHP runtime');
@@ -232,6 +233,7 @@ final class InstallerPackager
         }
         $stage = $workspace . '/windows-x86_64';
         $this->stageApplication($stage, $typePhpLicense);
+        $this->stageProcessSupervisor($stage, false);
         $extract = $workspace . '/windows-runtime-extract';
         $this->extractLockedZip($runtimeArchive, $extract);
         $source = $extract;
@@ -416,6 +418,22 @@ final class InstallerPackager
             $full ? 'full installer' : 'small installer',
             filesize($source)
         ));
+    }
+
+    private function stageProcessSupervisor(string $stage, bool $mac): void
+    {
+        $destination = $stage . '/payload/app/installer/process-supervisor';
+        $this->createDirectory($destination);
+        $source = $this->root . '/installer/process-supervisor/' . ($mac ? 'macos.c' : 'windows.ps1');
+        $this->copyRequiredFile($source, $destination . '/' . basename($source));
+        if (!$mac) { return; }
+        $binary = $stage . '/payload/app/bin/process-supervisor';
+        $process = proc_open(['/usr/bin/clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', $source, '-o', $binary],
+            [0 => ['file', '/dev/null', 'r'], 1 => STDOUT, 2 => STDERR], $pipes);
+        if (!is_resource($process) || proc_close($process) !== 0 || !is_file($binary)) {
+            throw new RuntimeException('unable to build macOS command cleanup component');
+        }
+        chmod($binary, 0700);
     }
 
     private function stageApplication(string $stage, string $typePhpLicense): void
