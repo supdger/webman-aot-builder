@@ -202,7 +202,8 @@ final class PluginSourceCompletion
                         foreach ($iterator as $file) {
                             if ($file->isLink()) { throw new ConfigurationException('production dependency namespace contains a link'); }
                             if (!$file->isFile() || $file->getExtension() !== 'php' || !$this->hasClassDeclaration($file->getPathname())) { continue; }
-                            $autoloadPath = substr($file->getPathname(), strlen($absolute) + 1, -4);
+                            $filePath = str_replace(DIRECTORY_SEPARATOR, '/', $file->getPathname());
+                            $autoloadPath = substr($filePath, strlen($absolute) + 1, -4);
                             $matches = false;
                             foreach ($this->classDeclarations($file->getPathname()) as $declaration) {
                                 if ($kind === 'psr-4') {
@@ -216,7 +217,7 @@ final class PluginSourceCompletion
                                 if ($matches) { break; }
                             }
                             if (!$matches) { continue; }
-                            $relative = substr($file->getPathname(), strlen($mirror) + 1);
+                            $relative = substr($filePath, strlen($mirror) + 1);
                             $selected[$relative] = true;
                         }
                     }
@@ -246,6 +247,7 @@ final class PluginSourceCompletion
                             if (!$file->isFile()) { continue; }
                             $file = $file->getPathname();
                         }
+                        $file = str_replace(DIRECTORY_SEPARATOR, '/', $file);
                         if (!str_ends_with($file, '.php') || ($kind === 'classmap' && !$this->hasClassDeclaration($file))) { continue; }
                         $relative = substr($file, strlen($mirror) + 1);
                         $excluded = false;
