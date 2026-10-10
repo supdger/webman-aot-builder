@@ -73,7 +73,9 @@ namespace {
     {
         foreach (new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS) as $entry) {
             if ($entry->isDir() && !$entry->isLink()) { removeFixture($entry->getPathname()); }
-            elseif (PHP_OS_FAMILY === 'Windows' && $entry->isLink() && $entry->isDir()) { \rmdir($entry->getPathname()); }
+            elseif (PHP_OS_FAMILY === 'Windows' && $entry->isLink()) {
+                if (!@\unlink($entry->getPathname())) { \rmdir($entry->getPathname()); }
+            }
             else { \unlink($entry->getPathname()); }
         }
         \rmdir($directory);
@@ -148,9 +150,14 @@ namespace {
         $path = $attempt();
         symlink($external, $path . '/project/external-directory');
         symlink($external . '/keep', $path . '/project/external-file');
+        mkdir($external . '/missing-directory');
+        symlink($external . '/missing-directory', $path . '/project/dangling-directory');
+        \rmdir($external . '/missing-directory');
         $GLOBALS['cleanupFixture'] = [];
         $workspace->finishAttempt($path);
         ensure(file_get_contents($external . '/keep') === 'outside owned attempt', 'cleanup followed external symlink');
+        ensure(!is_dir($path), 'file, directory or dangling directory link prevented cleanup');
+        echo "PASS file, directory and dangling directory links are removed without following targets\n";
 
         $path = $attempt();
         file_put_contents($external . '/object', 'external sentinel');

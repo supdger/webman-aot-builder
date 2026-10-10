@@ -197,7 +197,7 @@ final class ProjectWorkspace
                 $this->removeDirectory($entry->getPathname());
             } else {
                 $path = $entry->getPathname();
-                $directoryLink = PHP_OS_FAMILY === 'Windows' && $entry->isLink() && $entry->isDir();
+                $windowsLink = PHP_OS_FAMILY === 'Windows' && $entry->isLink();
                 $reason = 'file removal failed';
                 $removed = false;
                 for ($attempt = 0; $attempt < 6; $attempt++) {
@@ -211,7 +211,18 @@ final class ProjectWorkspace
                         $reason = $message;
                         return true;
                     }, E_WARNING);
-                    try { $removed = $directoryLink ? rmdir($path) : unlink($path); }
+                    try {
+                        $removed = unlink($path);
+                        if (!$removed && $windowsLink) {
+                            clearstatcache(true);
+                            $current = lstat($directory);
+                            if (is_link($directory) || realpath($directory) !== $canonical || !is_array($current)
+                                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
+                                throw new ConfigurationException("workspace directory changed during file cleanup: {$directory}");
+                            }
+                            if (is_link($path)) { $removed = rmdir($path); }
+                        }
+                    }
                     finally { restore_error_handler(); }
                     if ($removed) { break; }
                     clearstatcache(true, $path);
