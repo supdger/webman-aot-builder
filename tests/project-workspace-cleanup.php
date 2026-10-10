@@ -24,6 +24,13 @@ namespace WebmanAotBuilder\Project {
     function unlink(string $file): bool
     {
         if ($file === ($GLOBALS['cleanupFixture']['heldFile'] ?? null)) {
+            $state = &$GLOBALS['cleanupFixture'];
+            if (($state['mode'] ?? '') === 'unlink-replace-link' && !isset($state['replaced'])) {
+                $directory = dirname($file);
+                rename($directory, $directory . '-saved');
+                symlink($state['external'], $directory);
+                $state['replaced'] = true;
+            }
             return false;
         }
         return \unlink($file);
@@ -136,6 +143,13 @@ namespace {
         $GLOBALS['cleanupFixture'] = [];
         $workspace->finishAttempt($path);
         ensure(file_get_contents($external . '/keep') === 'outside owned attempt', 'cleanup followed external symlink');
+
+        $path = $attempt();
+        file_put_contents($external . '/object', 'external sentinel');
+        $GLOBALS['cleanupFixture'] = ['heldFile' => $path . '/project/object', 'mode' => 'unlink-replace-link', 'external' => $external];
+        reject(static fn() => $workspace->finishAttempt($path), 'workspace directory changed during file cleanup');
+        ensure(file_get_contents($external . '/object') === 'external sentinel', 'unlink retry followed a replaced parent link');
+        echo "PASS unlink retry rejects changed parent before touching external files\n";
 
         $path = $attempt();
         $GLOBALS['cleanupFixture'] = ['directory' => $path . '/project', 'mode' => 'replace-link', 'calls' => 0, 'external' => $external];

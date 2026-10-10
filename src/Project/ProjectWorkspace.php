@@ -183,6 +183,8 @@ final class ProjectWorkspace
             }
             return;
         }
+        $canonical = realpath($directory);
+        $identity = lstat($directory);
         $iterator = new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS);
         foreach ($iterator as $entry) {
             if ($entry->isDir() && !$entry->isLink()) {
@@ -192,6 +194,12 @@ final class ProjectWorkspace
                 $reason = 'file removal failed';
                 $removed = false;
                 for ($attempt = 0; $attempt < 6; $attempt++) {
+                    clearstatcache();
+                    $current = lstat($directory);
+                    if (is_link($directory) || realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
+                        || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
+                        throw new ConfigurationException("workspace directory changed during file cleanup: {$directory}");
+                    }
                     set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
                         $reason = $message;
                         return true;

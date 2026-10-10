@@ -43,6 +43,13 @@ public static class CommandJob {
     [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateJobObject(IntPtr job,uint code);
     [DllImport("kernel32.dll",SetLastError=true)] public static extern bool TerminateProcess(IntPtr process,uint code);
     [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+    public static string ReadCommand(string path) {
+        using (var file = new System.IO.FileStream(path, System.IO.FileMode.Open, System.IO.FileAccess.Read,
+                System.IO.FileShare.ReadWrite | System.IO.FileShare.Delete))
+        using (var reader = new System.IO.StreamReader(file, Encoding.UTF8, true)) {
+            return reader.ReadToEnd();
+        }
+    }
     public static string Quote(string value) {
         StringBuilder result=new StringBuilder("\""); int slashes=0;
         foreach(char c in value) {
@@ -59,7 +66,7 @@ $job = [IntPtr]::Zero; $owner = [IntPtr]::Zero
 $process = New-Object CommandJob+Process
 $result = 78; $assigned = $false
 try {
-    $arguments = @([IO.File]::ReadAllText($CommandFile,[Text.Encoding]::UTF8) | ConvertFrom-Json)
+    $arguments = @([CommandJob]::ReadCommand($CommandFile) | ConvertFrom-Json)
     if ($arguments.Count -eq 0) { throw 'Command is empty.' }
     foreach ($argument in $arguments) { if ($argument -isnot [string] -or $argument.Contains([char]0)) { throw 'Command argument is invalid.' } }
     $self = [CommandJob]::GetCurrentProcess()
@@ -100,7 +107,7 @@ try {
         if (-not [CommandJob]::QueryInformationJobObject($job,1,[ref]$accounting,[Runtime.InteropServices.Marshal]::SizeOf($accounting),[IntPtr]::Zero)) { throw 'Cannot check command descendants.' }
         if ($accounting.active -eq 0) { break }
         $now = $timer.Elapsed.TotalSeconds
-        if ($null -eq $stopAt -and ([IO.File]::ReadAllText($CommandFile) -eq 'cancel' -or [CommandJob]::WaitForSingleObject($owner,0) -eq 0 -or ($null -ne $rootEnd -and $now-$rootEnd -ge 2))) {
+        if ($null -eq $stopAt -and ([CommandJob]::ReadCommand($CommandFile) -eq 'cancel' -or [CommandJob]::WaitForSingleObject($owner,0) -eq 0 -or ($null -ne $rootEnd -and $now-$rootEnd -ge 2))) {
             $stopAt = $now
             if ($result -eq 0 -or $null -eq $rootEnd) { $result = 78 }
             [Console]::Error.WriteLine('[清理] 本次命令的子进程未退出，正在停止并保留构建恢复信息。')
