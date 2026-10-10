@@ -35,6 +35,9 @@ try {
     put($mirror . '/vendor/example/development/src/Dev.php', '<?php // development');
     put($mirror . '/vendor/composer/installed.json', json_encode($metadata, JSON_THROW_ON_ERROR));
     put($mirror . '/composer.lock', json_encode($lock, JSON_THROW_ON_ERROR));
+    $canonicalMirror = realpath($mirror);
+    ensure(is_string($canonicalMirror), 'Fixture mirror cannot be resolved');
+    $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $canonicalMirror);
     $ignore = ['vendor/example/library/src/Ignored.php'];
     $selected = $method->invoke($rule, $mirror, [], ['.typephp/build/already.php'], $ignore);
     sort($selected, SORT_STRING);
