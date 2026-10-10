@@ -187,10 +187,17 @@ final class ProjectWorkspace
         $identity = lstat($directory);
         $iterator = new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS);
         foreach ($iterator as $entry) {
+            clearstatcache(true);
+            $current = lstat($directory);
+            if (is_link($directory) || realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
+                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
+                throw new ConfigurationException("workspace directory changed during content cleanup: {$directory}");
+            }
             if ($entry->isDir() && !$entry->isLink()) {
                 $this->removeDirectory($entry->getPathname());
             } else {
                 $path = $entry->getPathname();
+                $directoryLink = PHP_OS_FAMILY === 'Windows' && $entry->isLink() && $entry->isDir();
                 $reason = 'file removal failed';
                 $removed = false;
                 for ($attempt = 0; $attempt < 6; $attempt++) {
@@ -204,7 +211,7 @@ final class ProjectWorkspace
                         $reason = $message;
                         return true;
                     }, E_WARNING);
-                    try { $removed = unlink($path); }
+                    try { $removed = $directoryLink ? rmdir($path) : unlink($path); }
                     finally { restore_error_handler(); }
                     if ($removed) { break; }
                     clearstatcache(true, $path);
@@ -221,11 +228,22 @@ final class ProjectWorkspace
 
     private function removeDirectory(string $directory): void
     {
+        clearstatcache(true);
+        if (!is_dir($directory) || is_link($directory)) {
+            throw new ConfigurationException("workspace directory is unsafe: {$directory}");
+        }
+        $canonical = realpath($directory);
+        $identity = lstat($directory);
         $reason = 'directory removal failed';
         for ($attempt = 0; $attempt < 6; $attempt++) {
-            clearstatcache(true, $directory);
+            clearstatcache(true);
             if (!is_dir($directory) || is_link($directory)) {
                 throw new ConfigurationException("workspace directory is unsafe: {$directory}");
+            }
+            $current = lstat($directory);
+            if (realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
+                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
+                throw new ConfigurationException("workspace directory changed during directory cleanup: {$directory}");
             }
             $this->removeContents($directory);
             set_error_handler(static function (int $severity, string $message) use (&$reason): bool {

@@ -12,6 +12,12 @@ namespace WebmanAotBuilder\Project {
                 file_put_contents($directory . '/.DS_Store', 'created after enumeration');
             } elseif ($state['mode'] === 'writer') {
                 file_put_contents($directory . '/late-object.o', 'writer still active');
+            } elseif ($state['mode'] === 'replace-ancestor' && !isset($state['replaced'])) {
+                file_put_contents($directory . '/late-object.o', 'moved directory sentinel');
+                rename(dirname($directory), $state['external'] . '/moved');
+                symlink($state['external'] . '/moved', dirname($directory));
+                $state['replaced'] = true;
+                return false;
             } elseif ($state['mode'] === 'replace-link') {
                 \rmdir($directory);
                 symlink($state['external'], $directory);
@@ -67,6 +73,7 @@ namespace {
     {
         foreach (new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS) as $entry) {
             if ($entry->isDir() && !$entry->isLink()) { removeFixture($entry->getPathname()); }
+            elseif (PHP_OS_FAMILY === 'Windows' && $entry->isLink() && $entry->isDir()) { \rmdir($entry->getPathname()); }
             else { \unlink($entry->getPathname()); }
         }
         \rmdir($directory);
@@ -151,6 +158,12 @@ namespace {
         reject(static fn() => $workspace->finishAttempt($path), 'workspace directory changed during file cleanup');
         ensure(file_get_contents($external . '/object') === 'external sentinel', 'unlink retry followed a replaced parent link');
         echo "PASS unlink retry rejects changed parent before touching external files\n";
+
+        $path = $attempt();
+        $GLOBALS['cleanupFixture'] = ['directory' => $path . '/project', 'mode' => 'replace-ancestor', 'calls' => 0, 'external' => $external];
+        reject(static fn() => $workspace->finishAttempt($path), 'workspace directory changed during directory cleanup');
+        ensure(file_get_contents($external . '/moved/project/late-object.o') === 'moved directory sentinel', 'directory retry followed a replaced ancestor');
+        echo "PASS directory retry preserves scope after an ancestor is replaced\n";
 
         $path = $attempt();
         $GLOBALS['cleanupFixture'] = ['directory' => $path . '/project', 'mode' => 'replace-link', 'calls' => 0, 'external' => $external];
