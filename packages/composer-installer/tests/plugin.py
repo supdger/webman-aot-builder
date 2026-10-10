@@ -70,11 +70,12 @@ def environment(path, extra=None):
 
 
 def invoke(path, args, answer="y", tty=True, extra=None):
-    print("[步骤] composer " + " ".join(args), flush=True)
+    command = ["php", str(path / "global" / "vendor" / "bin" / "webman-aot"), *args[1:]] if args[0] == "@proxy" else ["composer", *args]
+    print("[步骤] " + " ".join(command), flush=True)
     env = environment(path, extra)
     start = time.monotonic()
     if not tty:
-        result = subprocess.run(["composer", *args], cwd=path / "caller 中文", env=env,
+        result = subprocess.run(command, cwd=path / "caller 中文", env=env,
                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.STDOUT, timeout=30)
         output = result.stdout.decode(errors="replace")
@@ -83,7 +84,7 @@ def invoke(path, args, answer="y", tty=True, extra=None):
     pid, master = pty.fork()
     if pid == 0:
         os.chdir(path / "caller 中文")
-        os.execvpe("composer", ["composer", *args], env)
+        os.execvpe(command[0], command, env)
     output = b""
     trusted = False
     cancelled = False
@@ -126,6 +127,42 @@ def no_menu(path, args, **kwargs):
 
 
 try:
+    # The same public, version-free require repairs root metadata as well as upgrading a pinned install.
+    for mode in ["pinned-root", "missing-root"]:
+        path = fixture("stable-upgrade-" + mode, trust=True)
+        code, output = invoke(path, ["global", "require", package + ":" + version, "fixture/other-tool", "--no-scripts"])
+        check(code == 0 and menu not in output, mode + " 旧入口与其他工具隔离安装成功")
+        seed_path = path / "global" / "composer.json"
+        seed = json.loads(seed_path.read_text())
+        target = version + ".1"  # Private test version, never published; runtime upgrade is tested separately.
+        seed["repositories"][0]["package"].append(dict(metadata, version=target, dist={"type": "zip", "url": archive.as_uri()}))
+        state = path / "home" / "Library" / "Application Support" / "webman-aot-composer"
+        state.mkdir(parents=True)
+        (state / "runtime-sentinel").write_text("existing runtime must survive entry update")
+        if mode == "missing-root":
+            del seed["require"][package]
+            lock_path = path / "global" / "composer.lock"
+            lock = json.loads(lock_path.read_text())
+            lock["packages"] = [p for p in lock["packages"] if p["name"] != package]
+            lock_path.write_text(json.dumps(lock) + "\n")
+        seed_path.write_text(json.dumps(seed) + "\n")
+        if mode == "missing-root":
+            code, output = invoke(path, ["global", "update", package, "--no-scripts"])
+            check(code == 0 and "Removing " + package in output and not (path / "global" / "vendor" / "bin" / "webman-aot").exists(),
+                  "复现旧update文档在root/lock丢失时移除孤立入口，后续代理不存在")
+        code, output = invoke(path, ["global", "require", package + ":*", "--no-scripts"])
+        installed = json.loads((path / "global" / "vendor" / "composer" / "installed.json").read_text())["packages"]
+        requirements = json.loads(seed_path.read_text())["require"]
+        check(code == 0 and menu not in output and requirements[package] == "*"
+              and any(p["name"] == package and p["version"] == target for p in installed)
+              and "fixture/other-tool" in requirements and (path / "global" / "vendor" / "bin" / "webman-aot").exists()
+              and (state / "runtime-sentinel").read_text() == "existing runtime must survive entry update",
+              mode + " 同一版本无关require升级或恢复入口、其他工具/运行时保留且无自动菜单")
+        no_menu(path, ["global", "exec", "--", "webman-aot", "--non-interactive", "--version"], tty=False)
+        code, output = invoke(path, ["@proxy", "guide"])
+        check(code == 0 and output.count(menu) == 1 and "目标构建器：" + version in output
+              and (state / "runtime-sentinel").read_text() == "existing runtime must survive entry update",
+              mode + " 入口更新后独立guide显示目标运行时，选择结束不改变原运行环境")
     path = fixture("first")
     code, output = invoke(path, ["global", "require", package])
     check(code == 0 and "Do you trust" in output and output.count(menu) == 1,

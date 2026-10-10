@@ -2,7 +2,7 @@
 
 ### Requirement: 有限发现并静态显示安装
 
-系统 SHALL 从已知管理根、显式管理根、PATH 固定入口名及 Composer 全局元数据发现安装，显示类型、版本、绝对路径与可卸载状态；不得运行未知入口探测版本或扫描项目成果。
+系统 SHALL 从已知管理根、显式管理根、PATH 固定入口名及 Composer 全局元数据发现安装，显示类型、版本、绝对路径、用途、卸载影响与可卸载状态；不得运行未知入口探测版本或扫描项目成果。
 
 #### Scenario: 多个版本与重复 PATH
 - **WHEN** current、多个版本代次、备份、Composer状态与重复路径同时存在
@@ -10,7 +10,7 @@
 
 ### Requirement: 逐项默认保留
 
-系统 SHALL 对每个可卸载项询问 `y/N/q`，空输入或非交互保留，EOF/q 停止，且 `--list` 全程只读。
+系统 SHALL 先列出已识别对象，再对每个可卸载项显示其精确路径和卸载影响并询问 `y/N/q`，空输入或非交互保留，EOF/q 停止，且 `--list` 全程只读。
 
 #### Scenario: 保留卸载与中断
 - **WHEN** 使用者依次输入空白、y、q
@@ -52,3 +52,16 @@
 #### Scenario: 并发安装锁
 - **WHEN** Composer安装锁已由另一进程持有
 - **THEN** 卸载返回失败且owner/payload保持；成功卸载也保留同一setup.lock inode与状态根，避免并发安装换锁
+
+
+### Requirement: 版本无关的 Composer 升级与恢复
+
+文档 SHALL 使用相同的 `composer global require "supdger/webman-aot-builder:*" --no-scripts` 更新或恢复入口，随后由既有 guide/setup 独立准备入口所需运行时；MUST NOT 把入口版本输出视为运行时已升级。
+
+#### Scenario: 已固定旧版本或全局依赖记录缺失
+- **WHEN** 用户使用固定旧版本，或 global require/lock 不再记录已安装入口
+- **THEN** 相同命令恢复直接依赖并解析当前环境兼容的稳定版，生成可运行代理，保留其他全局工具与原私有运行时，不自动启动资源菜单
+
+#### Scenario: 单独准备运行时
+- **WHEN** 入口更新后用户主动在 guide 选择开始或运行 setup
+- **THEN** 既有准备流程复用已匹配运行时或安装入口锁定的对应完整运行时，不以入口升级冒称完整环境升级
