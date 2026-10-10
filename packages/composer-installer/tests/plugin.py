@@ -21,8 +21,10 @@ import zipfile
 
 if sys.platform != "darwin":
     raise SystemExit("此真实 PTY 回归需 macOS；Windows 另需物理终端验收。")
-archive = pathlib.Path(sys.argv[1]).resolve()
-previous = pathlib.Path(sys.argv[2]).resolve() if len(sys.argv) > 2 else None
+timeout_only = "--guide-timeout-only" in sys.argv
+arguments = [arg for arg in sys.argv[1:] if arg != "--guide-timeout-only"]
+archive = pathlib.Path(arguments[0]).resolve()
+previous = pathlib.Path(arguments[1]).resolve() if len(arguments) > 1 else None
 with zipfile.ZipFile(archive) as z:
     metadata = json.loads(z.read("composer.json"))
 version = archive.name.removeprefix("webman-aot-builder-").removesuffix("-composer.zip")
@@ -69,7 +71,7 @@ def environment(path, extra=None):
     return env
 
 
-def invoke(path, args, answer="y", tty=True, extra=None):
+def invoke(path, args, answer="y", tty=True, extra=None, menu_wait=0):
     command = ["php", str(path / "global" / "vendor" / "bin" / "webman-aot"), *args[1:]] if args[0] == "@proxy" else ["composer", *args]
     print("[步骤] " + " ".join(command), flush=True)
     env = environment(path, extra)
@@ -88,10 +90,14 @@ def invoke(path, args, answer="y", tty=True, extra=None):
     output = b""
     trusted = False
     cancelled = False
+    menu_seen = None
     try:
         while True:
             if time.monotonic() - start > 30:
                 raise TimeoutError("隔离 Composer 夹具超时")
+            if menu_seen is not None and not cancelled and time.monotonic() - menu_seen >= menu_wait:
+                os.write(master, b"0\n")
+                cancelled = True
             if not select.select([master], [], [], 0.2)[0]:
                 continue
             try:
@@ -107,9 +113,8 @@ def invoke(path, args, answer="y", tty=True, extra=None):
             if b'[y,n,d,?]' in output and not trusted:
                 os.write(master, (answer + "\n").encode())
                 trusted = True
-            if "0 结束".encode() in output and not cancelled:
-                os.write(master, b"0\n")
-                cancelled = True
+            if "0 结束".encode() in output and menu_seen is None:
+                menu_seen = time.monotonic()
         _, status = os.waitpid(pid, 0)
         return os.waitstatus_to_exitcode(status), output.decode(errors="replace")
     except BaseException:
@@ -127,6 +132,24 @@ def no_menu(path, args, **kwargs):
 
 
 try:
+    path = fixture("guide-process-timeout", trust=True)
+    code, output = invoke(path, ["global", "require", package + ":" + version, "--no-scripts"])
+    check(code == 0 and menu not in output, "超时回归隔离入口安装，不启动菜单")
+    state = path / "home" / "Library" / "Application Support" / "webman-aot-composer"
+    state.mkdir(parents=True)
+    (state / "runtime-sentinel").write_text("keep existing runtime")
+    timeout_env = {"COMPOSER_PROCESS_TIMEOUT": "1"}
+    code, output = invoke(path, ["global", "exec", "--", "webman-aot", "guide"], extra=timeout_env, menu_wait=2)
+    check(code != 0 and "exceeded the timeout of 1 seconds" in output,
+          "缩短外层超时到1秒，真实Composer exec等待菜单被终止")
+    code, output = invoke(path, ["@proxy", "guide"], extra=timeout_env, menu_wait=2)
+    check(code == 0 and output.count(menu) == 1 and "exceeded the timeout" not in output,
+          "相同超时环境直接PHP代理等待超过1秒仍能正常结束")
+    check((state / "runtime-sentinel").read_text() == "keep existing runtime" and not (state / "runtime").exists()
+          and not (state / "cache").exists(), "两条对照命令均不下载或改变已有运行环境")
+    if timeout_only:
+        print(f"完成：{passed} 项真实Composer超时对照检查通过（缩短超时模拟）。", flush=True)
+        raise SystemExit(0)
     # The same public, version-free require repairs root metadata as well as upgrading a pinned install.
     for mode in ["pinned-root", "missing-root"]:
         path = fixture("stable-upgrade-" + mode, trust=True)
