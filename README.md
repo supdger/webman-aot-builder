@@ -34,6 +34,23 @@ composer global require "supdger/webman-aot-builder:*"
 composer global exec -- webman-aot guide
 ```
 
+升级或修复丢失的 Composer 入口，始终使用同一条命令，无需先卸载：
+
+```sh
+composer global require "supdger/webman-aot-builder:*" --no-scripts
+```
+
+它恢复全局依赖记录、解除本包旧的固定版本约束，按当前环境和全局稳定性设置解析兼容版本（默认稳定版）；不自动打开项目菜单或下载运行时。不要用单独的 `global update` 修复丢失的依赖记录，否则 Composer 可能移除未被全局配置记录的旧入口。首次插件信任仍由 Composer 询问。
+
+入口更新成功后，再查询入口与目标运行时版本，进入现有资源菜单：
+
+```sh
+composer global exec -- webman-aot --version
+composer global exec -- webman-aot guide
+```
+
+选择“开始”准备该入口对应的完整运行时；已就绪则复用。只更新入口不表示运行环境已升级。选择结束可暂不升级运行环境。安装器保留被替换的旧运行时备份；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
+
 ### 方式二：原生安装包
 
 从[最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest)取得与你的**开发机**匹配的 setup：
@@ -64,7 +81,7 @@ SaiAdmin 项目使用 `webman-aot build --profile=saiadmin`。适用源码形态
 
 构建会显示当前阶段和真实编译计数；没有新输出时显示进程状态和已等待时间。失败保留原始原因、本机日志位置及恢复建议。重试默认复用输入与完整性校验通过的已完成单元，其余单元重新编译；每次仍重新链接并校验产物。`webman-aot build --fresh` 全量重编，不清空旧缓存。详细规则见[构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
-升级和清理使用[升级与卸载指南](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。当前入口能查询旧安装，确认归属的项目可逐项删除；未知归属残留会保留，不能承诺所有旧版都清干净。项目源码、产物、共享工具链、日志和 PATH 保留。
+升级和清理使用[升级与卸载指南](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。当前入口能查询旧安装，确认归属的项目可逐项删除；未知归属残留会保留，不能承诺所有旧版都清干净。项目源码、产物和 PATH 保留。独立安装根的共享工具链、日志保留；Composer 私有运行时内部的工具链、日志和缓存随该运行时删除。
 
 ## 构建结果与部署
 

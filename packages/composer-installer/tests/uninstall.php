@@ -25,7 +25,7 @@ function native(string $path, string $version, bool $legacy = false): void {
     file_put_contents($path . '/manifest.json', json_encode(['schema' => 'webman-aot-builder-cli-generation-v1', 'version' => $version]));
 }
 /** @return array{int,string} */
-function execute(array $arguments, string $input = '', bool $interactive = true, array $extraEnvironment = []): array {
+function execute(array $arguments, string $input = '', bool $interactive = true, array $extraEnvironment = [], ?string $cwd = null): array {
     global $temporary, $repository;
     $environment = array_merge(getenv(), ['HOME' => $temporary . '/用户 空格', 'USERPROFILE' => $temporary . '/用户 空格',
         'LOCALAPPDATA' => $temporary . '/local', 'APPDATA' => $temporary . '/appdata', 'COMPOSER_HOME' => $temporary . '/global',
@@ -34,7 +34,7 @@ function execute(array $arguments, string $input = '', bool $interactive = true,
     $engine = $repository . '/packages/composer-installer/src/Uninstaller.php';
     $command = $interactive ? [PHP_BINARY, '-r', 'require $argv[1]; exit((new Supdger\\WebmanAotInstaller\\Uninstaller(true))->run(array_slice($argv, 2)));', $engine]
         : [PHP_BINARY, $repository . '/packages/composer-installer/bin/webman-aot', 'uninstall'];
-    $process = proc_open(array_merge($command, $arguments), [['pipe', 'r'], ['pipe', 'w'], ['redirect', 1]], $pipes, $repository, $environment);
+    $process = proc_open(array_merge($command, $arguments), [['pipe', 'r'], ['pipe', 'w'], ['redirect', 1]], $pipes, $cwd ?? $repository, $environment);
     if (!is_resource($process)) { throw new RuntimeException('无法启动测试'); }
     fwrite($pipes[0], $input); fclose($pipes[0]);
     $output = stream_get_contents($pipes[1]); fclose($pipes[1]);
@@ -62,6 +62,7 @@ try {
     [$code, $output] = execute(array_merge($options, ['--list']));
     verify($code === 0 && substr_count($output, '独立安装（当前）') === 1 && str_contains($output, '0.3.1') && str_contains($output, '历史备份'), '只读列多版本、备份、中文空格并去重');
     verify(is_dir($root . '/current') && !file_exists($temporary . '/用户 空格'), 'list不创建HOME或状态，不删除安装');
+    verify(str_contains($output, '用途：') && str_contains($output, '卸载影响：') && str_contains($output, '此版本无法再运行'), '列表解释用途和卸载影响，活动入口撤销可见');
     [$code, $output] = execute($options, "y\ny\n", false);
     verify($code === 0 && is_dir($root . '/current') && str_contains($output, '非交互'), '产品Composer入口非TTY即使收到y仍默认保留');
     [$code, $output] = execute($options, "\nn\nq\n");
@@ -140,6 +141,22 @@ try {
         $setupOutput = stream_get_contents($setupPipes[1]); fclose($setupPipes[1]); $setupCode = proc_close($setup);
         verify($setupCode === 70 && json_decode(file_get_contents($oldState . '/owner.json'), true)['package'] === 'supdger/webman-aot-builder' && fileinode($oldState . '/setup.lock') === $retainedInode && !str_contains($setupOutput, '状态目录不属于'), '清旧owner后新setup可claim锁保留根，失败仅因为fixture资源损坏而非所有权');
     }
+    // Separate owned states prove each confirmation applies to one object, including after EOF.
+    $choiceA = $temporary . '/choice A'; $choiceB = $temporary . '/choice B';
+    foreach ([$choiceA, $choiceB] as $choice) {
+        directory($choice . '/runtime'); file_put_contents($choice . '/runtime/sentinel', 'owned');
+        file_put_contents($choice . '/owner.json', json_encode(['schema' => 1, 'package' => 'supdger/webman-aot-builder']));
+    }
+    $choiceOptions = ['--state-dir=' . $choiceA, '--state-dir=' . $choiceB];
+    directory($temporary . '/unrelated cwd');
+    [$code, $output] = execute(array_merge($choiceOptions, ['--list']), '', false, [], $temporary . '/unrelated cwd');
+    verify($code === 0 && str_contains($output, $choiceA) && str_contains($output, $choiceB)
+        && str_contains($output, '内部日志及缓存') && !str_contains($output, '是否卸载')
+        && is_file($choiceA . '/runtime/sentinel') && is_file($choiceB . '/runtime/sentinel'), '任意cwd产品list只读列项与准确私有运行时影响，不进入确认或准备');
+    [$code, $output] = execute($choiceOptions, "y\n", true, [], $temporary . '/unrelated cwd');
+    verify($code === 0 && !is_dir($choiceA . '/runtime') && is_file($choiceB . '/runtime/sentinel')
+        && str_contains($output, '是否卸载') && str_contains($output, '卸载影响：移除本项私有 PHP')
+        && str_contains($output, '未确认的项目已保留'), '确认提示再次解释删除影响，一次y仅删一项，随后EOF保留第二项');
     $unknownState = $temporary . '/other package state'; directory($unknownState . '/runtime');
     file_put_contents($unknownState . '/owner.json', json_encode(['schema' => 1, 'package' => 'other/webman-aot-builder']));
     file_put_contents($unknownState . '/runtime/sentinel', 'keep');

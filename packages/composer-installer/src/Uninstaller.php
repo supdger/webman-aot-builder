@@ -30,8 +30,8 @@ final class Uninstaller
             fwrite(STDOUT, "[检查] 找到 " . count($this->items) . " 项；版本来自文件，不运行旧命令。\n");
             $list = isset($options['list']);
             foreach ($this->items as $index => $item) {
-                fwrite(STDOUT, sprintf("%d. %s | 版本 %s\n   %s\n   %s\n", $index + 1,
-                    $item['type'], $item['version'], $item['path'], $item['reason']));
+                fwrite(STDOUT, sprintf("%d. %s | 版本 %s\n   路径：%s\n   用途：%s\n   卸载影响：%s\n   %s\n", $index + 1,
+                    $item['type'], $item['version'], $item['path'], $item['purpose'], $item['impact'], $item['reason']));
             }
             if ($list || !$this->interactive) {
                 fwrite(STDOUT, $list ? "[完成] 仅列出，没有更改。\n" : "[保留] 非交互环境不卸载；在终端运行 webman-aot uninstall 逐项确认。\n");
@@ -44,7 +44,7 @@ final class Uninstaller
                 // Another selected item may already have removed an associated launcher.
                 if (!file_exists($item['path']) && !is_link($item['path'])) { continue; }
                 while (true) {
-                    fwrite(STDOUT, "卸载 {$item['type']} {$item['version']}\n{$item['path']}\n[y/N/q，回车保留，q结束]：");
+                    fwrite(STDOUT, "是否卸载 {$item['type']} {$item['version']}？\n路径：{$item['path']}\n卸载影响：{$item['impact']}\n[y/N/q，回车保留，q结束]：");
                     $answer = fgets(STDIN);
                     if ($answer === false || strtolower(trim($answer)) === 'q') {
                         fwrite(STDOUT, "\n[结束] 未确认的项目已保留。\n");
@@ -66,7 +66,7 @@ final class Uninstaller
                     fwrite(STDOUT, "请输入 y、n 或 q；默认保留。\n");
                 }
             }
-            fwrite(STDOUT, sprintf("[结果] 卸载 %d 项，失败 %d 项；其余保留。耗时 %.1f 秒。\nPATH 未修改；共享工具链、日志和项目产物保留。旧备份命令不会恢复。\n",
+            fwrite(STDOUT, sprintf("[结果] 卸载 %d 项，失败 %d 项；其余保留。耗时 %.1f 秒。\nPATH 与项目产物未修改；独立安装根的共享工具链和日志保留。Composer 私有运行时项包含其中的工具链、日志与缓存。旧备份命令不会恢复。\n",
                 $removed, $failed, microtime(true) - $started));
             $this->discover($options);
             fwrite(STDOUT, "[剩余] 重新检查到 " . count($this->items) . " 项：\n");
@@ -338,6 +338,18 @@ final class Uninstaller
 
     private function add(array $item): void
     {
+        $item['purpose'] = match ($item['kind']) {
+            'state' => '供 Composer 入口运行和构建使用的私有 PHP、构建器、工具链及下载缓存。',
+            'native' => '此独立安装的构建器与私有 PHP；历史版本可供回滚。',
+            'composer' => '提供 webman-aot 命令的 Composer 全局入口包。',
+            'launcher' => '启动 Webman AOT 的命令文件或历史命令备份。',
+        };
+        $item['impact'] = !$item['owned'] ? '此项不会卸载；下方说明保留原因。' : match ($item['kind']) {
+            'state' => '移除本项私有 PHP、构建器、工具链、内部日志及缓存；再次构建需重新准备。保留安装锁、额外用户文件及其他 Composer 包。',
+            'native' => $item['active'] ? '此版本无法再运行，并撤销可确认绑定的公开命令；其他版本、共享工具链和项目产物保留。' : '移除此历史版本，无法再用它回滚；当前版本、共享工具链和项目产物保留。',
+            'composer' => '由 Composer 移除此入口包及不再需要的专属依赖、代理命令；其他全局工具和私有运行时保留。',
+            'launcher' => '移除此命令文件；对应版本和工具链保留，不恢复备份命令。',
+        };
         $key = $this->key($item['path']);
         foreach ($this->items as $existing) {
             if ($this->key($existing['path']) === $key && ($existing['package'] ?? '') === ($item['package'] ?? '')) { return; }

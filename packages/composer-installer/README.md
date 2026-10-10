@@ -44,12 +44,32 @@ webman-aot setup --archive="/完整包所在目录/对应完整安装包" --non-
 
 0.4.3 Composer 入口与配套完整运行时同为 0.4.3；旧入口 0.3.7 仍固定 0.3.2。根 `composer.json` 注册元数据的 bin/autoload 路径与小 ZIP 保持同样的 `packages/composer-installer/` 布局。普通 Composer 安装取得轻量 Release ZIP，`--prefer-source` 会下载完整源码仓库。
 
-当前入口提供统一卸载入口；旧 0.3.3 和原生 0.3.2 没有这个命令。请先更新 Composer 包，然后从代理完整路径启动：
+升级或修复丢失的 Composer 入口，始终使用同一条命令，无需先卸载：
 
 ```sh
-webman-aot uninstall --list
-webman-aot uninstall
+composer global require "supdger/webman-aot-builder:*" --no-scripts
 ```
+
+它恢复全局依赖记录、解除本包旧的固定版本约束，按当前环境和全局稳定性设置解析兼容版本（默认稳定版）；不自动打开项目菜单或下载运行时。不要用单独的 `global update` 修复丢失的依赖记录，否则 Composer 可能移除未被全局配置记录的旧入口。首次插件信任仍由 Composer 询问。
+
+入口更新成功后，再查询入口与目标运行时版本，进入现有资源菜单：
+
+```sh
+composer global exec -- webman-aot --version
+composer global exec -- webman-aot guide
+```
+
+选择“开始”准备该入口对应的完整运行时；已就绪则复用。只更新入口不表示运行环境已升级。选择结束可暂不升级运行环境。安装器保留被替换的旧运行时备份；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
+
+已安装的当前 Composer 入口可以直接卸载，不需要进入源码或项目目录，也不需要先安装或升级。macOS 从任意目录运行：
+
+```sh
+"$(composer global config bin-dir --absolute)/webman-aot" uninstall
+```
+
+命令先列出已识别对象的名称、版本、路径、用途和卸载影响，再逐个询问 `y/N/q`。输入 `y` 仅卸载当前询问的这一项；回车或 `n` 保留，`q` 结束，输入结束时保留未确认项。加 `--list` 只查看列表，不会询问或卸载。没有归属证据的对象显示保留原因，不要求确认。
+
+旧 0.3.3 和原生 0.3.2 没有此命令；只有使用这些旧入口时，才需要另备支持逐项卸载的入口。
 
 清理旧安装后改用 Composer：
 
@@ -65,7 +85,7 @@ $aotBin = (composer global config bin-dir --absolute).Trim()
 
 此清理流程用 `--no-scripts` 先跳过自动项目菜单。按列表对旧原生版本、旧公开命令和历史备份选择 `y`；对“Composer 全局包（supdger/webman-aot-builder）”选择 `n` 保留新入口。需要清空已有 Composer 私有运行时以重新准备时，单独确认该状态项；安装锁与用户文件保留。若也选了卸载 Composer 全局包，需再次运行首行安装命令，然后重新取得命令目录。清理后运行 `composer global exec -- webman-aot guide`，按同一菜单准备资源并选择项目。上述参数不修改用户 PATH，旧空 PATH 目录可另行核对整理。
 
-先只读查看类型、静态版本和绝对路径，再逐项输入 `y` 卸载、回车保留或 `q` 结束；非交互环境始终保留。入口不会先下载或安装运行时。自定义状态目录使用 `webman-aot uninstall --state-dir="目录"`；自定义原生目录可用 `--home="目录"`、命令目录用 `--bin-dir="目录"`。仅清理可确认归属的选中对象，未知旧入口保留并显示精确路径；Composer 全局包由 Composer 移除这一包，其他全局工具保留。Composer 状态根的 `setup.lock` 与额外用户文件保留，避免并发安装换锁；项目产物、共享工具链与 PATH 保留，旧备份命令不会恢复；失败返回非零并列出残留。
+先只读查看类型、静态版本和绝对路径，再逐项输入 `y` 卸载、回车保留或 `q` 结束；非交互环境始终保留。入口不会先下载或安装运行时。自定义状态目录使用 `webman-aot uninstall --state-dir="目录"`；自定义原生目录可用 `--home="目录"`、命令目录用 `--bin-dir="目录"`。仅清理可确认归属的选中对象，未知旧入口保留并显示精确路径；Composer 全局包由 Composer 移除这一包，其他全局工具保留。Composer 状态根的 `setup.lock` 与额外用户文件保留，避免并发安装换锁；项目产物、独立安装根的共享工具链与 PATH 保留；卸载 Composer 私有运行时会同时移除其内部工具链、日志及缓存，之后构建需重新准备。旧备份命令不会恢复；失败返回非零并列出残留。
 
 开发检查（在原仓库根运行）：
 
