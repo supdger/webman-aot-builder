@@ -11,6 +11,7 @@ use Composer\IO\IOInterface;
 use Composer\Plugin\PluginInterface;
 use Composer\Plugin\PluginEvents;
 use Composer\Plugin\CommandEvent;
+use Composer\Plugin\PreCommandRunEvent;
 use Composer\Script\Event;
 use Composer\Script\ScriptEvents;
 use Symfony\Component\Console\Input\ArgvInput;
@@ -50,11 +51,30 @@ final class Plugin implements PluginInterface, EventSubscriberInterface
     public static function getSubscribedEvents(): array
     {
         self::assertComposerCapabilities();
-        return [
+        $events = [
             PluginEvents::COMMAND => 'onCommand',
             // Autoload and package installation are complete here. Composer's audit still follows.
             ScriptEvents::POST_UPDATE_CMD => ['onInstalled', -1000],
         ];
+        // Older capable Composer builds can still use the direct binary or the documented environment override.
+        if (defined(PluginEvents::class . '::PRE_COMMAND_RUN')
+            && method_exists(PreCommandRunEvent::class, 'getCommand')
+            && method_exists(PreCommandRunEvent::class, 'getInput')
+            && is_callable([\Composer\Config::class, 'disableProcessTimeout'])) {
+            $events[PluginEvents::PRE_COMMAND_RUN] = 'onBeforeCommand';
+        }
+        return $events;
+    }
+
+    public function onBeforeCommand(PreCommandRunEvent $event): void
+    {
+        $input = $event->getInput();
+        if ($this->composer === null || !$this->composer->isGlobal() || $event->getCommand() !== 'exec'
+            || !$input->hasArgument('binary') || $input->getArgument('binary') !== 'webman-aot') {
+            return;
+        }
+        // This runs in Composer itself, before exec starts its timed child process.
+        \Composer\Config::disableProcessTimeout();
     }
 
     public function onCommand(CommandEvent $event): void

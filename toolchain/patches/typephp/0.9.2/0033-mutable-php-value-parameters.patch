@@ -1,0 +1,151 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -46,6 +46,128 @@
+                 unset($this->context->objects[$name], $this->context->declaredObjects[$name],
+                     $this->context->stableObjects[$name], $this->context->exactObjects[$name]);
+             }
++        }
++    }
++
++    /** Keep the entry ABI while allowing a PHP value parameter to change type in its body. */
++    protected function prepareValueParameterStorage(NodeAbstract|array|null $body): void
++    {
++        if ($this->functionDef === null || $this->functionDef->stub
++            || $this->classDef?->nativeObject || $this->functionUsesNativeObject($this->functionDef)) {
++            return;
++        }
++        $assignments = [];
++        $blocked = [];
++        $block = static function (mixed $value) use (&$block, &$blocked): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof Variable && is_string($node->name)) { $blocked[$node->name] = true; }
++                foreach ($node->getSubNodeNames() as $field) { $block($node->{$field}); }
++            }
++        };
++        $types = function ($expression) use (&$types): ?array {
++            if ($expression instanceof \PhpParser\Node\Expr\Ternary && $expression->if !== null) {
++                $left = $types($expression->if);
++                $right = $types($expression->else);
++                return $left !== null && $right !== null ? $left + $right : null;
++            }
++            if (!$expression instanceof \PhpParser\Node\Scalar
++                && !$expression instanceof \PhpParser\Node\Expr\Array_
++                && !$expression instanceof \PhpParser\Node\Expr\ConstFetch
++                && !$expression instanceof \PhpParser\Node\Expr\New_
++                && !$expression instanceof \PhpParser\Node\Expr\StaticCall
++                && !$expression instanceof \PhpParser\Node\Expr\FuncCall) { return null; }
++            if ($expression instanceof \PhpParser\Node\Expr\CallLike && $expression->isFirstClassCallable()) {
++                return null;
++            }
++            $type = $this->detectTypeOfExpr($expression);
++            if (!in_array($type, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)) {
++                return null;
++            }
++            if ($type === Type::OBJECT) {
++                $class = $this->detectClassOfExpr($expression);
++                if ($class === '' || !$this->hasClass($class) || !$this->isNativeClass($class)
++                    || $this->isInternalClass($class) || $this->isNativeObjectClass($class)) { return null; }
++                return [Type::OBJECT . ':' . strtolower($class) => true];
++            }
++            return [$type => true];
++        };
++        $scan = function (mixed $value) use (&$scan, &$assignments, $block, $types): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof \PhpParser\Node\FunctionLike
++                    || $node instanceof \PhpParser\Node\Stmt\ClassLike) { continue; }
++                if ($node instanceof \PhpParser\Node\Expr\Assign) {
++                    if ($node->var instanceof Variable && is_string($node->var->name)) {
++                        if ($this->hasArgument($node->var->name)) {
++                            $resolved = $types($node->expr);
++                            if ($resolved === null) { $block($node->var); }
++                            else { $assignments[$node->var->name] = ($assignments[$node->var->name] ?? []) + $resolved; }
++                        }
++                    } else { $block($node->var); }
++                } elseif ($node instanceof \PhpParser\Node\Expr\AssignRef
++                    || $node instanceof \PhpParser\Node\Expr\AssignOp
++                    || $node instanceof \PhpParser\Node\Stmt\Unset_
++                    || $node instanceof \PhpParser\Node\Stmt\Global_
++                    || $node instanceof \PhpParser\Node\Stmt\Static_
++                    || $node instanceof \PhpParser\Node\Expr\PreInc
++                    || $node instanceof \PhpParser\Node\Expr\PostInc
++                    || $node instanceof \PhpParser\Node\Expr\PreDec
++                    || $node instanceof \PhpParser\Node\Expr\PostDec
++                    || ($node instanceof \PhpParser\Node\ArrayItem && $node->byRef)) {
++                    $block($node);
++                }
++                if ($node instanceof \PhpParser\Node\Stmt\Foreach_) { $block([$node->keyVar, $node->valueVar]); }
++                if ($node instanceof \PhpParser\Node\Stmt\Catch_) { $block($node->var); }
++                if ($node instanceof Variable && !is_string($node->name)) {
++                    foreach ($this->functionDef->argInfoList as $argument) { $block(new Variable($argument->name)); }
++                }
++                if ($node instanceof \PhpParser\Node\Expr\CallLike && !$node->isFirstClassCallable()) {
++                    $class = '';
++                    $function = '';
++                    if ($node instanceof \PhpParser\Node\Expr\StaticCall
++                        && $node->class instanceof \PhpParser\Node\Name
++                        && $node->name instanceof \PhpParser\Node\Identifier) {
++                        $class = in_array(strtolower($node->class->toString()), ['self', 'static'], true)
++                            ? $this->getFullClassName() : $this->getNamespacedClassName($node->class->toString());
++                        $function = $node->name->toString();
++                    } elseif ($node instanceof \PhpParser\Node\Expr\FuncCall
++                        && $node->name instanceof \PhpParser\Node\Name) {
++                        $function = $node->name->toString();
++                    } elseif ($node instanceof \PhpParser\Node\Expr\New_) {
++                        $class = $this->resolveNewExprClass($node) ?? '';
++                        $function = '__construct';
++                    }
++                    foreach ($node->getArgs() as $index => $argument) {
++                        $info = $function === '' ? null : ($argument->name !== null
++                            ? $this->getAotCallArgInfoByName($function, $class, $argument->name->toString())
++                            : $this->getAotCallArgInfo($function, $class, $index));
++                        if ($argument->unpack || $info === null || $info->byRef) { $block($argument->value); }
++                    }
++                }
++                foreach ($node->getSubNodeNames() as $field) { $scan($node->{$field}); }
++            }
++        };
++        $scan($body);
++        foreach ($this->functionDef->argInfoList as $argument) {
++            $name = $argument->name;
++            if ($argument->byRef || $argument->variadic || isset($blocked[$name])
++                || !isset($assignments[$name]) || $argument->type === Type::VAR
++                || isset($this->context->typedArrays[$name]) || $this->isStdContainerParameter($name)
++                || $this->isNativeObjectVar($name)) { continue; }
++            $initialType = $argument->type;
++            if ($initialType === Type::OBJECT) {
++                $class = $argument->declaredClass ?: $argument->class;
++                if ($class === '' || !$this->hasClass($class) || !$this->isNativeClass($class)
++                    || $this->isInternalClass($class) || $this->isNativeObjectClass($class)) { continue; }
++                $initialType .= ':' . strtolower($class);
++            }
++            if (count($assignments[$name] + [$initialType => true]) < 2) { continue; }
++            $this->context->varTypeDegradations[$name] = Type::VAR;
++            $this->context->localVars[$name] = Type::VAR;
++            unset($this->context->objects[$name], $this->context->declaredObjects[$name],
++                $this->context->stableObjects[$name], $this->context->exactObjects[$name],
++                $this->context->hoistedProps[$name], $this->context->unsafeObjectProps[$name]);
+         }
+     }
+ 
+--- a/src/Generator/FiberGenerator.php
++++ b/src/Generator/FiberGenerator.php
+@@ -296,6 +296,7 @@
+         // effect metadata so suspension does not erase Immutable guarantees.
+         $this->initializeImmutableFunctionContext();
+ 
++        $this->prepareValueParameterStorage($v->stmts);
+         $this->preparePersistentReferenceStorage($v->stmts);
+         $this->prepareObjectAssignmentJoins($v->stmts);
+         $body = '';
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -6648,6 +6648,7 @@
+                 $this->resetFunction();
+             }
+         }
++        $this->prepareValueParameterStorage($v->stmts);
+ 
+         // Build SSA/e-SSA analysis for this function
+         if ($v->stmts) {

@@ -29,3 +29,23 @@
 - 独立默认官方 Composer global require ^0.3.3 退出0、7.28秒，selected dist 为精确 Release 小 ZIP；真实 proxy help/version 与冻结核心一致，没有准备 compiler/toolchain。Wiki 发布 revision 内容亦已核对。
 - 原仓库 webhook API 当前返回空列表；没有新增凭据或自动更新绑定。后续标签自动索引未作保证，必要时维护者需在官方页面执行 Update。
 - 原主工作区既有 README/两源码/tests/packages dirty 保留；原运行时源码/锁/0.3.2资产和旧独立repo未改。Windows新入口与PHP8.1真实运行仍未验证，业务编译未因本次元数据迁仓重跑。
+
+## 4. Component reuse candidate (not published)
+
+- [x] 4.1 Package target manifest and reviewed replacement files; derive locked small/full metadata from actual archives.
+- [x] 4.2 Verify independent copies, trusted patch guards, unsafe paths, and corrupt or missing files in isolation.
+- [x] 4.3 Verify complete-cache priority, small upgrade, and outer activation/ready failure recovery.
+- [x] 4.4 Complete independent review and affected documentation; distinguish native Windows and public release evidence.
+
+Author evidence (local candidate): minimal-component-reuse 11 checks; outer runtime transaction 11 checks including marker write and promotion failure; actual small native Mac upgrade from read-only 0.4.1 backup to current target passed with 7610 reused files / 865138237 bytes and 4 replacements / 266086 bytes. Fresh source package 9435794 bytes, SHA f0391fb4873a3867abbcf20b0853ca8cdfdd8f47f418deb9c6e8bbc375758f4f; source and logs are retained outside the repository. Actual target component ZIP has after-files (not before variants), manifest SHA unchanged. Release-lock helper verifies actual Mac small bytes and rejects fabricated size and unsupported ordinary small packages (3 checks). Ordinary small packaging remains compatible without prepared input. Lightweight Composer archive verified 13 source-identical members, 32421 bytes before the final default-guide adjustment. None are public Release assets. Windows native installation/build is not claimed.
+
+## 5. Guide download lifecycle
+
+- [x] 5.1 Supervise restored and already-interactive Mac guide downloads through a parent-lifetime pipe, including default no-argument menus; stop owned curl on parent death and preserve partial bytes.
+- [x] 5.2 Preserve non-interactive/default silent behavior and business command forwarding; complete native progress and parent-exit regressions.
+
+Lifecycle evidence supplied by the bounded process slice: 51 checks (10 actual production-entry cases plus 41 owned helper cases), download 9 checks, and the final default-entry increment 10 checks. Real Composer 1-second timeout restores an interactive zsh prompt, stops partial-file writes, leaves no ready/runtime or owned curl/guide process, and permits the next command. This is the Mac guide/download leaf contract, not a claim about arbitrary installation/build descendants or native Windows process teardown.
+
+Independent source gate accepted by solhigh__uninstall_cli_acceptance: optional packaging contract 5 cases, default actual-entry 2 cases, outer transaction 9 cases, actual native cross-version success and failure preservation, and 10 primitive cases. The actual target ZIP contains after-files, matching source and independent SHA checks. No task-owned guide/curl process remains. These check counts describe independent layers and are not one end-to-end public Release test.
+
+Pending external delivery: no version change, 0.4.4 tag, Release, asset upload, or published upgrade-capable metadata was created here. Native Windows installation/process acceptance and a full new public asset build remain unverified. No user-host upgrade was performed. Existing released 0.4.3 assets and resource hashes remain unchanged.

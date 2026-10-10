@@ -98,18 +98,20 @@ try {
     put($root . '/sdk/manifest.json', json_encode(['schema' => 'typephp-php-runtime-layer-v1', 'target' => 'linux-x64', 'zts' => true, 'php_version' => '8.5.3'], JSON_THROW_ON_ERROR));
     put($root . '/sdk/include/php/ext/redis/php_redis.h', '#define PHP_REDIS_VERSION "99.7.1"' . "\n");
     put($root . '/sdk/include/php/main/build-defs.h', '#define CONFIGURE_COMMAND "' . "'--disable-all' '--enable-intl'" . '"' . "\n");
+    $standardTable = "static const zend_function_entry ext_functions[] = {\nZEND_FE_END\n};\nstatic void register_basic_functions_symbols(int module_number)\n{\n}\n";
+    put($root . '/sdk/include/php/ext/standard/basic_functions_arginfo.h', $standardTable);
     $intlTable = "static const zend_function_entry ext_functions[] = {\nZEND_FE(locale_get_default, arginfo_locale_get_default)\nZEND_FE_END\n};\n";
     put($root . '/sdk/include/php/ext/intl/php_intl_arginfo.h', $intlTable);
-    ensure((new StaticTargetLayout())->runtimeCapabilities($root . '/sdk') === ['phpVersionId' => 80503, 'redisVersion' => '99.7.1', 'deepcloneEnabled' => false, 'intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false], 'runtime capabilities did not come from selected SDK');
+    ensure((new StaticTargetLayout())->runtimeCapabilities($root . '/sdk') === ['phpVersionId' => 80503, 'redisVersion' => '99.7.1', 'deepcloneEnabled' => false, 'intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false, 'nativeGraphemeStrrev' => false, 'nativeClamp' => false, 'nativeArrayFilterUseValue' => false], 'runtime capabilities did not come from selected SDK');
     $tests++; echo "PASS selected SDK PHP/Redis capabilities accept newer material labels\n";
     put($root . '/sdk/include/php/ext/redis/php_redis.h', '#define PHP_REDIS_VERSION "unknown"' . "\n");
     refused(fn() => (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk'), 'unknown Redis runtime macro accepted');
     $tests++; echo "PASS incomplete SDK runtime macro refused\n";
     put($root . '/sdk/include/php/ext/redis/php_redis.h', '#define PHP_REDIS_VERSION "99.7.1"' . "\n");
-    foreach (['locale_is_right_to_left', 'grapheme_levenshtein'] as $function) {
+    foreach (['locale_is_right_to_left', 'grapheme_levenshtein', 'grapheme_strrev'] as $function) {
         put($root . '/sdk/include/php/ext/intl/php_intl_arginfo.h', str_replace('ZEND_FE_END', "ZEND_FE({$function}, arginfo_{$function})\nZEND_FE_END", $intlTable));
         $runtime = (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk');
-        ensure($runtime['nativeLocaleIsRightToLeft'] === ($function === 'locale_is_right_to_left') && $runtime['nativeGraphemeLevenshtein'] === ($function === 'grapheme_levenshtein'), 'Intl capability not determined by registration');
+        ensure($runtime['nativeLocaleIsRightToLeft'] === ($function === 'locale_is_right_to_left') && $runtime['nativeGraphemeLevenshtein'] === ($function === 'grapheme_levenshtein') && $runtime['nativeGraphemeStrrev'] === ($function === 'grapheme_strrev'), 'Intl capability not determined by registration');
         $tests++; echo "PASS selected SDK native registration / {$function}\n";
     }
     foreach (['missing-terminator' => str_replace('ZEND_FE_END', '', $intlTable),
@@ -119,6 +121,16 @@ try {
         refused(fn() => (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk'), 'unknown Intl registration accepted');
         $tests++; echo "PASS unknown SDK Intl capability / {$name} refused\n";
     }
+    put($root . '/sdk/include/php/ext/intl/php_intl_arginfo.h', $intlTable);
+    foreach (['missing-terminator' => str_replace('ZEND_FE_END', '', $standardTable),
+        'after-terminator' => str_replace('ZEND_FE_END', "ZEND_FE_END\nZEND_FE(clamp, arginfo_clamp)", $standardTable),
+        'negative-depth' => str_replace('ZEND_FE_END', "#endif\n#if UNKNOWN\nZEND_FE_END", $standardTable),
+        'conditional-clamp' => str_replace('ZEND_FE_END', "#if UNKNOWN\nZEND_FE(clamp, arginfo_clamp)\n#endif\nZEND_FE_END", $standardTable)] as $name => $table) {
+        put($root . '/sdk/include/php/ext/standard/basic_functions_arginfo.h', $table);
+        refused(fn() => (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk'), 'unknown standard registration accepted');
+        $tests++; echo "PASS unknown SDK standard capability / {$name} refused\n";
+    }
+    put($root . '/sdk/include/php/ext/standard/basic_functions_arginfo.h', $standardTable);
     unlink($root . '/sdk/include/php/ext/intl/php_intl_arginfo.h');
     refused(fn() => (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk'), 'missing Intl registration table accepted');
     $tests++; echo "PASS missing SDK Intl table refused\n";
@@ -139,7 +151,7 @@ try {
     refused(fn() => (new StaticTargetLayout())->runtimeCapabilities($root . '/sdk'), 'unknown deepclone linkage accepted');
     $tests++; echo "PASS unknown SDK deepclone linkage refused\n";
     $actualRuntime = (new StaticTargetLayout())->runtimeCapabilities($sdk);
-    ensure($actualRuntime === ['phpVersionId' => 80425, 'redisVersion' => '6.2.0', 'deepcloneEnabled' => false, 'intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false], 'actual selected runtime capabilities differ');
+    ensure($actualRuntime === ['phpVersionId' => 80425, 'redisVersion' => '6.2.0', 'deepcloneEnabled' => false, 'intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false, 'nativeGraphemeStrrev' => false, 'nativeClamp' => false, 'nativeArrayFilterUseValue' => false], 'actual selected runtime capabilities differ');
     $tests++; echo "PASS actual selected SDK PHP/Redis macros\n";
     $preparedRoot = dirname($sysroot);
     $actualTools = (new PreparedToolchain())->load($preparedRoot . '/prepared-toolchain.json', dirname($preparedRoot), dirname($preparedRoot) . '/toolchain.lock.json', 'macos-arm64');
@@ -151,7 +163,7 @@ try {
         $fixture = $root . '/' . $label;
         $prepared = $fixture . '/prepared';
         $sdkPath = $prepared . '/typephp/vendor/swoole/phpx/full-static/sdk';
-        $headers = ['php/main/php_version.h' => "#define PHP_MAJOR_VERSION 8\n#define PHP_MINOR_VERSION 5\n#define PHP_RELEASE_VERSION 3\n#define PHP_VERSION_ID 80503\n",
+        $headers = ['php/ext/standard/basic_functions_arginfo.h' => $standardTable, 'php/main/php_version.h' => "#define PHP_MAJOR_VERSION 8\n#define PHP_MINOR_VERSION 5\n#define PHP_RELEASE_VERSION 3\n#define PHP_VERSION_ID 80503\n",
             'php/main/build-defs.h' => '#define CONFIGURE_COMMAND "' . "'--disable-all'" . '"' . "\n",
             'php/ext/redis/php_redis.h' => '#define PHP_REDIS_VERSION "7.1.0"' . "\n", 'phpx/selected.h' => 'selected public header ' . $label];
         $headerEntries = [];

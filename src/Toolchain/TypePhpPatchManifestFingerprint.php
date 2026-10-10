@@ -6,6 +6,8 @@ namespace WebmanAotBuilder\Toolchain;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
 
+require_once __DIR__ . "/UnifiedPatchApplier.php";
+
 final class TypePhpPatchManifestFingerprint
 {
     public function digest(string $path): string
@@ -33,15 +35,20 @@ final class TypePhpPatchManifestFingerprint
         ) {
             throw new ConfigurationException('TypePHP patch manifest shape drifted');
         }
+        (new UnifiedPatchApplier())->verifyManifestCoverage($path, $manifest['rules']);
         $rules = [];
         foreach ($manifest['rules'] as $rule) {
             $path = is_array($rule) ? ($rule['path'] ?? null) : null;
             if (!is_array($rule)
-                || count($rule) !== (array_key_exists('preparedBeforeSha256', $rule) ? 4 : 3)
+                || count($rule) !== 3 + (array_key_exists('preparedBeforeSha256', $rule) ? 1 : 0)
+                    + (array_key_exists('added', $rule) ? 1 : 0)
                 || !is_string($path)
                 || preg_match('~^(?:composer\.json|(?:src|vendor)/[A-Za-z0-9._/-]+)$~D', $path) !== 1
                 || in_array('..', explode('/', $path), true)
                 || isset($rules[$path])
+                || (array_key_exists('added', $rule) && ($rule['added'] !== true
+                    || $rule['beforeSha256'] !== hash('sha256', '')
+                    || array_key_exists('preparedBeforeSha256', $rule)))
                 || (array_key_exists('preparedBeforeSha256', $rule)
                     && (!is_string($rule['preparedBeforeSha256'])
                         || preg_match('/^[a-f0-9]{64}$/D', $rule['preparedBeforeSha256']) !== 1
@@ -59,6 +66,7 @@ final class TypePhpPatchManifestFingerprint
             if (array_key_exists('preparedBeforeSha256', $rule)) {
                 $rules[$path]['preparedBeforeSha256'] = $rule['preparedBeforeSha256'];
             }
+            if (array_key_exists('added', $rule)) { $rules[$path]['added'] = true; }
         }
         ksort($rules, SORT_STRING);
         $canonical = [

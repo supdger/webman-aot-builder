@@ -70,10 +70,18 @@ function sdkVerifySource(string $baseline, string $candidate, array $rules, stri
         if (!str_starts_with($rule['path'], $rulePrefix)) { continue; }
         $path = substr($rule['path'], strlen($rulePrefix));
         if ($rulePrefix === '' && str_starts_with($path, 'vendor/')) { continue; }
-        if (($original[$path]['sha256'] ?? null) !== $rule['beforeSha256']) {
-            throw new RuntimeException('Patch before hash differs from official source: ' . $rule['path']);
+        if (array_key_exists('added', $rule)) {
+            if ($rule['added'] !== true || $rule['beforeSha256'] !== hash('sha256', '')
+                || array_key_exists('preparedBeforeSha256', $rule) || array_key_exists($path, $original)) {
+                throw new RuntimeException('Added patch source must be absent from official source: ' . $rule['path']);
+            }
+            $original[$path] = ['type' => 'file', 'sha256' => $rule['afterSha256']];
+        } else {
+            if (($original[$path]['sha256'] ?? null) !== $rule['beforeSha256']) {
+                throw new RuntimeException('Patch before hash differs from official source: ' . $rule['path']);
+            }
+            $original[$path]['sha256'] = $rule['afterSha256'];
         }
-        $original[$path]['sha256'] = $rule['afterSha256'];
     }
     if ($original !== $actual) {
         foreach (array_unique([...array_keys($original), ...array_keys($actual)]) as $path) {
@@ -82,6 +90,31 @@ function sdkVerifySource(string $baseline, string $candidate, array $rules, stri
     }
     return hash('sha256', json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR));
 }
+function sdkApplySourceRules(string $targetRoot, string $candidateRoot, array $rules): void
+{
+    // Check the complete source identity before replacing any source file.
+    foreach ($rules as $rule) {
+        $target = $targetRoot . '/' . $rule['path']; $candidate = $candidateRoot . '/' . $rule['path'];
+        if (array_key_exists('added', $rule)) {
+            if ($rule['added'] !== true || $rule['beforeSha256'] !== hash('sha256', '')
+                || array_key_exists('preparedBeforeSha256', $rule) || file_exists($target) || is_link($target)) {
+                throw new RuntimeException('Added patch input must be absent from fresh official source: ' . $rule['path']);
+            }
+        } elseif (!is_file($target) || is_link($target) || hash_file('sha256', $target) !== $rule['beforeSha256']) {
+            throw new RuntimeException('Patch input differs from fresh official source: ' . $rule['path']);
+        }
+        if (!is_file($candidate) || is_link($candidate) || hash_file('sha256', $candidate) !== $rule['afterSha256']) {
+            throw new RuntimeException('Approved candidate source differs: ' . $rule['path']);
+        }
+    }
+    foreach ($rules as $rule) {
+        $target = $targetRoot . '/' . $rule['path']; $candidate = $candidateRoot . '/' . $rule['path'];
+        if (!copy($candidate, $target) || hash_file('sha256', $target) !== $rule['afterSha256']) {
+            throw new RuntimeException('Cannot apply approved candidate source: ' . $rule['path']);
+        }
+    }
+}
+
 function sdkToolDigest(array $entries, string $tool): string
 {
     $path = 'prepared/llvm/bin/' . $tool;
@@ -120,6 +153,8 @@ function sdkVerifySysroot(string $archive, string $root, array $expected): array
     if ($entries === [] || $actual !== $entries) { throw new RuntimeException('Sysroot bytes or link targets differ from the locked input component'); }
     return ['archiveSha256' => $expected['sha256'], 'manifestSha256' => $expected['manifestSha256'], 'treeSha256' => hash('sha256', json_encode($actual, JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR)), 'tools' => ['clang' => sdkToolDigest($manifest['entries'], 'clang'), 'objcopy' => sdkToolDigest($manifest['entries'], 'llvm-objcopy')]];
 }
+
+if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') !== __FILE__) { return; }
 
 try {
     $options = [];
@@ -167,15 +202,7 @@ try {
     $typephp = $sourceOutput . '/' . basename($sourceRoots['typephp']); sdkCopy($sourceRoots['typephp'], $typephp);
     mkdir($typephp . '/vendor', 0755); mkdir($typephp . '/vendor/swoole', 0755);
     $phpx = $typephp . '/vendor/swoole/phpx'; sdkCopy($sourceRoots['phpx'], $phpx);
-    foreach ($rules as $rule) {
-        $target = $typephp . '/' . $rule['path']; $candidate = $inputTypephp . '/' . $rule['path'];
-        if (!is_file($target) || is_link($target) || hash_file('sha256', $target) !== $rule['beforeSha256']) {
-            throw new RuntimeException('Patch input differs from fresh official source: ' . $rule['path']);
-        }
-        if (!is_file($candidate) || is_link($candidate) || hash_file('sha256', $candidate) !== $rule['afterSha256'] || !copy($candidate, $target)) {
-            throw new RuntimeException('Cannot apply approved candidate source: ' . $rule['path']);
-        }
-    }
+    sdkApplySourceRules($typephp, $inputTypephp, $rules);
     (new TypePhpPatchSourceVerifier())->verify($typephp, $manifest);
     $sourceIdentity = [
         'typephpTreeSha256' => sdkVerifySource($sourceRoots['typephp'], $typephp, $rules, '', ['vendor']),

@@ -138,3 +138,62 @@
 #### Scenario: 同形模板依赖不同局部绑定
 - **WHEN** 相同规范化表达式分别出现于 do、foreach 或其他控制流而局部变量来源不同
 - **THEN** 转换验证真实变量绑定及所属控制流，不将其他上下文误作目标，不引入未定义变量
+
+### Requirement: 项目模板不适用交由编译器判断
+系统 SHALL 对项目表明确的旧式未匹配或作用域歧义保留完整文件入口原文并调用 TypePHP；MUST NOT 因旧式模板失配判断源码不能编译。本项替代前述项目模板未知结构必须停止的准入要求，工具材料、路径及输出完整性 MUST 保持严格。
+
+#### Scenario: 部分匹配与旧式缺失
+- **WHEN** 部分转换匹配而另一旧式及已适配式均不存在
+- **THEN** 返回完整入口原文，不留下局部重命名或 Carbon 预步，交由 TypePHP 判断
+
+#### Scenario: 已支持闭包绑定
+- **WHEN** 项目使用 bindTo 或 Closure::bind
+- **THEN** 工具不执行旧 runtime throw 降级，保留 Carbon 对绑定结果的调用
+
+#### Scenario: 编译器报错
+- **WHEN** TypePHP 返回诊断与失败码
+- **THEN** 展示原始错误并停止产物激活，不跳过错误文件或伪称构建完成
+
+### Requirement: 普通 PHP 方法保留源码合同
+系统 SHALL 在编译器区分普通 PHP 方法与 Native 转换方法，MUST 保留普通 toArray 原签名、参数调用、动态返回及继承合同。系统 MUST NOT 根据方法体或接口 PHPDoc 强制补 array 返回声明或转换返回值，Native 转换方法 MUST 继续验证其必要签名。
+
+#### Scenario: 普通 toArray 无原生返回类型
+- **WHEN** 普通 PHP 类或接口声明无原生 array 返回类型的 toArray
+- **THEN** 编译器按原声明及调用合同处理，不修改镜像签名来冒充 Native 转换条件
+
+### Requirement: 可选声明保留 Composer 惰性加载语义
+系统 SHALL 仅在 PSR-4 来源身份、顶部无执行副作用、声明图及可选条件均已验证时延后未实际使用的缺依赖声明。真正请求 MUST 保留 PHP 原始加载错误，不自动安装包、不生成空声明，不将全部 vendor 的 eager 缺 trait 误归为用户项目错误。
+
+#### Scenario: 未使用可选声明
+- **WHEN** 已验证的可选声明没有实际被请求
+- **THEN** 保留惰性加载行为并继续转换实际可达代码
+
+#### Scenario: 请求缺失声明
+- **WHEN** 项目真正请求仍缺类或 trait 的声明
+- **THEN** 保留原始加载 fatal，不伪称已完成编译
+
+### Requirement: 真实生产来源闭合与缺失诊断
+系统 SHALL 根据已安装且与生产 Composer 锁一致的 PSR-0/4、classmap 与 files 补齐编译来源，MUST 重核缓存摘要、链接与路径。系统 MUST 保留真正缺失依赖的 TypePHP 原始错误与退出码，MUST NOT 自动安装包、创建空声明或跳过错误来源。
+
+#### Scenario: 来源缓存漂移
+- **WHEN** 已选源码摘要或祖先路径安全发生变化
+- **THEN** 明确拒绝并标识来源，不继续使用旧计划
+
+#### Scenario: 编译器缺少 trait
+- **WHEN** 原始诊断指向可核对的镜像文件与一致生产锁
+- **THEN** 追加引用包和已验证来源信息，suggest 仅作为元数据线索；编译仍失败，不激活产物
+
+### Requirement: 已知 PHP 值存储保留入口和运行时合同
+系统 SHALL 对已验证的目标函数返回集合及普通 PHP 局部已知混合值采用适用动态存储，MUST 保留参数入口 ABI、原命名空间函数查找、求值次数、警告与错误行为。新增推断 MUST 保持 goto、未知来源、Native 与引用边界，MUST NOT 用宿主反射代替目标 SDK 声明。
+
+#### Scenario: 普通 PHP 函数体改变参数值类型
+- **WHEN** 已验证的函数体把按值参数赋为另一已知 PHP 值类型
+- **THEN** 参数入口合同保留，适用函数体以动态存储处理，不强制更改源码签名
+
+#### Scenario: 命名空间回退与已知运算
+- **WHEN** 普通 PHP 调用存在命名空间或全局分派，或字符串/动态值执行 bitwise NOT
+- **THEN** 结果、参数求值、错误及警告按原 PHP 合同处理；精确修改路径保持 manifest coverage
+
+#### Scenario: 宿主与目标扩展能力不同
+- **WHEN** compiler PHP-driver 反射没有目标 SDK 已声明的原生类
+- **THEN** 分别核对两层能力，不直接归为项目缺包或宣称完整编译成功

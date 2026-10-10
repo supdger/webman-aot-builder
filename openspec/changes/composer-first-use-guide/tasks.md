@@ -29,3 +29,14 @@
 - 独立冷用户：实际 Composer 入口恢复终端、取消 0、完整包离线导入、就绪复用、无效项目诊断和重选后保持失败 78 均通过。此为 Mac CLI 首次使用验收，不是新业务编译成功或 Windows 实机证明。
 - R3 与 R2 仅 README 三处明确 Composer/独立安装包路线，运行时和资源字节不变；R3 SHA-256 ab01f161e94b2d94e9cb1195433675c7f3ced746a9b9764f297c97b8a5b35b07，28093 字节 / 12 成员。
 - 用户既有“发布，我要清理干净后实施composer包”和“允许，完成合并、发布和仓库切换”授权，主控现准出同仓库 0.3.6 Composer 修复；仅 ZIP+SHA256SUMS 非 latest，原完整运行时及 latest 保持 0.3.2。公开发行与官方消费证据在操作完成后记录，不预填成功。
+
+## 父 Composer 超时与输入恢复接续
+
+- [x] 4.1 合入父 PRE_COMMAND_RUN 精确 global exec/binary 处理，保留其他命令与无事件能力路径。
+- [x] 4.2 在现 Console/Flow 读取边界处理自身 fgets 故障，保留父 FD3、开放输入/半行/EOF 合同和原处理器；不覆盖 Installer/Process。
+- [x] 4.3 作者验证：guide 28、实际父 Composer 对照 9、Flow 27 通过，实际背景 PTY EIO 明确失败，无 fgets Notice；临时 HOME/cache 清理。源码与候选 Composer ZIP 13 文件一致，6 路径固定 `/private/tmp/webman-aot-unified-timeout-package-v2/source-freeze.json`。
+- [x] 4.4 当前固定候选独立验收通过：guide 28、actual Composer 9 与精准 Plugin API 6 场景，6 路径和保留的 Installer/Process 摘要无漂移；Windows 物理终端未验收，不据 macOS 对照声称已通过。
+
+候选未提交、发布或替换用户全局安装，Wiki 仅草稿；原已通过下载父取消切片仍保留，其早版 Console 全回归不代替本次末改的独验。
+
+独验原始证据：`/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/package-B-acceptance.json` 与 `plugin-scope-result.json`。真实 PTY 使用正常审核后的隔离执行，默认受限环境不能恢复控制终端；无本机升级或服务操作。

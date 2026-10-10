@@ -141,6 +141,122 @@ final class MinimalComponent
         }
     }
 
+    /** Build a separate generation; every reused byte must match the new locked manifest. */
+    public function reuse(
+        string $previous,
+        string $previousManifestSha256,
+        string $previousLockSha256,
+        string $manifestPath,
+        string $replacementRoot,
+        string $candidate,
+        string $host,
+        string $manifestSha256,
+        string $lockSha256,
+        ?\Closure $progress = null
+    ): void {
+        foreach ([$previous, $replacementRoot, dirname($candidate)] as $root) {
+            if (is_link($root) || !is_dir($root) || realpath($root) === false) {
+                throw new ConfigurationException('upgrade component root is unsafe');
+            }
+            for ($parent = $root; ; $parent = dirname($parent)) {
+                if (is_link($parent)) { throw new ConfigurationException('upgrade component root has a linked ancestor'); }
+                if ($parent === dirname($parent)) { break; }
+            }
+        }
+        $previous = (string) realpath($previous);
+        $replacementRoot = (string) realpath($replacementRoot);
+        $candidate = realpath(dirname($candidate)) . '/' . basename($candidate);
+        $this->verifyGeneration($previous, $host, $previousManifestSha256, $previousLockSha256);
+        $json = is_file($manifestPath) && !is_link($manifestPath) ? file_get_contents($manifestPath) : false;
+        if (!is_string($json) || !hash_equals($manifestSha256, hash('sha256', $json))) {
+            throw new UnavailableException('upgrade component manifest differs from its lock');
+        }
+        $manifest = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
+        $entries = $manifest['entries'] ?? null;
+        if (!is_array($entries) || ($manifest['schema'] ?? null) !== 'webman-aot-builder-minimal-component-v1'
+            || ($manifest['host'] ?? null) !== $host || ($manifest['toolchainLockSha256'] ?? null) !== $lockSha256) {
+            throw new ConfigurationException('upgrade component host or lock differs');
+        }
+        $this->assertEntries($entries);
+        // A link may not be an ancestor of another entry, even when its target is inside the manifest.
+        foreach ($entries as $name => $entry) {
+            for ($parent = dirname($name); $parent !== '.'; $parent = dirname($parent)) {
+                if (isset($entries[$parent]) && $entries[$parent]['type'] !== 'directory') {
+                    throw new ConfigurationException('upgrade component parent is not a directory: ' . $name);
+                }
+            }
+        }
+        if (file_exists($candidate) || is_link($candidate) || !mkdir($candidate, 0700, true)) {
+            throw new ConfigurationException('upgrade component candidate is not an empty new directory');
+        }
+        foreach ($entries as $name => $entry) {
+            if ($entry['type'] === 'directory' && !is_dir($candidate . '/' . $name)
+                && !mkdir($candidate . '/' . $name, 0700, true)) {
+                throw new ConfigurationException('cannot create upgrade component directory: ' . $name);
+            }
+        }
+        $reused = 0;
+        $replaced = 0;
+        $reusedBytes = 0;
+        $replacedBytes = 0;
+        $reviewedSources = is_file($replacementRoot . '/prepared/prepared-toolchain.json')
+            ? $this->candidateSourceReplacements($replacementRoot) : [];
+        foreach ($entries as $name => $entry) {
+            if ($entry['type'] !== 'file') { continue; }
+            $guard = $reviewedSources[$name] ?? null;
+            $guarded = is_array($guard) && in_array($entry['sha256'], array_filter([
+                $guard['beforeSha256'], $guard['preparedBeforeSha256'] ?? null, $guard['afterSha256'],
+            ]), true);
+            $expected = $guarded ? $guard['afterSha256'] : $entry['sha256'];
+            $source = null;
+            foreach ([$previous, $replacementRoot] as $root) {
+                $path = $root . '/' . $name;
+                $safe = !is_link($root);
+                for ($parent = dirname($path); $safe && $parent !== $root; $parent = dirname($parent)) {
+                    $safe = !is_link($parent) && is_dir($parent) && $parent !== dirname($parent);
+                }
+                if ($safe && is_file($path) && !is_link($path)
+                    && ($expected !== $entry['sha256'] || filesize($path) === $entry['size'])
+                    && hash_equals($expected, (string) hash_file('sha256', $path))) {
+                    $source = $path;
+                    break;
+                }
+            }
+            if ($source === null) {
+                throw new UnavailableException('no verified reusable or bundled replacement file: ' . $name);
+            }
+            $target = $candidate . '/' . $name;
+            if (!is_dir(dirname($target)) && !mkdir(dirname($target), 0700, true)) {
+                throw new ConfigurationException('cannot create implicit upgrade parent: ' . $name);
+            }
+            if (!copy($source, $target) || !chmod($target, $entry['executable'] ? 0700 : 0600)
+                || filesize($target) !== filesize($source)
+                || !hash_equals($expected, (string) hash_file('sha256', $target))) {
+                throw new UnavailableException('copied upgrade component differs: ' . $name);
+            }
+            if (str_starts_with($source, $previous . '/')) { $reused++; $reusedBytes += filesize($source); }
+            else { $replaced++; $replacedBytes += filesize($source); }
+            if (($reused + $replaced) % 250 === 0) {
+                $progress?->__invoke('Copied ' . ($reused + $replaced) . ' verified component files');
+            }
+        }
+        foreach ($entries as $name => $entry) {
+            if ($entry['type'] === 'link' && !is_dir(dirname($candidate . '/' . $name))
+                && !mkdir(dirname($candidate . '/' . $name), 0700, true)) {
+                throw new ConfigurationException('cannot create implicit upgrade link parent');
+            }
+            if ($entry['type'] === 'link' && !symlink($entry['target'], $candidate . '/' . $name)) {
+                throw new ConfigurationException('cannot restore upgrade component link: ' . $name);
+            }
+        }
+        if (file_put_contents($candidate . '/minimal-component.json', $json, LOCK_EX) === false) {
+            throw new ConfigurationException('cannot preserve upgrade component manifest');
+        }
+        $this->verifyGeneration($candidate, $host, $manifestSha256, $lockSha256);
+        $progress?->__invoke(sprintf('Reused %d files (%d bytes); bundled replacements %d files (%d bytes).',
+            $reused, $reusedBytes, $replaced, $replacedBytes));
+    }
+
     public function verifyGeneration(
         string $generation,
         string $host,

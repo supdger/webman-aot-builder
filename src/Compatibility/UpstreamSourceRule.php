@@ -9,6 +9,27 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class UpstreamSourceRule
 {
     /** @param array<string,string> $replacements */
+    public function applyIfPresent(string $path, string $source, array $replacements, ?bool &$applicable = null): string
+    {
+        $applicable = true;
+        try {
+            return $this->replace($path, $source, $replacements);
+        } catch (ConfigurationException $error) {
+            foreach ([
+                'upstream source conversion structure drift: ',
+                'upstream local conversion method declaration is unsupported: ',
+                'upstream conversion switch binding is unsupported: ',
+            ] as $notApplicable) {
+                if (str_starts_with($error->getMessage(), $notApplicable)) {
+                    $applicable = false;
+                    return $source;
+                }
+            }
+            throw $error;
+        }
+    }
+
+    /** @param array<string,string> $replacements */
     public function replace(string $path, string $source, array $replacements, bool $preserveNestedFunctions = false): string
     {
         if ($path === 'vendor/nesbot/carbon/src/Carbon/Traits/Localization.php') { return $this->carbonLocalization($source, $replacements); }

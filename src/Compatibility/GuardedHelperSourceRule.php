@@ -9,7 +9,7 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 /** Select helper declarations and runtime branches for the approved static target. */
 final class GuardedHelperSourceRule
 {
-    public function __construct(private ?int $phpVersionId = null, private ?string $redisVersion = null, private array $runtimeCapabilities = []) {}
+    public function __construct(private ?int $phpVersionId = null, private ?string $redisVersion = null, private array $runtimeCapabilities = [], private ?string $mirror = null) {}
 
     public function prepare(string $path, string $source): ?string
     {
@@ -22,9 +22,75 @@ final class GuardedHelperSourceRule
             in_array($path, ['vendor/zoujingli/ip2region/function.php', 'vendor/zoujingli/ip2region/src/common.php'], true) => $this->ipLoader($path, $source),
             preg_match('#^vendor/symfony/cache/Traits/Redis(?:Cluster)?[0-9]+ProxyTrait\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'redis'),
             $path === 'vendor/symfony/polyfill-php85/bootstrap.php' => $this->phpBootstrap($source),
-            str_starts_with($path, 'vendor/symfony/polyfill-php85/Resources/stubs/') => $this->runtimeBranches($source, 'php'),
+            preg_match('#^vendor/symfony/polyfill-php[0-9]+/bootstrap(?:[0-9]+)?\.php$#D', $path) === 1 => $this->phpBootstrapCutoff($path, $source),
+            preg_match('#^vendor/symfony/polyfill-php[0-9]+/Resources/stubs/.+\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'php', true),
             default => null,
         };
+    }
+
+    /** Prepare pure self-guarded declarations in Composer file-autoload order. */
+    public function prepareAutoloadFunctions(string $source, array $providers): ?array
+    {
+        if (($this->runtimeCapabilities['sdkNamespacedFunctionExportsKnown'] ?? false) !== true) { return null; }
+        try { $tokens = $this->tokens($source); $guards = $this->topLevelGuards($tokens); }
+        catch (\ParseError) { return null; }
+        catch (ConfigurationException $error) {
+            if (in_array($error->getMessage(), ['Helper source delimiter structure drift', 'Helper source unbalanced declaration', 'Helper target guard has unsupported elseif'], true)) { return null; }
+            throw $error;
+        }
+        if ($guards === []) { return null; }
+        $namespace = '';
+        $edits = [];
+        $declared = [];
+        $guardStarts = array_column($guards, null, 'start');
+        for ($index = 0; $index < count($tokens); ++$index) {
+            $token = $tokens[$index];
+            if ($token['id'] === T_DECLARE) {
+                $declaration = array_slice(array_column($tokens, 'text'), $index, 7);
+                if (!in_array($declaration, [['declare', '(', 'strict_types', '=', '1', ')', ';'], ['declare', '(', 'strict_types', '=', '0', ')', ';']], true)) { return null; }
+                $index += 6;
+                continue;
+            }
+            if ($token['id'] === T_NAMESPACE) {
+                if ($namespace !== '' || !isset($tokens[$index + 1], $tokens[$index + 2]) || $tokens[$index + 2]['text'] !== ';') { return null; }
+                $namespace = trim($tokens[++$index]['text'], '\\');
+                ++$index;
+                continue;
+            }
+            if ($token['id'] === T_USE) {
+                while (isset($tokens[++$index]) && $tokens[$index]['text'] !== ';') {
+                    if ($tokens[$index]['id'] === T_FUNCTION) { return null; }
+                }
+                continue;
+            }
+            if (!isset($guardStarts[$index])) { return null; }
+            $guard = $guardStarts[$index];
+            $condition = $this->texts($tokens, $guard['conditionStart'], $guard['conditionEnd']);
+            if ($namespace === '' || count($condition) !== 5 || $condition[0] !== '!' || !in_array($condition[1], ['function_exists', '\\function_exists'], true)
+                || $condition[2] !== '(' || $condition[4] !== ')' || $guard['elseStart'] !== null
+                || ($tokens[$guard['bodyStart']]['id'] ?? null) !== T_FUNCTION
+                || ($tokens[$guard['bodyStart'] + 1]['id'] ?? null) !== T_STRING
+            ) { return null; }
+            $name = strtolower($namespace . '\\' . $tokens[$guard['bodyStart'] + 1]['text']);
+            if (strtolower(ltrim($this->literal($condition[3]) ?? '', '\\')) !== $name
+                || (in_array($name, $this->runtimeCapabilities['sdkNamespacedFunctionExports'] ?? [], true) && !in_array($name, $this->runtimeCapabilities['nativeNamespacedFunctions'] ?? [], true))
+                || $name === strtolower($namespace . '\\function_exists')
+            ) { return null; }
+            if ($condition[1] === 'function_exists' && array_key_exists(strtolower($namespace . '\\function_exists'), $providers)) { return null; }
+            $parameterEnd = $this->closing($tokens, $guard['bodyStart'] + 2, '(', ')');
+            $body = $parameterEnd + 1;
+            while (isset($tokens[$body]) && $tokens[$body]['text'] !== '{') { ++$body; }
+            if ($body >= $guard['bodyEnd'] || $this->closing($tokens, $body, '{', '}') !== $guard['bodyEnd'] - 1) { return null; }
+            if (array_key_exists($name, $providers) && $providers[$name] === null) { return null; }
+            $replacement = isset($providers[$name]) || isset($declared[$name]) || in_array($name, $this->runtimeCapabilities['nativeNamespacedFunctions'] ?? [], true) ? '' : $this->body($source, $tokens, $guard);
+            $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], $replacement];
+            $declared[$name] = true;
+            $index = $guard['end'];
+        }
+        $prepared = $this->edits($source, $edits);
+        try { $this->tokens($prepared); }
+        catch (\ParseError $error) { throw new ConfigurationException('autoload helper preparation produced invalid source', previous: $error); }
+        return ['source' => $prepared, 'functions' => array_keys($declared)];
     }
 
     private function routeOptions(string $source): string
@@ -165,24 +231,101 @@ final class GuardedHelperSourceRule
         return $source . "\n}\n";
     }
 
-    private function runtimeBranches(string $source, string $runtime): string
+    private function runtimeBranches(string $source, string $runtime, bool $preserveUnknown = false): string
     {
+        $original = $source;
         $tokens = $this->tokens($source);
         $edits = [];
-        foreach ($this->topLevelGuards($tokens) as $guard) {
+        $guards = $preserveUnknown ? $this->optionalPhpGuards($tokens) : $this->topLevelGuards($tokens);
+        if ($guards === null) { return $original; }
+        foreach ($guards as $guard) {
             $condition = $this->texts($tokens, $guard['conditionStart'], $guard['conditionEnd']);
             $selected = $this->runtimeCondition($condition, $runtime);
-            if ($selected === null) { throw new ConfigurationException('Unsupported ' . $runtime . ' target declaration guard'); }
-            $body = $selected ? $this->body($source, $tokens, $guard) : ($guard['elseStart'] === null ? '' : $this->body($source, $tokens, $guard, true));
+            if ($selected === null) {
+                if ($preserveUnknown) { return $original; }
+                throw new ConfigurationException('Unsupported ' . $runtime . ' target declaration guard');
+            }
+            $body = $selected ? $this->body($source, $tokens, $guard) : '';
+            if (!$selected) {
+                foreach ($guard['elseifs'] ?? [] as $branch) {
+                    $selected = $this->runtimeCondition($this->texts($tokens, $branch['conditionStart'], $branch['conditionEnd']), $runtime);
+                    if ($selected === null) { return $original; }
+                    if ($selected) { $body = $this->body($source, $tokens, $branch); break; }
+                }
+                if (!$selected && $guard['elseStart'] !== null) { $body = $this->body($source, $tokens, $guard, true); }
+            }
             $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], $body];
         }
         $source = $this->edits($source, $edits);
         foreach ($this->tokens($source) as $token) {
             if (($runtime === 'php' && ltrim($token['text'], '\\') === 'PHP_VERSION_ID')
                 || ($runtime === 'redis' && ltrim($token['text'], '\\') === 'phpversion')
-            ) { throw new ConfigurationException('Unselected target runtime branch remains'); }
+            ) {
+                if ($preserveUnknown) { return $original; }
+                throw new ConfigurationException('Unselected target runtime branch remains');
+            }
         }
         return $source;
+    }
+
+    private function phpBootstrapCutoff(string $path, string $source): string
+    {
+        $tokens = $this->tokens($source);
+        $guards = $this->optionalPhpGuards($tokens);
+        if ($guards === null) { return $source; }
+        $edits = [];
+        foreach ($guards as $guard) {
+            if ($guard['elseStart'] !== null || $guard['elseifs'] !== []) { return $source; }
+            $condition = $this->texts($tokens, $guard['conditionStart'], $guard['conditionEnd']);
+            $body = $this->texts($tokens, $guard['bodyStart'], $guard['bodyEnd']);
+            $selected = $this->runtimeCondition($condition, 'php');
+            $replacement = null;
+            if ($selected === false) { $replacement = ''; }
+            elseif ($selected === true && $body === ['return', ';']) {
+                $edits[] = [$tokens[$guard['start']]['offset'], strlen($source), ''];
+                break;
+            } elseif ($selected === true && count($body) === 6 && array_slice($body, 0, 4) === ['return', 'require', '__DIR__', '.'] && $body[5] === ';') {
+                $relative = $this->literal($body[4]);
+                if ($relative === null || preg_match('#^/bootstrap[0-9]+\.php$#D', $relative) !== 1 || $this->mirror === null) { return $source; }
+                $companionPath = dirname($path) . $relative;
+                $file = $this->mirror . '/' . $companionPath;
+                $root = realpath($this->mirror);
+                $resolved = realpath($file);
+                if (!is_string($root) || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($root) || !is_string($resolved)
+                    || !str_starts_with($resolved, $root . '/') || is_link($file) || !is_file($file)
+                ) { throw new ConfigurationException('PHP polyfill bootstrap companion is missing or unsafe'); }
+                for ($parent = dirname($file); $parent !== $root; $parent = dirname($parent)) {
+                    if (is_link($parent) || $parent === dirname($parent) || !str_starts_with($parent, $root . '/')) { throw new ConfigurationException('PHP polyfill bootstrap companion ancestor is unsafe'); }
+                }
+                $companion = file_get_contents($file);
+                if (!is_string($companion)) { throw new ConfigurationException('Unable to read PHP polyfill bootstrap companion'); }
+                $prepared = $this->phpBootstrapCutoff($companionPath, $companion);
+                if ($prepared === $companion) { return $source; }
+                $edits[] = [$tokens[$guard['start']]['offset'], strlen($source), ''];
+                break;
+            } elseif ($condition === ['!', 'defined', '(', "'ARRAY_FILTER_USE_VALUE'", ')'] && $body === ['define', '(', "'ARRAY_FILTER_USE_VALUE'", ',', '0', ')', ';']) {
+                $replacement = $this->intlCapability('nativeArrayFilterUseValue') ? '' : 'const ARRAY_FILTER_USE_VALUE = 0;';
+            } elseif (count($condition) === 5 && $condition[0] === '!' && ltrim($condition[1], '\\') === 'function_exists'
+                && $condition[2] === '(' && $condition[4] === ')' && $this->literal($condition[3]) === 'clamp' && $this->isFunction($body, 'clamp')
+            ) { $replacement = $this->intlCapability('nativeClamp') ? '' : $this->body($source, $tokens, $guard); }
+            elseif (count($condition) === 10 && ltrim($condition[0], '\\') === 'extension_loaded' && $condition[1] === '('
+                && $this->literal($condition[2]) === 'intl' && $condition[3] === ')' && $condition[4] === '&&' && $condition[5] === '!'
+                && ltrim($condition[6], '\\') === 'function_exists' && $condition[7] === '(' && $condition[9] === ')'
+                && $this->literal($condition[8]) === 'grapheme_strrev' && $this->isFunction($body, 'grapheme_strrev')
+            ) { $replacement = $this->intlCapability('intlEnabled') && !$this->intlCapability('nativeGraphemeStrrev') ? $this->body($source, $tokens, $guard) : ''; }
+            else { return $source; }
+            $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], $replacement];
+        }
+        return $this->edits($source, $edits);
+    }
+
+    private function optionalPhpGuards(array $tokens): ?array
+    {
+        try { return $this->topLevelGuards($tokens, true); }
+        catch (ConfigurationException $error) {
+            if (in_array($error->getMessage(), ['Helper source delimiter structure drift', 'Helper source unbalanced declaration', 'Helper target guard has unsupported elseif'], true)) { return null; }
+            throw $error;
+        }
     }
 
     private function phpBootstrap(string $source): string
@@ -247,6 +390,14 @@ final class GuardedHelperSourceRule
 
     private function runtimeCondition(array $condition, string $runtime): ?bool
     {
+        if ($runtime === 'php' && count($condition) > 4 && $condition[3] === '&&'
+            && array_intersect($condition, ['||', 'or', 'xor', '?', '=']) === []
+        ) {
+            $left = $this->runtimeCondition(array_slice($condition, 0, 3), $runtime);
+            if ($left === false) { return false; }
+            if ($left === true) { return $this->runtimeCondition(array_slice($condition, 4), $runtime); }
+            return null;
+        }
         if ($runtime === 'php' && count($condition) === 3 && ltrim($condition[0], '\\') === 'PHP_VERSION_ID'
             && preg_match('/\A[0-9]+\z/D', $condition[2]) === 1
         ) {
@@ -369,7 +520,7 @@ final class GuardedHelperSourceRule
         throw new ConfigurationException('Helper source unbalanced declaration');
     }
 
-    private function topLevelGuards(array $tokens): array
+    private function topLevelGuards(array $tokens, bool $allowElseif = false): array
     {
         $guards = [];
         $depth = 0;
@@ -380,14 +531,21 @@ final class GuardedHelperSourceRule
                 $elseStart = null;
                 $elseEnd = null;
                 $end = $bodyEnd;
-                if (($tokens[$bodyEnd + 1]['id'] ?? null) === T_ELSE) {
-                    $elseStart = $bodyEnd + 3;
-                    $elseEnd = $this->closing($tokens, $bodyEnd + 2, '{', '}');
+                $elseifs = [];
+                while ($allowElseif && ($tokens[$end + 1]['id'] ?? null) === T_ELSEIF) {
+                    $branchStart = $end + 1;
+                    $branchConditionEnd = $this->closing($tokens, $branchStart + 1, '(', ')');
+                    $end = $this->closing($tokens, $branchConditionEnd + 1, '{', '}');
+                    $elseifs[] = ['conditionStart' => $branchStart + 2, 'conditionEnd' => $branchConditionEnd, 'bodyStart' => $branchConditionEnd + 2, 'bodyEnd' => $end];
+                }
+                if (($tokens[$end + 1]['id'] ?? null) === T_ELSE) {
+                    $elseStart = $end + 3;
+                    $elseEnd = $this->closing($tokens, $end + 2, '{', '}');
                     $end = $elseEnd;
-                } elseif (($tokens[$bodyEnd + 1]['id'] ?? null) === T_ELSEIF) {
+                } elseif (($tokens[$end + 1]['id'] ?? null) === T_ELSEIF) {
                     throw new ConfigurationException('Helper target guard has unsupported elseif');
                 }
-                $guards[] = ['start' => $index, 'conditionStart' => $index + 2, 'conditionEnd' => $conditionEnd, 'bodyStart' => $conditionEnd + 2, 'bodyEnd' => $bodyEnd, 'elseStart' => $elseStart, 'elseEnd' => $elseEnd, 'end' => $end];
+                $guards[] = ['start' => $index, 'conditionStart' => $index + 2, 'conditionEnd' => $conditionEnd, 'bodyStart' => $conditionEnd + 2, 'bodyEnd' => $bodyEnd, 'elseStart' => $elseStart, 'elseEnd' => $elseEnd, 'end' => $end, 'elseifs' => $elseifs];
                 $index = $end;
             } elseif ($tokens[$index]['text'] === '{') { ++$depth; }
             elseif ($tokens[$index]['text'] === '}') { --$depth; }

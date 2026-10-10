@@ -187,6 +187,43 @@ check('PHP stub branch follows target capability', function () use ($rule): void
         ensure(behavior($output, '', 'echo StubFixture::BRANCH;') === $expected, 'PHP wrong runtime branch');
     }
 });
+check('numeric PHP polyfill families use the selected target', function () use ($rule): void {
+    $source = '<?php if (\PHP_VERSION_ID < 80200) { $GLOBALS["inactive"] = true; class PolyfillFixture {} }';
+    $output = $rule->prepare('vendor/symfony/polyfill-php82/Resources/stubs/Fixture.php', $source);
+    ensure(!str_contains($output, 'PolyfillFixture') && !str_contains($output, 'inactive'), 'Inactive target branch retained or flattened');
+    $output = (new GuardedHelperSourceRule(80100))->prepare('vendor/symfony/polyfill-php82/Resources/stubs/Fixture.php', $source);
+    ensure(str_contains($output, 'class PolyfillFixture') && !str_contains($output, 'PHP_VERSION_ID'), 'Active branch lost');
+});
+check('target version short-circuits unknown capability checks', function () use ($rule): void {
+    $source = '<?php if (\PHP_VERSION_ID < 80000 && extension_loaded("tokenizer")) { class OldTokenFixture {} }';
+    ensure(!str_contains($rule->prepare('vendor/symfony/polyfill-php80/Resources/stubs/Fixture.php', $source), 'OldTokenFixture'), 'False target conjunct did not short-circuit');
+    ensure((new GuardedHelperSourceRule(70400))->prepare('vendor/symfony/polyfill-php80/Resources/stubs/Fixture.php', $source) === $source, 'Unknown active conjunct changed source');
+});
+check('version elseif chain selects only the target branch', function (): void {
+    $source = '<?php if (\PHP_VERSION_ID < 80100) { class FirstFixture {} } elseif (\PHP_VERSION_ID < 80400) { class SecondFixture {} }';
+    foreach ([80000 => 'FirstFixture', 80300 => 'SecondFixture', 80425 => null] as $version => $expected) {
+        $output = (new GuardedHelperSourceRule($version))->prepare('vendor/symfony/polyfill-php84/Resources/stubs/Fixture.php', $source);
+        ensure(!str_contains($output, 'PHP_VERSION_ID'), 'Version chain remains');
+        ensure($expected === null ? !str_contains($output, 'class ') : str_contains($output, 'class ' . $expected), 'Incorrect target chain branch');
+    }
+});
+check('bootstrap target cutoff preserves the executed prefix', function () use ($rule): void {
+    $source = '<?php $GLOBALS["prefix"] = 1; if (\PHP_VERSION_ID >= 80200) { return; } $GLOBALS["inactive"] = 1;';
+    $output = $rule->prepare('vendor/symfony/polyfill-php82/bootstrap.php', $source);
+    ensure($output === '<?php $GLOBALS["prefix"] = 1; ', 'Bootstrap prefix changed or inactive effects retained');
+    $probe = 'echo json_encode([$GLOBALS["prefix"] ?? null, $GLOBALS["inactive"] ?? null]);';
+    ensure(behavior($output, '', $probe) === '[1,null]', 'Bootstrap prefix effect changed');
+    ensure((new GuardedHelperSourceRule(80100))->prepare('vendor/symfony/polyfill-php82/bootstrap.php', $source) === $source, 'Active fallback was removed');
+});
+check('unknown PHP layouts remain compiler input', function () use ($rule): void {
+    foreach (['<?php if (\PHP_VERSION_ID < 80100): class AlternativeFixture {} endif;', '<?php if (\PHP_VERSION_ID < 80100) { class FirstFixture {} } else if (unknown_runtime()) { class OtherFixture {} }'] as $source) {
+        ensure($rule->prepare('vendor/symfony/polyfill-php82/Resources/stubs/Fixture.php', $source) === $source, 'Unknown layout became wrapper refusal');
+    }
+});
+check('unknown PHP guard preserves the whole source', function () use ($rule): void {
+    $source = '<?php if (\PHP_VERSION_ID < 80200) { class OldFixture {} } if (unknown_runtime()) { class UnknownFixture {} }';
+    ensure($rule->prepare('vendor/symfony/polyfill-php82/Resources/stubs/Fixture.php', $source) === $source, 'Partial guard selection changed unknown source');
+});
 check('target capabilities are required only for runtime selectors', function () use ($sources, $actual): void {
     $unconfigured = new GuardedHelperSourceRule();
     ensure(is_string($unconfigured->prepare($actual['reflection'], $sources['reflection'])), 'Ordinary helper requires runtime selection');
@@ -228,7 +265,6 @@ $unsafe = [
     ['ip', str_replace("'/Ip2Region.php'", "'/Other.php'", $sources['ip'])],
     ['bootstrap', str_replace("'/bootstrap80.php'", "'/unknown.php'", $sources['bootstrap'])],
     ['bootstrap', str_replace("function locale_is_right_to_left", "function unknown_intl_function", $sources['bootstrap'])],
-    ['stub', "<?php if (unknown_runtime()) { class UnknownStub {} }"],
     ['redis', "<?php if (version_compare(phpversion('redis'), unknown_version(), '>=')) { trait RedisUnknown {} }"],
 ];
 foreach ($unsafe as $index => [$label, $source]) { check('unsafe ' . $label . ' ' . $index, static fn () => reject($rule, $actual[$label], $source)); }

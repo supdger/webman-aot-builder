@@ -76,7 +76,7 @@ function releaseComponent(string $path, string $host, string $lockHash, string $
     } finally { $zip->close(); }
 }
 
-function releaseFullPackage(string $result, string $host, string $version): array
+function releaseFullPackage(string $result, string $host, string $version, bool $complete = true): array
 {
     $data = releaseJson((string) file_get_contents(releaseFile($result)));
     $matches = array_values(array_filter($data['packages'] ?? [], static fn ($entry): bool =>
@@ -92,29 +92,83 @@ function releaseFullPackage(string $result, string $host, string $version): arra
     if ($host === 'windows-x86_64') {
         $zip = new ZipArchive();
         if ($zip->open($path) !== true) { throw new RuntimeException('Cannot open full ZIP'); }
-        try { $json = $zip->getFromName('package.json'); } finally { $zip->close(); }
+        try {
+            $json = $zip->getFromName('package.json');
+            $upgradeManifest = $complete ? null : $zip->getFromName('payload/app/toolchain/minimal-upgrade/minimal-component.json');
+        } finally { $zip->close(); }
     } else {
         $process = proc_open(['/usr/bin/tar', '-xOzf', $path, 'package.json'],
             [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => STDERR], $pipes);
         if (!is_resource($process)) { throw new RuntimeException('Cannot inspect full tar'); }
         $json = stream_get_contents($pipes[1]); fclose($pipes[1]);
         if (proc_close($process) !== 0) { throw new RuntimeException('Full tar identity extraction failed'); }
+        if (!$complete) {
+            $process = proc_open(['/usr/bin/tar', '-xOzf', $path, 'payload/app/toolchain/minimal-upgrade/minimal-component.json'],
+                [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => STDERR], $pipes);
+            if (!is_resource($process)) { throw new RuntimeException('Cannot inspect upgrade manifest'); }
+            $upgradeManifest = stream_get_contents($pipes[1]); fclose($pipes[1]);
+            if (proc_close($process) !== 0) { throw new RuntimeException('Upgrade manifest extraction failed'); }
+        }
+
     }
     $identity = is_string($json) ? releaseJson($json) : [];
-    $filename = 'webman-aot-builder-' . $version . '-full-' . $host . ($host === 'macos-arm64' ? '.tar.gz' : '.zip');
+    $filename = 'webman-aot-builder-' . $version . ($complete ? '-full-' : '-') . $host . ($host === 'macos-arm64' ? '.tar.gz' : '.zip');
     if (($identity['schema'] ?? '') !== 'webman-aot-builder-installer-package-v1'
         || ($identity['version'] ?? '') !== $version || ($identity['platform'] ?? '') !== $host
-        || ($identity['flavor'] ?? '') !== 'complete' || ($identity['revision'] ?? '') !== ($data['revision'] ?? null)
+        || ($identity['flavor'] ?? '') !== ($complete ? 'complete' : 'small') || ($identity['revision'] ?? '') !== ($data['revision'] ?? null)
         || basename($path) !== $filename) {
         throw new RuntimeException('Full package version, revision or identity mismatch');
+    }
+    if (!$complete) {
+        $componentLock = releaseJson((string) file_get_contents(dirname(__DIR__) . '/toolchain/minimal-components.lock.json'));
+        if (!is_string($upgradeManifest) || hash('sha256', $upgradeManifest)
+            !== ($componentLock['components'][$host]['manifestSha256'] ?? null)) {
+            throw new RuntimeException('Small package lacks the current locked upgrade manifest');
+        }
+        $readMember = static function (string $member) use ($path, $host): string {
+            if ($host === 'windows-x86_64') {
+                $zip = new ZipArchive();
+                if ($zip->open($path) !== true) { throw new RuntimeException('Cannot open upgrade ZIP'); }
+                try { $bytes = $zip->getFromName($member); } finally { $zip->close(); }
+            } else {
+                $process = proc_open(['/usr/bin/tar', '-xOzf', $path, $member],
+                    [0 => ['file', '/dev/null', 'r'], 1 => ['pipe', 'w'], 2 => STDERR], $pipes);
+                if (!is_resource($process)) { throw new RuntimeException('Cannot inspect upgrade replacement'); }
+                $bytes = stream_get_contents($pipes[1]); fclose($pipes[1]);
+                if (proc_close($process) !== 0) { throw new RuntimeException('Upgrade replacement is missing: ' . $member); }
+            }
+            if (!is_string($bytes)) { throw new RuntimeException('Upgrade replacement is missing: ' . $member); }
+            return $bytes;
+        };
+        $target = releaseJson($upgradeManifest);
+        $prefix = 'payload/app/toolchain/minimal-upgrade/files/';
+        $preparedJson = $readMember($prefix . 'prepared/prepared-toolchain.json');
+        if (hash('sha256', $preparedJson) !== ($target['entries']['prepared/prepared-toolchain.json']['sha256'] ?? null)) {
+            throw new RuntimeException('Upgrade prepared metadata differs from target manifest');
+        }
+        $prepared = releaseJson($preparedJson);
+        $typephp = $prepared['typephp'] ?? null;
+        if (!is_string($typephp) || preg_match('~^[A-Za-z0-9._/-]+$~D', $typephp) !== 1
+            || in_array('..', explode('/', $typephp), true)) {
+            throw new RuntimeException('Upgrade TypePHP path is unsafe');
+        }
+        $patch = releaseJson((string) file_get_contents(dirname(__DIR__) . '/toolchain/patches/typephp/0.9.2/manifest.json'));
+        foreach ($patch['rules'] as $rule) {
+            $name = 'prepared/' . $typephp . '/' . $rule['path'];
+            $entryHash = $target['entries'][$name]['sha256'] ?? null;
+            if (!in_array($entryHash, array_filter([$rule['beforeSha256'], $rule['preparedBeforeSha256'] ?? null, $rule['afterSha256']]), true)
+                || hash('sha256', $readMember($prefix . $name)) !== $rule['afterSha256']) {
+                throw new RuntimeException('Upgrade replacement is outside its reviewed source chain: ' . $name);
+            }
+        }
     }
     return ['filename' => $filename, 'url' => 'https://github.com/supdger/webman-aot-builder/releases/download/v'
         . $version . '/' . $filename, 'size' => $entry['size'], 'sha256' => $entry['sha256']];
 }
 
 try {
-    if ($argc !== 4 || !in_array($argv[1], ['components', 'composer'], true)) {
-        throw new RuntimeException('Usage: php tools/lock-release-artifacts.php components MAC.zip WINDOWS.zip | composer MAC-full-result.json WINDOWS-full-result.json');
+    if (!in_array($argc, [4, 6], true) || ($argc === 6 && $argv[1] !== 'composer') || !in_array($argv[1], ['components', 'composer'], true)) {
+        throw new RuntimeException('Usage: php tools/lock-release-artifacts.php components MAC.zip WINDOWS.zip | composer MAC-full-result.json WINDOWS-full-result.json [MAC-small-result.json WINDOWS-small-result.json]');
     }
     $version = WebmanAotBuilder\Version::VALUE;
     if ($argv[1] === 'components') {
@@ -138,8 +192,13 @@ try {
         foreach (['macos-arm64' => $argv[2], 'windows-x86_64' => $argv[3]] as $host => $result) {
             $packages[$host] = releaseFullPackage($result, $host, $version);
         }
-        releaseWrite($root . '/packages/composer-installer/resources/releases.json', [
-            'schema' => 1, 'version' => $version, 'packages' => $packages]);
+        $release = ['schema' => 1, 'version' => $version, 'packages' => $packages];
+        if ($argc === 6) {
+            foreach (['macos-arm64' => $argv[4], 'windows-x86_64' => $argv[5]] as $host => $result) {
+                $release['upgrades'][$host] = releaseFullPackage($result, $host, $version, false);
+            }
+        }
+        releaseWrite($root . '/packages/composer-installer/resources/releases.json', $release);
     }
 } catch (Throwable $exception) {
     fwrite(STDERR, '[lock failed] ' . $exception->getMessage() . "\n");

@@ -23,7 +23,7 @@ on:
       version:
         description: Expected source version
         required: true
-        default: '0.4.3'
+        default: '0.4.4'
         type: string
       native_build_revision:
         description: Native package build commit (defaults to checkout revision)

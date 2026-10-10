@@ -28,3 +28,7 @@
 ## Migration Plan
 
 候选审查后一次确认原main/新tag/非latestRelease/小ZIP/Packagist仓库切换/旧版保留/Wiki发布范围；未获确认不执行。失败保持旧registry入口与0.3.2完整资源，不移动旧tag。
+
+## Component reuse and installation commit
+
+The small package preserves the component ZIP manifest bytes and their locked SHA. It includes all reviewed TypePHP after-files from a verifier-approved prepared source, plus exact target manifest/lock/prepared/derivation metadata. Each copied file must match its target SHA or the existing reviewed before/preparedBefore-to-after guard. Copies share no hardlinks; root and entry ancestors cannot escape via links. A candidate is validated before activation. Complete full caches and complete valid .part files take precedence. Otherwise, an owned previous runtime can attempt a locked small upgrade. A safely rejected candidate falls back to the locked full package with a reason. The bridge installs in a staging root, verifies private PHP, then backs up and switches runtime/bin/ready under setup.lock. Commit failure restores all old roots and marker. Rollback failure stops without full fallback and preserves diagnostics. Resource metadata is derived from actual archives, never invented sizes or hashes.

@@ -226,7 +226,8 @@ BACKEND);
     $liveHeartbeat = false;
     $r = invoke([], '', $runnerEntry, static function (string $chunk, float $elapsed, bool $running) use (&$earlyOutput, &$liveHeartbeat): void {
         if (str_contains($chunk, 'child-start') && $running && $elapsed < 2) $earlyOutput = true;
-        if (str_contains($chunk, '[等待输出] quiet-child') && $running && $elapsed >= 4.9 && $elapsed < 5.4) $liveHeartbeat = true;
+        // The observer also includes PHP startup time; the real child state proves live delivery.
+        if (str_contains($chunk, '[等待输出] quiet-child') && $running && $elapsed >= 4.9) $liveHeartbeat = true;
     });
     check($earlyOutput && $liveHeartbeat, 'output and heartbeat arrive before real child completes');
     check($r['code'] === 29 && str_contains($r['text'], '[等待输出] quiet-child') && str_contains($r['text'], '空格 中文') && str_contains($r['text'], 'child-start'), 'real child streams output, reports quiet progress and preserves arguments/exit');

@@ -33,6 +33,17 @@ try {
             throw new RuntimeException('Invalid locked native runtime asset: ' . $host);
         }
     }
+    foreach ($release['upgrades'] ?? [] as $host => $package) {
+        $filename = 'webman-aot-builder-' . $runtimeVersion . '-' . $host
+            . ($host === 'macos-arm64' ? '.tar.gz' : '.zip');
+        if (!isset($release['packages'][$host]) || ($package['filename'] ?? null) !== $filename
+            || ($package['url'] ?? null) !== 'https://github.com/supdger/webman-aot-builder/releases/download/v'
+                . $runtimeVersion . '/' . $filename
+            || !is_int($package['size'] ?? null) || $package['size'] <= 0
+            || preg_match('/^[a-f0-9]{64}$/D', $package['sha256'] ?? '') !== 1) {
+            throw new RuntimeException('Invalid locked upgrade asset: ' . $host);
+        }
+    }
     if ($runtimeVersion !== $version) {
         throw new RuntimeException('Composer release must bind the same native runtime version.');
     }

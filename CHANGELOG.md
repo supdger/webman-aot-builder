@@ -2,6 +2,14 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.4](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.4)
+
+- 升级先校验完整包及已下载完成的 `.part`；发行包支持轻量升级且旧组件校验通过时，复用相同组件，只下载程序和必要替换文件。准备或切换失败保留恢复信息，不自动重建项目产物。
+- 已启用插件的 `composer global exec -- webman-aot ...` 在父 Composer 中关闭本次进程超时；其他命令保持原限制。修复终端读取错误和父进程结束后的处理，正常等待、半行与 EOF 保持交互语义。
+- 普通 PHP 方法保留原签名及动态值，移除旧的无声明 `toArray()` 强制 array 规则；按目标 SDK 核原生类、函数和 ABI，修复可选 Composer 声明、命名空间函数、相关类局部值、foreach-list、switch/Goto/finally 及 catch 的已验证转换。
+- macOS Apple Silicon 上以原生产锁完成 2,036 个前端转换、1,890 个 Linux 目标编译单元、静态链接及隔离产物完整性验证。Linux x64 ELF 无动态加载器及依赖；Linux 原生应用、跨请求和业务运行未验。
+- 已知嵌套 finally return 仍有旧控制流缺口，不宣称所有项目或全部 PHP 写法均兼容。详细范围见 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
+
 ## [v0.4.3](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.3)
 
 - 依赖兼容性按本次源码、API 与目标 ABI 校验；取消消费项目的版本上限、精确标签及历史源码命中总数拒绝。

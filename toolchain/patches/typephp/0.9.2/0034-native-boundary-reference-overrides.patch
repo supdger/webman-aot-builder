@@ -1,0 +1,80 @@
+--- a/src/Build/PersistentReferencesTrait.php
++++ b/src/Build/PersistentReferencesTrait.php
+@@ -112,6 +112,33 @@
+             : $this->getAotCallArgInfo($function, $class, $index);
+     }
+ 
++    private function persistentReferenceOwnerExtends(string $class, string $expected): bool
++    {
++        $class = ltrim($class, '\\');
++        $expected = ltrim($expected, '\\');
++        if ((!$this->hasClass($class) && !$this->hasInterface($class))
++            || (!$this->hasClass($expected) && !$this->hasInterface($expected))) { return false; }
++        $pending = [$class];
++        $seen = [];
++        while ($pending !== []) {
++            $owner = ltrim(array_pop($pending), '\\');
++            $key = strtolower($owner);
++            if (isset($seen[$key])) { continue; }
++            $seen[$key] = true;
++            if (strcasecmp($owner, $expected) === 0) { return true; }
++            if ($this->hasClass($owner)) {
++                $definition = $this->getClass($owner);
++                if ($definition->extends !== '') { $pending[] = $definition->extends; }
++                array_push($pending, ...$definition->implements);
++            } elseif ($this->hasInterface($owner)) {
++                $definition = $this->getInterface($owner);
++                array_push($pending, ...($definition->extendsList ?: ($definition->extends ? [$definition->extends] : [])));
++            }
++            // Native and unknown ancestors have no PHP declaration ABI to propagate.
++        }
++        return false;
++    }
++
+     public function finalizePersistentReferences(): void
+     {
+         if ($this->persistentReferenceDeclarationsFinalized) { return; }
+@@ -145,25 +172,29 @@
+                 }
+             }
+             foreach ($methods as $group) {
+-            foreach ($group as [$leftClass, $left]) {
+-                if ($left->flags & Modifiers::PRIVATE) { continue; }
+-                foreach ($group as [$rightClass, $right]) {
+-                    if ($right->flags & Modifiers::PRIVATE
+-                        || strcasecmp($left->name, $right->name) !== 0
+-                        || (!$this->isObjectClassStaticallyAssignableTo($leftClass, $rightClass)
+-                            && !$this->isObjectClassStaticallyAssignableTo($rightClass, $leftClass))) { continue; }
+-                    foreach ($left->functionDef->argInfoList as $index => $argument) {
+-                        $other = $right->functionDef->argInfoList[$index] ?? null;
+-                        if ($other !== null && $other->byRef && ($argument->persistentReference || $other->persistentReference)) {
+-                            if (!$left->functionDef->persistentReferenceEligible || !$right->functionDef->persistentReferenceEligible) {
+-                                $this->error('Persistent PHP references cannot change a Native or stub override ABI');
+-                            }
++                foreach ($group as [$leftClass, $left]) {
++                    if ($left->flags & Modifiers::PRIVATE) { continue; }
++                    foreach ($group as [$rightClass, $right]) {
++                        if ($right->flags & Modifiers::PRIVATE || strcasecmp($left->name, $right->name) !== 0) { continue; }
++                        $pairs = [];
++                        foreach ($left->functionDef->argInfoList as $index => $argument) {
++                            $other = $right->functionDef->argInfoList[$index] ?? null;
++                            if ($argument->byRef && $other !== null && $other->byRef
++                                && ($argument->persistentReference || $other->persistentReference)) {
++                                $pairs[] = [$argument, $other];
++                            }
++                        }
++                        if ($pairs === [] || (!$this->persistentReferenceOwnerExtends($leftClass, $rightClass)
++                            && !$this->persistentReferenceOwnerExtends($rightClass, $leftClass))) { continue; }
++                        if (!$left->functionDef->persistentReferenceEligible || !$right->functionDef->persistentReferenceEligible) {
++                            $this->error('Persistent PHP references cannot change a Native or stub override ABI');
++                        }
++                        foreach ($pairs as [$argument, $other]) {
+                             $changed = $this->markPersistentReference($argument) || $changed;
+                             $changed = $this->markPersistentReference($other) || $changed;
+                         }
+                     }
+                 }
+-            }
+             }
+         } while ($changed);
+         foreach ($definitions as $definition) {

@@ -1,0 +1,12 @@
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -108,7 +108,8 @@
+                 $stmts = $stmts[0]->stmts;
+             }
+             $lastExpr = end($stmts);
+-            if (!$this->isReturnExpr($lastExpr)
++            if ($case !== $v->cases[array_key_last($v->cases)]
++                and !$this->isReturnExpr($lastExpr)
+                 and !$this->isExitExpr($lastExpr)
+                 and !$this->isBreakExpr($lastExpr)
+                 and !$this->isContinueExpr($lastExpr)

@@ -23,7 +23,9 @@ spl_autoload_register(static function (string $class) use ($app): void {
 
 $started = microtime(true);
 try {
-    if (count($argv) !== 2 || !is_file($argv[1]) || is_link($argv[1])) {
+    $reuseHome = getenv('WEBMAN_AOT_REUSE_HOME');
+    $reuse = ($argv[1] ?? null) === '--reuse' && is_string($reuseHome) && $reuseHome !== '';
+    if (count($argv) !== 2 || (!$reuse && (!is_file($argv[1]) || is_link($argv[1])))) {
         throw new RuntimeException('bundled minimal component ZIP is missing or unsafe');
     }
     $host = match (true) {
@@ -51,10 +53,41 @@ try {
         new NativeDownloader()
     );
     fwrite(STDERR, "[offline] Installing verified minimal {$host} toolchain from this package...\n");
-    $generation = $manager->ensure(
-        $argv[1],
-        static fn (string $message): int => fwrite(STDERR, "[offline] {$message}\n")
-    );
+    $progress = static fn (string $message): int => fwrite(STDERR, "[offline] {$message}\n");
+    if ($reuse) {
+        if (is_link($reuseHome) || !is_dir($reuseHome)) { throw new RuntimeException('previous runtime is unsafe'); }
+        $oldApp = $reuseHome . '/current/app';
+        $oldLock = json_decode((string) file_get_contents($oldApp . '/toolchain/minimal-components.lock.json'), true, flags: JSON_THROW_ON_ERROR);
+        $oldComponent = $oldLock['components'][$host] ?? null;
+        if (($oldLock['schema'] ?? null) !== 'webman-aot-builder-minimal-components-lock-v1'
+            || !is_array($oldComponent) || !is_string($oldComponent['manifestSha256'] ?? null)
+            || ($oldLock['toolchainLockSha256'] ?? null) !== hash_file('sha256', $oldApp . '/toolchain.lock.json')) {
+            throw new RuntimeException('previous runtime component lock differs');
+        }
+        $generations = glob($reuseHome . '/toolchains/versions/*', GLOB_ONLYDIR) ?: [];
+        rsort($generations, SORT_STRING);
+        $previous = null;
+        foreach ($generations as $path) {
+            if (is_link($path) || !is_file($path . '/minimal-component.json')) { continue; }
+            try {
+                (new \WebmanAotBuilder\Toolchain\MinimalComponent())->verifyGeneration(
+                    $path, $host, $oldComponent['manifestSha256'], $oldLock['toolchainLockSha256']
+                );
+                $previous = $path;
+                break;
+            } catch (Throwable $failure) {
+                $progress('Previous generation cannot be reused: ' . $failure->getMessage());
+            }
+        }
+        if ($previous === null) { throw new RuntimeException('previous runtime has no verified reusable generation'); }
+        $upgrade = $app . '/toolchain/minimal-upgrade';
+        $generation = $manager->reuse([
+            'generation' => $previous, 'manifestSha256' => $oldComponent['manifestSha256'],
+            'toolchainLockSha256' => $oldLock['toolchainLockSha256'],
+        ], $upgrade . '/minimal-component.json', $upgrade . '/files', $progress);
+    } else {
+        $generation = $manager->ensure($argv[1], $progress);
+    }
     fwrite(STDOUT, sprintf(
         "[OK] Offline toolchain ready: %s; %.1f seconds\n",
         basename($generation),

@@ -31,6 +31,7 @@ version = archive.name.removeprefix("webman-aot-builder-").removesuffix("-compos
 package = "supdger/webman-aot-builder"
 base = pathlib.Path(tempfile.mkdtemp(prefix="aot-plugin-tests-"))
 passed = 0
+suite_started = time.monotonic()
 menu = "Webman AOT 项目构建："
 
 
@@ -131,6 +132,40 @@ def no_menu(path, args, **kwargs):
     check(code == 0 and menu not in output, " ".join(args) + " 不自动菜单")
 
 
+def broken_terminal(command, env):
+    """A background process ignoring SIGTTIN gets real EIO when reading its controlling PTY."""
+    print("[步骤] 模拟终端输入设备 EIO：" + " ".join(command), flush=True)
+    pid, master = pty.fork()
+    if pid == 0:
+        worker = os.fork()
+        if worker == 0:
+            os.setpgid(0, 0)
+            signal.signal(signal.SIGTTIN, signal.SIG_IGN)
+            os.execvpe(command[0], command, env)
+        _, status = os.waitpid(worker, 0)
+        os._exit(os.waitstatus_to_exitcode(status))
+    output = b""
+    try:
+        while True:
+            if not select.select([master], [], [], 5)[0]:
+                os.kill(pid, signal.SIGTERM)
+                raise TimeoutError("输入设备错误应立即结束")
+            try:
+                chunk = os.read(master, 65536)
+            except OSError as error:
+                if error.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            output += chunk
+            print(chunk.decode(errors="replace"), end="", flush=True)
+        _, status = os.waitpid(pid, 0)
+        return os.waitstatus_to_exitcode(status), output.decode(errors="replace")
+    finally:
+        os.close(master)
+
+
 try:
     path = fixture("guide-process-timeout", trust=True)
     code, output = invoke(path, ["global", "require", package + ":" + version, "--no-scripts"])
@@ -140,8 +175,24 @@ try:
     (state / "runtime-sentinel").write_text("keep existing runtime")
     timeout_env = {"COMPOSER_PROCESS_TIMEOUT": "1"}
     code, output = invoke(path, ["global", "exec", "--", "webman-aot", "guide"], extra=timeout_env, menu_wait=2)
-    check(code != 0 and "exceeded the timeout of 1 seconds" in output,
-          "缩短外层超时到1秒，真实Composer exec等待菜单被终止")
+    check(code == 0 and menu in output and "exceeded the timeout" not in output,
+          "父Composer 1秒超时下，启用插件的菜单等待2秒仍正常结束")
+    code, output = invoke(path, ["global", "exec", "--no-plugins", "--", "webman-aot", "guide"], extra=timeout_env, menu_wait=2)
+    check(code != 0 and menu in output and "exceeded the timeout of 1 seconds" in output,
+          "禁用插件时原故障仍可复现：父1秒超时终止菜单")
+    code, output = invoke(path, ["global", "exec", "--", "php", "-r", 'putenv("COMPOSER_PROCESS_TIMEOUT=0"); sleep(2); echo "CHILD_" . "COMPLETE";'], tty=False, extra=timeout_env)
+    check(code != 0 and "exceeded the timeout of 1 seconds" in output and "CHILD_COMPLETE" not in output,
+          "其他exec仍保留父超时，子进程设置0不改变父计时器")
+    code, output = invoke(path, ["global", "exec", "--", "php", "-r", 'sleep(2); echo "child completed";'], tty=False, extra={"COMPOSER_PROCESS_TIMEOUT": "0"})
+    check(code == 0 and "child completed" in output, "启动Composer前timeout=0恢复入口有效")
+    source = pathlib.Path(__file__).resolve().parents[3]
+    for command in [
+        ["php", str(path / "global/vendor/bin/webman-aot"), "guide", "--state-dir=" + str(base / "eio-state")],
+        ["php", str(source / "tools/guided.php"), "--mode=project", "--home=" + str(base / "eio-home"), "--bin-dir=" + str(base / "eio-bin"), "--no-path"],
+    ]:
+        code, output = broken_terminal(command, environment(path, {"TMPDIR": str(base)}))
+        check(code != 0 and "终端输入已断开" in output and "Notice" not in output and "Input/output error" not in output,
+              "真实PTY读取EIO明确失败退出，无fgets Notice")
     code, output = invoke(path, ["@proxy", "guide"], extra=timeout_env, menu_wait=2)
     check(code == 0 and output.count(menu) == 1 and "exceeded the timeout" not in output,
           "相同超时环境直接PHP代理等待超过1秒仍能正常结束")

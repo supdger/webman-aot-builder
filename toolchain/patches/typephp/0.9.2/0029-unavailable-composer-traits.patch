@@ -1,0 +1,613 @@
+--- a/src/Preprocessor.php
++++ b/src/Preprocessor.php
+@@ -7,6 +7,8 @@
+  */
+ 
+ namespace TypePhp;
++
++require_once __DIR__ . '/Build/UnavailableDeclarationsTrait.php';
+ 
+ use TypePhp\Entity\ArgInfo;
+ use TypePhp\Entity\ArrayInitPlan;
+@@ -47,6 +49,7 @@
+ 
+ class Preprocessor extends CompilerBase
+ {
++    use \TypePhp\Build\UnavailableDeclarationsTrait;
+     /**
+      * Magic methods forbidden on PHP enums. Enum cases are runtime-managed
+      * singletons, so construction, cloning, destruction, serialization and
+@@ -439,6 +442,13 @@
+ 
+     public function prepareFile(string $file): void
+     {
++        $path = realpath($file) ?: $file;
++        if (isset($this->unavailableDeclarationFiles[$path])) {
++            $this->preparedFileAsts[$path] = [];
++            $this->symbolCallInFile[$path] = [];
++            $this->climate->info('defer unavailable Composer declaration: ' . $path);
++            return;
++        }
+         $previousPhase = $this->enterCompilerPhase(self::PHASE_PREPARE);
+         try {
+             $phpCode = $this->loadFile($file);
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -7,6 +7,8 @@
+  */
+ 
+ namespace TypePhp;
++
++require_once __DIR__ . '/Generator/UnavailableDeclarationGenerator.php';
+ 
+ use Ajaxray\AnsiKit\AnsiTerminal;
+ use Ajaxray\AnsiKit\Components\Progressbar;
+@@ -802,6 +804,11 @@
+ 
+     public function convertFile(string $file, bool $forceWrite = false): ?string
+     {
++        $path = realpath($file) ?: $file;
++        if (isset($this->unavailableDeclarationFiles[$path])) {
++            $this->removeEmptyTranslationUnitArtifacts($this->getCppFile($path));
++            return null;
++        }
+         $ownsStatisticsSession = !$this->compilationStatistics->isCollecting();
+         if ($ownsStatisticsSession) {
+             $this->compilationStatistics->begin();
+@@ -1265,6 +1272,37 @@
+         ];
+     }
+ 
++    private function genUnavailableDeclarationRuntime(): array
++    {
++        if ($this->unavailableDeclarations === []) {
++            return ['code' => '', 'loader' => ''];
++        }
++        if ($this->sourceIdentityRoot === '' || $this->sourceIdentityPrefix === ''
++            || $this->isNanoMode() || $this->isWasiTarget()) {
++            throw new \RuntimeException('Unavailable Composer declarations require a Zend target with a reproducible project root');
++        }
++        $declarations = [];
++        foreach ($this->unavailableDeclarations as $declaration) {
++            $identity = $this->getSourceIdentity($declaration['file']);
++            $prefix = $this->sourceIdentityPrefix . '/';
++            if (!str_starts_with($identity, $prefix)) {
++                throw new \RuntimeException('Unavailable declaration is outside the reproducible project root: '
++                    . $declaration['name']);
++            }
++            $declarations[] = ['name' => $declaration['name'], 'trait' => $declaration['trait'],
++                'file' => substr($identity, strlen($prefix))];
++        }
++        $loader = 'typephp_unavailable_autoload_' . $this->getModuleName();
++        return ['code' => (new \TypePhp\Generator\UnavailableDeclarationGenerator())->render(
++            $loader, $declarations,
++        ), 'loader' => $loader];
++    }
++
++    private function unavailableRequestShutdownCode(): string
++    {
++        return $this->unavailableDeclarations === [] ? '' : 'typephp_unavailable_request_shutdown();';
++    }
++
+     private function doGenExtension(): string
+     {
+         if ($this->isBuildModeBin()) {
+@@ -1282,6 +1320,7 @@
+         // callbacks. Generate these before sizing caches/rendering literals:
+         // parameter validation may allocate additional stable cache IDs.
+         $stubWrapperCode = $this->genStubWrappers();
++        $unavailableRuntime = $this->genUnavailableDeclarationRuntime();
+         // genExtension() is also a public code-generation entry used directly
+         // by tooling and tests, outside SourcePipelineTrait::convert(). Keep the
+         // whole-program property-default invariant local to the consumer too.
+@@ -1299,6 +1338,13 @@
+         // Only the generated module entry allocates request-cache storage.
+         // Keep <new> out of the shared PCH dependency set used by every source.
+         $code .= '#include <new>' . PHP_EOL;
++        if ($unavailableRuntime['code'] !== '') {
++            $code .= '#include <algorithm>' . PHP_EOL;
++            $code .= 'extern "C" {' . PHP_EOL;
++            $code .= '#include <main/fopen_wrappers.h>' . PHP_EOL;
++            $code .= '#include <Zend/zend_virtual_cwd.h>' . PHP_EOL;
++            $code .= '}' . PHP_EOL;
++        }
+ 
+         if ($this->isBuildModeEmbed() && !$this->isNanoMode()) {
+             $code .= '#include <typephp_runtime.h>' . PHP_EOL;
+@@ -1543,7 +1589,12 @@
+         $code .= $traitMetadata['declarations'];
+ 
+         $code .= "// clang-format off\n";
++        $code .= $unavailableRuntime['code'];
+         $code .= "static const zend_function_entry ext_functions[] = {\n";
++        if ($unavailableRuntime['loader'] !== '') {
++            $code .= 'PHP_FE(' . $unavailableRuntime['loader'] . ', arginfo_'
++                . $unavailableRuntime['loader'] . ')' . PHP_EOL;
++        }
+         if (!$this->isNanoMode()
+             && $this->isBuildModeBin()
+             && !$this->isWasiTarget()
+@@ -1578,6 +1629,9 @@
+         // minit begin
+         $releaseAstConstantFns = array_unique($this->releaseAstConstantFns);
+         $code .= 'PHP_MINIT_FUNCTION(' . $this->getModuleName() . ') {' . PHP_EOL;
++        if ($unavailableRuntime['code'] !== '') {
++            $code .= 'if (type == MODULE_TEMPORARY) { return FAILURE; }' . PHP_EOL;
++        }
+         if ($releaseAstConstantFns !== []) {
+             // Lifecycle contract for persistent enum-case AST constants: Zend's
+             // internal-class teardown (destroy_zend_class) only tolerates them
+@@ -1631,11 +1685,19 @@
+             );
+         }
+         $code .= $registrationCode;
++        if ($unavailableRuntime['code'] !== '') {
++            $code .= 'typephp_previous_compile_file = zend_compile_file;' . PHP_EOL;
++            $code .= 'zend_compile_file = typephp_guard_declaration_file;' . PHP_EOL;
++        }
+         $code .= 'return SUCCESS;' . PHP_EOL;
+         $code .= '}' . PHP_EOL . PHP_EOL;
+         // minit end
+ 
+         $code .= 'PHP_MSHUTDOWN_FUNCTION(' . $this->getModuleName() . ') {' . PHP_EOL;
++        if ($unavailableRuntime['code'] !== '') {
++            $code .= 'if (zend_compile_file == typephp_guard_declaration_file) { '
++                . 'zend_compile_file = typephp_previous_compile_file; }' . PHP_EOL;
++        }
+         $code .= 'php::unmarkCompiledUserClasses(module_number);' . PHP_EOL;
+         // Persistent AST class constants must be restored before Zend's
+         // class teardown runs (its debug assertion only tolerates
+@@ -1787,6 +1849,11 @@
+         $code .= $this->getIndent() . 'return FAILURE;' . PHP_EOL;
+         $code .= '}' . PHP_EOL;
+         $code .= 'php::request_init();' . PHP_EOL;
++        if ($unavailableRuntime['code'] !== '') {
++            $code .= 'if (typephp_unavailable_request_init() != SUCCESS) {' . PHP_EOL;
++            $code .= 'php::request_shutdown(); delete php_request_cache; php_request_cache = nullptr; return FAILURE;' . PHP_EOL;
++            $code .= '}' . PHP_EOL;
++        }
+         if ($this->isNanoPolicyMode() && !$this->isNanoMode()) {
+             // The full Windows runtime still contains standard/process modules.
+             // Remove command functions from Zend's table after every module has
+@@ -1849,6 +1916,7 @@
+     delete php_request_cache;
+     php_request_cache = nullptr;
+     module_clean();
++    {$this->unavailableRequestShutdownCode()}
+     return SUCCESS;
+ }
+ CODE;
+--- a/src/Build/SourcePipelineTrait.php
++++ b/src/Build/SourcePipelineTrait.php
+@@ -99,6 +99,7 @@
+         $resolvedFiles = array_values(array_unique($resolvedFiles));
+         $this->sourceDirs = array_values(array_unique($this->sourceDirs));
+ 
++        $this->discoverUnavailableDeclarations($resolvedFiles);
+         $this->discoverNativeClassDeclarations($resolvedFiles);
+         foreach ($resolvedFiles as $key => $file) {
+             try {
+@@ -549,6 +550,7 @@
+     {
+         $files = $this->getFiles($path);
+         $this->prepareBuildEnvironment();
++        $this->discoverUnavailableDeclarations($files);
+         $preparedKey = $this->preparedProjectKey($files);
+         if (!$this->restorePreparedProject($preparedKey)) {
+             $files = $this->preprocessProjectFiles($files, $preparedKey);
+--- a/src/Build/PreparedProjectCacheTrait.php
++++ b/src/Build/PreparedProjectCacheTrait.php
+@@ -11,6 +11,7 @@
+         'stdTypeMap', 'nativeClassDeclarations', 'nativeGlobalObjects', 'nativeGlobalTypeResolver',
+         'globalVars', 'globalVarsInFile', 'globalVarDeclInFile', 'linkLibs',
+         'traitDeclarationsComposed', 'declarationExpressionsFinalized', 'methodOverrideFlagsFinalized',
++        'unavailableDeclarations', 'unavailableDeclarationFiles', 'declarationAutoloadInputs', 'declarationSourceFiles',
+     ];
+ 
+     private function preparedProjectKey(array $files): string
+--- /dev/null
++++ b/src/Build/UnavailableDeclarationsTrait.php
+@@ -0,0 +1,258 @@
++<?php
++
++namespace TypePhp\Build;
++
++use PhpParser\Node;
++use PhpParser\NodeFinder;
++use PhpParser\NodeTraverser;
++use PhpParser\NodeVisitor\NameResolver;
++
++/** Keep optional Composer declarations unavailable until PHP tries to load them. */
++trait UnavailableDeclarationsTrait
++{
++    /** @var array<string, array{name:string,file:string,trait:string,package:string}> */
++    protected array $unavailableDeclarations = [];
++    /** @var array<string, string> */
++    protected array $unavailableDeclarationFiles = [];
++    /** @var array<string, string> Composer metadata content identities. */
++    protected array $declarationAutoloadInputs = [];
++    /** @var list<string> */
++    protected array $declarationSourceFiles = [];
++
++    public function discoverUnavailableDeclarations(array $files): void
++    {
++        $graph = [];
++        $fileDeclarations = [];
++        $fileAsts = [];
++        $roots = [];
++        $this->unavailableDeclarations = [];
++        $this->unavailableDeclarationFiles = [];
++        $this->declarationAutoloadInputs = [];
++        $this->declarationSourceFiles = array_values(array_filter(
++            array_map(static fn(string $file): string => realpath($file) ?: $file, $files),
++            static fn(string $file): bool => str_ends_with(strtolower($file), '.php'),
++        ));
++        foreach ($this->declarationSourceFiles as $file) {
++            try {
++                $ast = $this->getAstCache()->load($file, (string) file_get_contents($file));
++                $traverser = new NodeTraverser();
++                $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
++                $ast = $traverser->traverse($ast);
++            } catch (\PhpParser\Error) {
++                continue; // prepareFile owns parser diagnostics.
++            }
++            $fileAsts[$file] = $ast;
++            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\ClassLike::class) as $node) {
++                if ($node->name === null) {
++                    continue;
++                }
++                $name = isset($node->namespacedName) ? $node->namespacedName->toString() : $node->name->toString();
++                $key = strtolower($name);
++                if (isset($graph[$key])) {
++                    throw new \RuntimeException("Duplicate declaration while resolving optional traits: {$name}");
++                }
++                $traits = [];
++                $dependencies = [];
++                foreach ($node->stmts as $statement) {
++                    if ($statement instanceof Node\Stmt\TraitUse) {
++                        foreach ($statement->traits as $trait) {
++                            $traits[] = $this->resolvedDeclarationName($trait);
++                        }
++                    }
++                }
++                if ($node instanceof Node\Stmt\Class_ && $node->extends !== null) {
++                    $dependencies[] = $this->resolvedDeclarationName($node->extends);
++                }
++                foreach ($node instanceof Node\Stmt\Interface_ ? $node->extends : ($node->implements ?? []) as $parent) {
++                    $dependencies[] = $this->resolvedDeclarationName($parent);
++                }
++                $graph[$key] = ['name' => $name, 'file' => $file, 'traits' => $traits,
++                    'dependencies' => $dependencies, 'isTrait' => $node instanceof Node\Stmt\Trait_];
++                $fileDeclarations[$file][] = $key;
++            }
++        }
++        foreach ($graph as $key => $declaration) {
++            $missing = [];
++            foreach ($declaration['traits'] as $trait) {
++                $traitKey = strtolower($trait);
++                if ((isset($graph[$traitKey]) && !$graph[$traitKey]['isTrait'])
++                    || ($this->hasClass($trait) && !$this->getClass($trait)->trait)
++                    || class_exists($trait, false) || interface_exists($trait, false)) {
++                    throw new \RuntimeException("{$declaration['name']} cannot use {$trait}: target is not a trait");
++                }
++                if (isset($graph[$traitKey]) || $this->hasClass($trait) || trait_exists($trait, false)) {
++                    continue;
++                }
++                $missing[] = $trait;
++            }
++            if ($missing !== []) {
++                $this->unavailableDeclarations[$key] = $declaration + ['trait' => $missing[0],
++                    'missingTraits' => $missing];
++                $roots[$key] = true;
++            }
++        }
++        do {
++            $changed = false;
++            foreach ($graph as $key => $declaration) {
++                if (isset($this->unavailableDeclarations[$key])) {
++                    continue;
++                }
++                foreach (array_merge($declaration['traits'], $declaration['dependencies']) as $dependency) {
++                    $root = $this->unavailableDeclarations[strtolower($dependency)] ?? null;
++                    if ($root !== null) {
++                        $this->unavailableDeclarations[$key] = $declaration + ['trait' => $root['trait'],
++                            'missingTraits' => $root['missingTraits']];
++                        $changed = true;
++                        break;
++                    }
++                }
++            }
++        } while ($changed);
++        foreach ($this->unavailableDeclarations as $key => $declaration) {
++            $file = $declaration['file'];
++            $package = $this->lazyDeclarationPackage($file, $declaration['name'], isset($roots[$key]),
++                $declaration['missingTraits']);
++            if ($package === null || count($fileDeclarations[$file] ?? []) !== 1
++                || !$this->isOnlyLazyDeclaration($fileAsts[$file])) {
++                throw new \RuntimeException("Cannot defer unavailable declaration {$declaration['name']}: "
++                    . "Trait \"{$declaration['trait']}\" not found; source is not a single Composer lazy declaration: {$file}");
++            }
++            $this->unavailableDeclarations[$key]['package'] = $package;
++            $this->unavailableDeclarationFiles[$file] = $declaration['trait'];
++        }
++        ksort($this->unavailableDeclarations, SORT_STRING);
++        ksort($this->unavailableDeclarationFiles, SORT_STRING);
++    }
++
++    private function resolvedDeclarationName(Node\Name $name): string
++    {
++        return ($name->getAttribute('resolvedName') ?? $name)->toString();
++    }
++
++    private function isOnlyLazyDeclaration(array $statements): bool
++    {
++        foreach ($statements as $statement) {
++            if ($statement instanceof Node\Stmt\Namespace_) {
++                if (!$this->isOnlyLazyDeclaration($statement->stmts)) {
++                    return false;
++                }
++            } elseif ($statement instanceof Node\Stmt\Declare_) {
++                if ($statement->stmts !== null) {
++                    return false;
++                }
++            } elseif (!$statement instanceof Node\Stmt\ClassLike
++                && !$statement instanceof Node\Stmt\Use_
++                && !$statement instanceof Node\Stmt\GroupUse
++                && !$statement instanceof Node\Stmt\Nop) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    /** Resolve installed package identity without executing target autoload PHP. */
++    private function lazyDeclarationPackage(string $file, string $class, bool $root, array $missingTraits): ?string
++    {
++        $directory = dirname($file);
++        while ($directory !== dirname($directory)) {
++            $installedFile = $directory . '/vendor/composer/installed.json';
++            if (is_file($installedFile)) {
++                break;
++            }
++            $directory = dirname($directory);
++        }
++        if (!isset($installedFile) || !is_file($installedFile)) {
++            return null;
++        }
++        $installed = $this->readDeclarationManifest($installedFile);
++        $packages = $installed['packages'] ?? $installed;
++        $rootManifest = $this->readDeclarationManifest($directory . '/composer.json');
++        foreach ($missingTraits as $missingTrait) {
++            if ($this->hasUnselectedTraitProvider($directory, $rootManifest, $missingTrait)) {
++                return null;
++            }
++        }
++        $eagerFiles = [];
++        foreach ($rootManifest['autoload']['files'] ?? [] as $eager) {
++            $eagerFiles[] = realpath($directory . '/' . $eager);
++        }
++        $owner = null;
++        $installedNames = array_column($packages, 'name');
++        foreach ($packages as $package) {
++            if (!is_array($package) || !is_string($package['install-path'] ?? null)) {
++                continue;
++            }
++            $path = realpath(dirname($installedFile) . '/' . $package['install-path']);
++            if ($path === false) {
++                continue;
++            }
++            $manifest = $this->readDeclarationManifest($path . '/composer.json');
++            foreach (array_merge($manifest['autoload']['files'] ?? [], $package['autoload']['files'] ?? []) as $eager) {
++                $eagerFiles[] = realpath($path . '/' . $eager);
++            }
++            foreach ($missingTraits as $missingTrait) {
++                if ($this->hasUnselectedTraitProvider($path, $package, $missingTrait)
++                    || $this->hasUnselectedTraitProvider($path, $manifest, $missingTrait)) {
++                    return null;
++                }
++            }
++            foreach ($manifest['autoload']['psr-4'] ?? [] as $prefix => $paths) {
++                if (!str_starts_with($class, $prefix)) {
++                    continue;
++                }
++                foreach ((array) $paths as $sourcePath) {
++                    $expected = realpath($path . '/' . $sourcePath . '/'
++                        . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php');
++                    if ($expected === $file) {
++                        if (($manifest['name'] ?? null) !== ($package['name'] ?? null)
++                            || ($manifest['autoload']['psr-4'] ?? []) != ($package['autoload']['psr-4'] ?? [])) {
++                            return null;
++                        }
++                        foreach ($manifest['require'] ?? [] as $required => $_constraint) {
++                            if (str_contains($required, '/') && !in_array($required, $installedNames, true)) {
++                                return null;
++                            }
++                        }
++                        if ($root && array_filter(array_keys($manifest['suggest'] ?? []),
++                            static fn(string $suggested): bool => str_contains($suggested, '/')
++                                && !in_array($suggested, $installedNames, true)) === []) {
++                            return null;
++                        }
++                        $owner = $package['name'];
++                    }
++                }
++            }
++        }
++        return in_array($file, $eagerFiles, true) ? null : $owner;
++    }
++
++    private function hasUnselectedTraitProvider(string $path, array $manifest, string $trait): bool
++    {
++        foreach ($manifest['autoload']['psr-4'] ?? [] as $prefix => $paths) {
++            if (!str_starts_with($trait, $prefix)) {
++                continue;
++            }
++            foreach ((array) $paths as $sourcePath) {
++                if (is_file($path . '/' . $sourcePath . '/'
++                    . str_replace('\\', '/', substr($trait, strlen($prefix))) . '.php')) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    private function readDeclarationManifest(string $path): array
++    {
++        if (!is_file($path)) {
++            throw new \RuntimeException("Missing Composer declaration metadata: {$path}");
++        }
++        $contents = (string) file_get_contents($path);
++        $this->declarationAutoloadInputs[$path] = hash('sha256', $contents);
++        $manifest = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
++        if (!is_array($manifest)) {
++            throw new \RuntimeException("Invalid Composer declaration metadata: {$path}");
++        }
++        return $manifest;
++    }
++}
+--- /dev/null
++++ b/src/Generator/UnavailableDeclarationGenerator.php
+@@ -0,0 +1,142 @@
++<?php
++
++namespace TypePhp\Generator;
++
++/** Zend loading must still fail when an optional declaration cannot be composed. */
++final class UnavailableDeclarationGenerator
++{
++    public function render(string $loader, array $declarations): string
++    {
++        $classEntries = [];
++        $fileEntries = [];
++        foreach ($declarations as $declaration) {
++            $classEntries[] = '{' . $this->literal($declaration['name']) . ', '
++                . $this->literal($declaration['trait']) . '}';
++            $fileEntries[$declaration['file']] = $declaration['trait'];
++        }
++        ksort($fileEntries, SORT_STRING);
++        $paths = [];
++        foreach ($fileEntries as $file => $trait) {
++            $paths[] = '{' . $this->literal($file) . ', ' . $this->literal($trait) . '}';
++        }
++        $classes = implode(",\n", $classEntries);
++        $files = implode(",\n", $paths);
++        return <<<CPP
++struct typephp_unavailable_class_entry { const char *name; const char *trait; };
++static const typephp_unavailable_class_entry typephp_unavailable_classes[] = {
++{$classes}
++};
++struct typephp_declaration_file_entry { const char *path; const char *trait; };
++static const typephp_declaration_file_entry typephp_declaration_files[] = {
++{$files}
++};
++static zend_op_array *(*typephp_previous_compile_file)(zend_file_handle *, int) = nullptr;
++ZEND_TLS zend_string *typephp_declaration_runtime_root = nullptr;
++ZEND_TLS bool typephp_declaration_request_active = false;
++
++static zend_op_array *typephp_guard_declaration_file(zend_file_handle *file, int type) {
++    if (!typephp_declaration_request_active) {
++        return typephp_previous_compile_file(file, type);
++    }
++    char expanded[MAXPATHLEN];
++    zend_string *resolved = file->filename ? zend_resolve_path(file->filename) : nullptr;
++    const char *path = resolved ? ZSTR_VAL(resolved)
++        : (file->filename ? expand_filepath(ZSTR_VAL(file->filename), expanded) : nullptr);
++    const char *relative = nullptr;
++    const char *root = ZSTR_VAL(typephp_declaration_runtime_root);
++    const size_t length = ZSTR_LEN(typephp_declaration_runtime_root);
++#ifdef PHP_WIN32
++    if (path && _strnicmp(path, root, length) == 0 && (path[length] == '/' || path[length] == '\\\\')) {
++#else
++    if (path && strncmp(path, root, length) == 0 && path[length] == '/') {
++#endif
++        relative = path + length + 1;
++    }
++    const char *missing_trait = nullptr;
++    bool known = false;
++    if (relative) {
++        for (const auto &entry : typephp_declaration_files) {
++#ifdef PHP_WIN32
++            std::string normalized(relative);
++            std::replace(normalized.begin(), normalized.end(), '\\\\', '/');
++            const bool matches = _stricmp(normalized.c_str(), entry.path) == 0;
++#else
++            const bool matches = strcmp(relative, entry.path) == 0;
++#endif
++            if (matches) {
++                known = true;
++                missing_trait = entry.trait;
++                break;
++            }
++        }
++    }
++    if (resolved) {
++        zend_string_release(resolved);
++    }
++    if (known && *missing_trait) {
++        zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", missing_trait);
++    }
++    return typephp_previous_compile_file(file, type);
++}
++
++ZEND_BEGIN_ARG_INFO_EX(arginfo_{$loader}, 0, 0, 1)
++    ZEND_ARG_TYPE_INFO(0, class, IS_STRING, 0)
++ZEND_END_ARG_INFO()
++PHP_FUNCTION({$loader}) {
++    zend_string *name;
++    ZEND_PARSE_PARAMETERS_START(1, 1)
++        Z_PARAM_STR(name)
++    ZEND_PARSE_PARAMETERS_END();
++    for (const auto &entry : typephp_unavailable_classes) {
++        if (ZSTR_LEN(name) == strlen(entry.name) && memcmp(ZSTR_VAL(name), entry.name, ZSTR_LEN(name)) == 0) {
++            zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", entry.trait);
++        }
++    }
++}
++
++static void typephp_unavailable_request_shutdown() {
++    typephp_declaration_request_active = false;
++    if (typephp_declaration_runtime_root) {
++        zend_string_release(typephp_declaration_runtime_root);
++        typephp_declaration_runtime_root = nullptr;
++    }
++}
++
++static zend_result typephp_unavailable_request_init() {
++    if (typephp_declaration_runtime_root || typephp_declaration_request_active) {
++        return FAILURE;
++    }
++    char root[MAXPATHLEN];
++    if (!VCWD_GETCWD(root, sizeof(root))) {
++        return FAILURE;
++    }
++    char canonical[MAXPATHLEN];
++    if (!VCWD_REALPATH(root, canonical)) {
++        return FAILURE;
++    }
++    typephp_declaration_runtime_root = zend_string_init(canonical, strlen(canonical), false);
++    zval function, callback, result;
++    ZVAL_STRING(&function, "spl_autoload_register");
++    ZVAL_STRING(&callback, "{$loader}");
++    ZVAL_UNDEF(&result);
++    const int status = call_user_function(EG(function_table), nullptr, &function, &result, 1, &callback);
++    const bool registered = status == SUCCESS && !EG(exception) && Z_TYPE(result) == IS_TRUE;
++    zval_ptr_dtor(&function);
++    zval_ptr_dtor(&callback);
++    zval_ptr_dtor(&result);
++    if (!registered) {
++        typephp_unavailable_request_shutdown();
++        return FAILURE;
++    }
++    typephp_declaration_request_active = true;
++    return SUCCESS;
++}
++
++CPP;
++    }
++
++    private function literal(string $value): string
++    {
++        return '"' . addcslashes($value, "\0..\37\"\\\177..\377") . '"';
++    }
++}

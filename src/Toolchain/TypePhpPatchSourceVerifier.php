@@ -6,6 +6,8 @@ namespace WebmanAotBuilder\Toolchain;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
 
+require_once __DIR__ . "/UnifiedPatchApplier.php";
+
 final class TypePhpPatchSourceVerifier
 {
     public function verify(string $typephpDirectory, string $manifestFile): void
@@ -33,6 +35,7 @@ final class TypePhpPatchSourceVerifier
         ) {
             throw new ConfigurationException('TypePHP patch manifest shape drifted');
         }
+        (new UnifiedPatchApplier())->verifyManifestCoverage($manifestFile, $rules['rules']);
         $seen = [];
         foreach ($rules['rules'] as $rule) {
             $path = is_array($rule) ? ($rule['path'] ?? null) : null;
@@ -41,6 +44,9 @@ final class TypePhpPatchSourceVerifier
                 || preg_match('~^(?:composer\.json|(?:src|vendor)/[A-Za-z0-9._/-]+)$~D', $path) !== 1
                 || in_array('..', explode('/', $path), true)
                 || isset($seen[$path])
+                || (array_key_exists('added', $rule) && ($rule['added'] !== true
+                    || ($rule['beforeSha256'] ?? null) !== hash('sha256', '')
+                    || array_key_exists('preparedBeforeSha256', $rule)))
                 || (array_key_exists('preparedBeforeSha256', $rule)
                     && (!is_string($rule['preparedBeforeSha256'])
                         || preg_match('/^[a-f0-9]{64}$/D', $rule['preparedBeforeSha256']) !== 1
