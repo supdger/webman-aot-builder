@@ -2,7 +2,15 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
-## [v0.4.4](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.4)
+## [v0.4.5](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.5)
+
+- 修复 Windows Composer 插件源码补齐的文件系统路径边界：PSR-4/PSR-0 扫描及匹配路径统一分隔符，避免同一文件形成混合斜杠入口而被覆盖检查拒绝；生产范围和输出覆盖校验继续保留。
+- 包含下方 0.4.4 源码候选的编译兼容、组件复用、升级恢复与 Composer 父超时修复。0.4.4 标签不移动，草稿 Release 不作为正式消费入口。
+- 编译器原生产锁静态 ELF 构建及宿主完整性证据沿用原记录；0.4.5 公开包的实际消费结果以本版 Release 与 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification) 为准，不将旧源码构建改写为本版实测。Linux 原生应用、业务及已知嵌套 finally return 缺口边界保留。
+
+## v0.4.4 — 标签已保留，Release 草稿
+
+本版未正式公开发行；原构建验证记录保留，最终测试包转到 0.4.5。
 
 - 升级先校验完整包及已下载完成的 `.part`；发行包支持轻量升级且旧组件校验通过时，复用相同组件，只下载程序和必要替换文件。准备或切换失败保留恢复信息，不自动重建项目产物。
 - 已启用插件的 `composer global exec -- webman-aot ...` 在父 Composer 中关闭本次进程超时；其他命令保持原限制。修复终端读取错误和父进程结束后的处理，正常等待、半行与 EOF 保持交互语义。

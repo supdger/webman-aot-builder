@@ -23,7 +23,7 @@ on:
       version:
         description: Expected source version
         required: true
-        default: '0.4.4'
+        default: '0.4.5'
         type: string
       native_build_revision:
         description: Native package build commit (defaults to checkout revision)
@@ -88,7 +88,7 @@ jobs:
             if ($actual -ne $lock.runtimes.'windows-x86_64'.binarySha256) { throw 'Packaged mirror regression runtime differs from its lock.' }
             Push-Location $runtime
             try {
-              foreach ($test in @('tests\installer-source-licenses.php','tests\intl-function-providers.php','tests\generator-source-scope.php','tests\generated-coverage.php','tests\project-mirror.php','tests\resumable-workspace.php')) {
+              foreach ($test in @('tests\installer-source-licenses.php','tests\intl-function-providers.php','tests\generator-source-scope.php','tests\generated-coverage.php','tests\composer-source-completion.php','tests\project-mirror.php','tests\resumable-workspace.php')) {
                 Write-Host "[regression] Native Windows $test"
                 & $php -n (Join-Path $repository $test)
                 if ($LASTEXITCODE -ne 0) { throw "Native Windows $test failed: $LASTEXITCODE" }

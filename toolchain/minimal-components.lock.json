@@ -1,15 +1,15 @@
 {
     "schema": "webman-aot-builder-minimal-components-lock-v1",
-    "version": "0.4.4",
+    "version": "0.4.5",
     "toolchainLockSha256": "5692b946b31e07ecdacc13ad8eb2409553b2944b78db101d8d9fe391764de6e1",
     "components": {
         "macos-arm64": {
-            "archive": "webman-aot-builder-0.4.4-macos-arm64-components.zip",
+            "archive": "webman-aot-builder-0.4.5-macos-arm64-components.zip",
             "sha256": "6ab517b8ed4ce88fcbdcb31955ccd2bb5c798352d9ebb1a02b7be99a7bb1a9df",
             "manifestSha256": "a90453c2dbe68043eddef061931f486f77c9e434bc520894ab9eefd8f6260118"
         },
         "windows-x86_64": {
-            "archive": "webman-aot-builder-0.4.4-windows-x86_64-components.zip",
+            "archive": "webman-aot-builder-0.4.5-windows-x86_64-components.zip",
             "sha256": "020e2d99c17556e35e04c13175b6771977170a34e05266cad7a304ec7a06ef68",
             "manifestSha256": "671d956c51f5b7ab44bad9a537864bdf4baf76166221f951f5d1f34493f17238"
         }

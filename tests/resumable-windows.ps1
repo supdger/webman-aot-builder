@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$InstallHome,
     [Parameter(Mandatory=$true)][string]$Launcher,
     [Parameter(Mandatory=$true)][string]$Fixture,
-    [Parameter(Mandatory=$true)][string]$Evidence
+    [Parameter(Mandatory=$true)][string]$Evidence,
+    [int]$ExpectedCompilationUnits = 0
 )
 $ErrorActionPreference = 'Stop'
 $utf8 = New-Object Text.UTF8Encoding($false)
@@ -95,7 +96,12 @@ try {
         if ($clock.Elapsed.TotalSeconds -gt 1800) { throw 'Checkpoint trigger exceeded 1800 seconds.' }
         if ($clock.Elapsed.TotalSeconds -ge $next) { Write-Host ("[test] parent alive {0:F0}s; completed checkpoints={1}" -f $clock.Elapsed.TotalSeconds,$completed.Count); $next += 5 }
     } while ($completed.Count -lt 5)
-    if (-not $lockChecked -or $completed.Count -ge 109) { throw 'Requires a locked concurrent refusal and a genuinely partial compile.' }
+    $progress = [regex]::Matches($text,'(?m)^\[([1-9][0-9]*)/([1-9][0-9]*)\] [0-9]+% .+\.(?:cc|cpp|c)\r?$')
+    $totals = @($progress | ForEach-Object { [int]$_.Groups[2].Value } | Sort-Object -Unique)
+    if ($totals.Count -ne 1 -or $totals[0] -le 2 -or ($ExpectedCompilationUnits -gt 0 -and $totals[0] -ne $ExpectedCompilationUnits)) { throw 'Interrupted native plan count is missing or differs from the verified initial build.' }
+    $unitCount = $totals[0]
+    if (-not $lockChecked -or $completed.Count -ge $unitCount) { throw 'Requires a locked concurrent refusal and a genuinely partial compile.' }
+    $receipt.compilationUnits = $unitCount
     $attempts = @(Get-ChildItem -LiteralPath (Join-Path $project '.webman-aot-builder\build') -Directory)
     if ($attempts.Count -ne 1) { throw 'Interrupted compile did not own exactly one attempt.' }
     $oldAttempt = $attempts[0].FullName
@@ -131,9 +137,9 @@ try {
     $retryText = Read-Log (Join-Path $Evidence 'retry-stdout.log')
     if ($code -ne 0 -or $retryText -notmatch 'Reused verified objects: ([0-9]+)') { throw 'Public retry failed or omitted its native reuse count.' }
     $reused = [int]$Matches[1]
-    if ($reused -lt 1 -or $reused -ge 109 -or -not $retryText.Contains('Successfully compiled 109 files')) { throw 'Retry did not prove partial native reuse plus remaining compilation.' }
+    if ($reused -lt 1 -or $reused -ge $unitCount -or -not $retryText.Contains("Successfully compiled $unitCount files")) { throw 'Retry did not prove partial native reuse plus remaining compilation.' }
     if (-not (Test-Path -LiteralPath $oldAttempt) -or -not (Test-Path -LiteralPath (Join-Path $project 'dist-aot\manifest.json'))) { throw 'Retry lost the interrupted attempt or did not publish the verified distribution.' }
-    $receipt.retryExit = $code; $receipt.reused = $reused; $receipt.compiledRemaining = 109-$reused
+    $receipt.retryExit = $code; $receipt.reused = $reused; $receipt.compiledRemaining = $unitCount-$reused
     if ($retryText -notmatch 'attempt-[a-f0-9]{24}' -or $Matches[0] -eq (Split-Path -Leaf $oldAttempt)) {
         throw 'Public retry did not prove a new isolated attempt.'
     }

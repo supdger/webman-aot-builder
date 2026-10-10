@@ -53,6 +53,46 @@ function Remove-OwnedDirectory([string]$Path) {
 $userPath = Path-Digest 'User'; $machinePath = Path-Digest 'Machine'
 $keys = @('PATH','TEMP','TMP','LOCALAPPDATA','WEBMAN_AOT_BUILDER_HOME','WEBMAN_AOT_NO_PAUSE','WEBMAN_AOT_CALLER_CWD','COMPOSER_HOME','COMPOSER_CACHE_DIR','CURL_HOME')
 $saved = @{}; foreach ($key in $keys) { $saved[$key] = [Environment]::GetEnvironmentVariable($key,'Process') }
+function Read-CompiledUnitCount([string]$Text) {
+    $totals = [regex]::Matches($Text,'(?m)^Successfully compiled ([1-9][0-9]*) files\r?$')
+    $cold = [regex]::Matches($Text,'(?m)^\[resume\] Reused verified objects: ([0-9]+)\r?$')
+    if ($totals.Count -ne 1 -or $cold.Count -ne 1 -or $cold[0].Groups[1].Value -ne '0') { throw 'Initial build must prove one cold native compilation.' }
+    $count = [int]$totals[0].Groups[1].Value
+    $units = [regex]::Matches($Text,'(?m)^\[([1-9][0-9]*)/([1-9][0-9]*)\] [0-9]+% .+\.(?:cc|cpp|c)\r?$')
+    if ($count -le 2 -or $units.Count -ne $count) { throw 'Initial native compilation sequence is incomplete.' }
+    for ($index = 0; $index -lt $count; $index++) {
+        if ([int]$units[$index].Groups[1].Value -ne ($index+1) -or [int]$units[$index].Groups[2].Value -ne $count) { throw 'Initial native compilation sequence differs from its total.' }
+    }
+    return $count
+}
+function Read-VerifiedCheckpointCount([string]$Cache) {
+    $records = @(Get-ChildItem -LiteralPath $Cache -Filter complete.json -Recurse -File)
+    $keys = @{}
+    foreach ($file in $records) {
+        $record = [IO.File]::ReadAllText($file.FullName,$utf8) | ConvertFrom-Json
+        $directory = $file.Directory
+        $object = Get-Item -LiteralPath (Join-Path $directory.FullName 'object')
+        if (($file.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -or ($object.Attributes -band [IO.FileAttributes]::ReparsePoint) -or
+            $record.schema -ne 'webman-aot-object-v1' -or $record.inputKey -cnotmatch '^[a-f0-9]{64}$' -or
+            $directory.Name -cnotmatch ('^'+$record.inputKey+'-[a-f0-9]{24}$') -or $keys.ContainsKey($record.inputKey) -or
+            ($record.size -isnot [int] -and $record.size -isnot [long]) -or $record.size -le 0 -or $object.Length -ne $record.size -or
+            $record.sha256 -cnotmatch '^[a-f0-9]{64}$' -or (Get-FileHash -LiteralPath $object.FullName -Algorithm SHA256).Hash.ToLowerInvariant() -cne $record.sha256) { throw 'Initial native checkpoint evidence is invalid or duplicated.' }
+        $keys[$record.inputKey] = $true
+    }
+    if ($keys.Count -le 2) { throw 'Initial build did not preserve its cacheable native units.' }
+    return $keys.Count
+}
+foreach ($count in @(109,110)) {
+    $lines = @(for ($index = 1; $index -le $count; $index++) { "[$index/$count] 100% fixture.cc" })
+    $text = ($lines -join "`n")+"`nSuccessfully compiled $count files`n[resume] Reused verified objects: 0`n"
+    if ((Read-CompiledUnitCount $text) -ne $count) { throw 'Native compilation count fixture failed.' }
+    foreach ($invalid in @(($text.Replace('[1/','[2/')),($text+"Successfully compiled $count files`n"),($text.Replace('Reused verified objects: 0','Reused verified objects: 1')))) {
+        $rejected = $false
+        try { Read-CompiledUnitCount $invalid | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw 'Malformed or warm initial native sequence was accepted.' }
+    }
+}
+Write-Host '[regression] Actual native unit-count parser: 109/110 sequences and malformed/ambiguous/warm negatives passed.'
 $owned = $false; $receipt = @{ revision=$Revision; version=$Version; mode=$Mode; success=$false }; $failure = $null
 try {
     if (-not $NativeBuildRevision) { $NativeBuildRevision = $Revision }
@@ -144,9 +184,14 @@ try {
             if ($reports.Count -ne 1) { throw 'Full setup automatic verify report is missing or ambiguous.' }
             $verify = $reports[0]
             $expectedDist = [IO.Path]::GetFullPath((Join-Path $fixture 'dist-aot'))
-            if ($verify.scope -ne 'build-host-structure-and-integrity' -or $verify.staticStructure -ne 'pass' -or [IO.Path]::GetFullPath($verify.path) -ne $expectedDist -or -not [regex]::IsMatch($guidedText,'(?m)^\[成功\] 校验本次项目产物，耗时 .+，退出码 0\r?$') -or -not $guidedText.Contains('Successfully compiled 109 files')) { throw 'Full setup did not prove 109 compilation units and successful automatic verify for this fixture.' }
+            $unitCount = Read-CompiledUnitCount $guidedText
+            if ($verify.scope -ne 'build-host-structure-and-integrity' -or $verify.staticStructure -ne 'pass' -or [IO.Path]::GetFullPath($verify.path) -ne $expectedDist -or -not [regex]::IsMatch($guidedText,'(?m)^\[成功\] 校验本次项目产物，耗时 .+，退出码 0\r?$')) { throw 'Full setup did not prove successful automatic verify for this fixture.' }
             [IO.File]::WriteAllText((Join-Path $WorkRoot 'logs\actual-verify-report.json'),($verify | ConvertTo-Json -Depth 5),$utf8)
-            $receipt.verifyScope = $verify.scope; $receipt.verifyPath = $verify.path; $receipt.compiledFiles = 109
+            $receipt.verifyScope = $verify.scope; $receipt.verifyPath = $verify.path; $receipt.compiledFiles = $unitCount
+            $checkpointUnitCount = Read-VerifiedCheckpointCount (Join-Path $fixture '.webman-aot-builder\cache\objects')
+            if ($checkpointUnitCount -gt $unitCount) { throw 'Native checkpoints exceed the verified compilation plan.' }
+            $receipt.checkpointFiles = $checkpointUnitCount
+            Write-Host "[release] Verified complete native plan: $unitCount units; cacheable checkpoint plan: $checkpointUnitCount units."
             $resumeEvidence = Join-Path $WorkRoot 'resumable-native'
             $installedRuntime = Join-Path $installHome 'current\runtime'
             $installedPhp = Join-Path $installedRuntime 'php.exe'
@@ -162,8 +207,8 @@ try {
             $env:WEBMAN_AOT_CALLER_CWD = $null
             $resumeResults = Get-Content -LiteralPath (Join-Path $resumeEvidence 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
             if ($resumeResults.Count -ne 5 -or @($resumeResults | Where-Object { $_.exit -ne 0 }).Count -ne 0 -or
-                $resumeResults[0].reused -ne 0 -or $resumeResults[1].reused -ne 109 -or
-                $resumeResults[2].reused -ne 107 -or $resumeResults[3].reused -ne 108 -or
+                $resumeResults[0].reused -ne 0 -or $resumeResults[1].reused -ne $checkpointUnitCount -or
+                $resumeResults[2].reused -ne ($checkpointUnitCount-2) -or $resumeResults[3].reused -ne ($checkpointUnitCount-1) -or
                 $resumeResults[4].reused -ne 0) { throw 'Installed runtime resume/invalidation/fresh assertions failed.' }
             $resumeLogs = Join-Path $WorkRoot 'logs\resumable-native'
             [IO.Directory]::CreateDirectory($resumeLogs) | Out-Null
@@ -173,7 +218,7 @@ try {
             $receipt.resumableNative = $resumeResults
             $parentEvidence = Join-Path $WorkRoot 'resumable-parent'
             & (Join-Path $repository 'tests\resumable-windows.ps1') -InstallHome $installHome `
-                -Launcher (Join-Path $bin 'webman-aot.cmd') -Fixture $fixture -Evidence $parentEvidence
+                -Launcher (Join-Path $bin 'webman-aot.cmd') -Fixture $fixture -Evidence $parentEvidence -ExpectedCompilationUnits $unitCount
             if (-not $?) { throw 'Windows partial interruption helper failed.' }
             $parentResult = Get-Content -LiteralPath (Join-Path $parentEvidence 'results.json') -Raw -Encoding UTF8 | ConvertFrom-Json
             if (-not $parentResult.success) { throw 'Windows partial interruption evidence failed.' }
@@ -203,6 +248,20 @@ finally {
         $cleanupErrors = @()
         $tempRoot = Join-Path $WorkRoot 'temp'
         try {
+            if ($fixture -and (Test-Path -LiteralPath $fixture)) {
+                $configurationIndex = 0
+                foreach ($configuration in Get-ChildItem -LiteralPath $fixture -Filter 'project.linux.yml' -Recurse -File -Force) {
+                    $configurationIndex++
+                    Copy-Item -LiteralPath $configuration.FullName -Destination (Join-Path $WorkRoot "logs\project-$configurationIndex.linux.yml")
+                    Write-Host '[diagnostic] Actual generated compiler source lists:'
+                    $sourceSection = $false
+                    foreach ($line in [IO.File]::ReadAllLines($configuration.FullName,$utf8)) {
+                        if ($line -eq 'sources:' -or $line -eq 'ignore:') { $sourceSection = $true; Write-Host $line; continue }
+                        if ($line -ne '' -and -not $line.StartsWith(' ')) { $sourceSection = $false }
+                        if ($sourceSection -and $line.StartsWith('  - ')) { Write-Host $line }
+                    }
+                }
+            }
             foreach ($evidenceName in @('resumable-native','resumable-parent')) {
                 $evidencePath = Join-Path $WorkRoot $evidenceName
                 if (Test-Path -LiteralPath $evidencePath) {

@@ -35,6 +35,9 @@ try {
     put($mirror . '/vendor/example/development/src/Dev.php', '<?php // development');
     put($mirror . '/vendor/composer/installed.json', json_encode($metadata, JSON_THROW_ON_ERROR));
     put($mirror . '/composer.lock', json_encode($lock, JSON_THROW_ON_ERROR));
+    $canonicalMirror = realpath($mirror);
+    ensure(is_string($canonicalMirror), 'Fixture mirror cannot be resolved');
+    $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $canonicalMirror);
     $ignore = ['vendor/example/library/src/Ignored.php'];
     $selected = $method->invoke($rule, $mirror, [], ['.typephp/build/already.php'], $ignore);
     sort($selected, SORT_STRING);
@@ -44,6 +47,17 @@ try {
     echo "PASS unlisted production namespaces, PSR-0, file and directory classmap, autoload files, dev and explicit ignore\n";
     ensure($method->invoke($rule, $mirror, [], $expected, $ignore) === [], 'Existing compiler files selected twice');
     echo "PASS existing compiler inputs are not duplicated\n";
+    $coverageFile = $mirror . '/project.linux.yml';
+    $coverageReader = new ReflectionMethod(\WebmanAotBuilder\Project\CompilerCoverageAudit::class, 'readCompilerLists');
+    put($coverageFile, "sources:\n  - " . implode("\n  - ", $selected) . "\nignore:\n");
+    ensure($coverageReader->invoke(new \WebmanAotBuilder\Project\CompilerCoverageAudit(), $coverageFile)['sources'] === $expected, 'Filesystem provider paths are not portable compiler inputs');
+    echo "PASS native filesystem paths produce the same canonical PSR-4/PSR-0/classmap inputs\n";
+    foreach (['vendor/example/library/src\\Added.php', '../outside.php', '/absolute.php', 'C:/escaped.php', './support/file.php'] as $unsafe) {
+        put($coverageFile, "sources:\n  - {$unsafe}\nignore:\n");
+        try { $coverageReader->invoke(new \WebmanAotBuilder\Project\CompilerCoverageAudit(), $coverageFile); throw new RuntimeException('Unsafe compiler input accepted'); }
+        catch (ConfigurationException $error) { ensure($error->getMessage() === 'compiler coverage has unsafe sources entry', 'Unsafe compiler input gate changed'); }
+    }
+    echo "PASS raw unsafe compiler paths remain rejected\n";
     if (PHP_OS_FAMILY !== 'Windows') {
         $directory = $mirror . '/vendor/example/library/src';
         rename($directory, $directory . '-kept');
