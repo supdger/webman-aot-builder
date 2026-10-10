@@ -15,6 +15,39 @@ final class Process
         return proc_close($process);
     }
 
+    /** Wait for the owned curl process without losing its native progress output. */
+    public static function download(array $command): int
+    {
+        require_once __DIR__ . '/Console.php';
+        Console::assertParent();
+        $process = proc_open($command, [STDIN, STDOUT, STDERR], $pipes, null, null, ['bypass_shell' => true]);
+        if (!is_resource($process)) {
+            throw new \RuntimeException('无法启动下载命令：' . $command[0]);
+        }
+        try {
+            while (true) {
+                Console::assertParent();
+                $status = proc_get_status($process);
+                if (!$status['running']) {
+                    $closed = proc_close($process);
+                    $process = null;
+                    return $status['exitcode'] >= 0 ? $status['exitcode'] : $closed;
+                }
+                usleep(100000);
+            }
+        } finally {
+            if (is_resource($process)) {
+                if (proc_get_status($process)['running']) {
+                    proc_terminate($process);
+                    $deadline = microtime(true) + 1;
+                    while (proc_get_status($process)['running'] && microtime(true) < $deadline) { usleep(10000); }
+                    if (proc_get_status($process)['running']) { proc_terminate($process, 9); }
+                }
+                proc_close($process);
+            }
+        }
+    }
+
     /** @param list<string> $command */
     public static function output(array $command): string
     {

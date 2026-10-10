@@ -295,7 +295,24 @@ final class Flow
     private function read(string $prompt): ?string
     {
         fwrite(STDOUT, $prompt . "：\n");
-        $line = fgets(STDIN);
+        $failed = false;
+        $previousHandler = null;
+        $previousHandler = set_error_handler(static function (int $severity, string $message, string $file, int $line) use (&$failed, &$previousHandler): bool {
+            if (($severity === E_WARNING || $severity === E_NOTICE)
+                && $file === __FILE__ && str_starts_with($message, 'fgets():')) {
+                $failed = true;
+                return true;
+            }
+            return $previousHandler !== null ? $previousHandler($severity, $message, $file, $line) !== false : false;
+        });
+        try {
+            $line = fgets(STDIN);
+        } finally {
+            restore_error_handler();
+        }
+        if ($line === false && $failed) {
+            throw new \RuntimeException('终端输入已断开，项目流程已停止。请在终端重新运行 webman-aot guide；需要通过 Composer 启动时，请先设置 COMPOSER_PROCESS_TIMEOUT=0。');
+        }
         return $line === false ? null : trim($line);
     }
 

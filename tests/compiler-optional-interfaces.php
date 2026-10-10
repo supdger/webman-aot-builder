@@ -1,0 +1,36 @@
+<?php
+
+declare(strict_types=1);
+$toolchain=$argv[1]??'';require $toolchain.'/vendor/autoload.php';require $toolchain.'/src/gen_stub.php';
+final class OptionalInterfaceCompiler extends TypePhp\CompilerTest
+{
+    public function __construct(string $root){parent::__construct($root);$this->forTest=true;$this->setSourceIdentityMapping($root,'/typephp/interface-fixture');$this->setBuildDir($root.'/build');$this->setBuildMode('ext');$this->setTargetName('optional_interfaces');}
+    public function unavailable():array{return $this->unavailableDeclarations;}
+}
+function interfaceCheck(bool $ok,string $message):void{if(!$ok)throw new RuntimeException($message);echo 'PASS '.$message.PHP_EOL;}
+$root=sys_get_temp_dir().'/webman-aot-optional-interface-'.bin2hex(random_bytes(6));mkdir($root.'/vendor/example/optional',0700,true);mkdir($root.'/vendor/composer',0700,true);$start=microtime(true);
+$manifest=['name'=>'example/optional','autoload'=>['psr-4'=>['Fixture\\'=>'']],'suggest'=>['example/provider'=>'Optional interface']];
+$metadata=static function(array $manifest,array $rootManifest=[])use($root):void{file_put_contents($root.'/composer.json',json_encode($rootManifest));file_put_contents($root.'/vendor/example/optional/composer.json',json_encode($manifest));file_put_contents($root.'/vendor/composer/installed.json',json_encode(['packages'=>[$manifest+['install-path'=>'../example/optional']]]));};$metadata($manifest);
+$sources=['Unavailable'=>'<?php namespace Fixture;class Unavailable implements \\Absent\\Contract {}','Child'=>'<?php namespace Fixture;class Child extends Unavailable {}','Contract'=>'<?php namespace Fixture;interface Contract extends \\Absent\\Contract {}','Consumer'=>'<?php namespace Fixture;class Consumer implements Contract {}','Available'=>'<?php namespace Fixture;class Available implements \\Countable{public function count():int{return 1;}}'];$files=[];foreach($sources as$name=>$source){$files[]=$file=$root.'/vendor/example/optional/'.$name.'.php';file_put_contents($file,$source);}
+try{
+ $compiler=new OptionalInterfaceCompiler($root);$compiler->discoverUnavailableDeclarations($files);$unavailable=$compiler->unavailable();interfaceCheck(count($unavailable)===4,'missing interface and dependent class/interface graph stays lazy');foreach($unavailable as$row)interfaceCheck($row['missingKind']==='Interface'&&$row['trait']==='Absent\\Contract','dependency propagation retains PHP interface Error identity');
+ foreach($files as$file)$compiler->prepareFile($file);$compiler->composeTraitDeclarations($files);foreach($files as$file)$compiler->convertFile($file);$extension=file_get_contents($compiler->genExtension());interfaceCheck(!str_contains($extension,'register_class_Fixture_Unavailable')&&str_contains($extension,'zend_throw_error(nullptr, "Interface'),'extension omits unavailable registration and emits catchable Error');
+ foreach(['eager','side-effect','mixed','unknown-autoload','required-provider','no-suggest','existing-provider']as$case){
+  $caseManifest=$manifest;$rootManifest=[];$file=$files[0];file_put_contents($file,$sources['Unavailable']);
+  if($case==='eager')$caseManifest['autoload']['files']=['Unavailable.php'];
+  elseif($case==='side-effect')file_put_contents($file,$sources['Unavailable'].' echo "effect";');
+  elseif($case==='mixed')file_put_contents($file,$sources['Unavailable'].' class Other {}');
+  elseif($case==='unknown-autoload')$caseManifest['autoload']['psr-4']=['Other\\'=>''];
+  elseif($case==='required-provider')$caseManifest['require']=['example/provider'=>'*'];
+  elseif($case==='no-suggest')unset($caseManifest['suggest']);
+  elseif($case==='existing-provider'){mkdir($root.'/app');file_put_contents($root.'/app/Contract.php','<?php namespace Absent;interface Contract{}');$rootManifest=['autoload'=>['psr-4'=>['Absent\\'=>'app/']]];}
+  $metadata($caseManifest,$rootManifest);try{(new OptionalInterfaceCompiler($root))->discoverUnavailableDeclarations($files);throw new RuntimeException($case.' silently deferred');}catch(RuntimeException$e){interfaceCheck(str_contains($e->getMessage(),'Cannot defer unavailable declaration'),'original strict gate '.$case);}
+ }
+ $metadata($manifest);$wrong=$root.'/vendor/example/optional/Wrong.php';file_put_contents($wrong,'<?php namespace Fixture;class Wrong{}');file_put_contents($files[0],'<?php namespace Fixture;class Unavailable implements Wrong, \\Absent\\Contract{}');try{(new OptionalInterfaceCompiler($root))->discoverUnavailableDeclarations([...$files,$wrong]);throw new RuntimeException('Wrong interface kind was hidden');}catch(RuntimeException$e){interfaceCheck(str_contains($e->getMessage(),'target is not an interface'),'known wrong kind cannot be hidden by another missing interface');}
+ $metadata($manifest);file_put_contents($files[0],$sources['Unavailable']);$provider=$root.'/app/Contract.php';$withProvider=new OptionalInterfaceCompiler($root);$withProvider->discoverUnavailableDeclarations([...$files,$provider]);interfaceCheck($withProvider->unavailable()===[],'selected actual interface provider stays available');
+ file_put_contents($files[0],'<?php namespace Fixture;class Unavailable implements \\Absent\\Contract{use \\Absent\\Provider;}');$priority=new OptionalInterfaceCompiler($root);$priority->discoverUnavailableDeclarations($files);interfaceCheck(($priority->unavailable()['fixture\\unavailable']['missingKind']??null)==='Trait','missing trait keeps its original fatal priority');
+ file_put_contents($files[0],'<?php namespace Fixture;class Unavailable{use \\Absent\\Provider;}');file_put_contents($files[1],'<?php namespace Fixture;class Child extends Unavailable implements \\Absent\\Contract{}');$inherited=new OptionalInterfaceCompiler($root);$inherited->discoverUnavailableDeclarations($files);interfaceCheck(($inherited->unavailable()['fixture\\child']['missingKind']??null)==='Trait','unavailable parent trait failure precedes own missing interface');
+ file_put_contents($files[0],'<?php namespace Fixture;class Unavailable extends \\Absent\\ParentClass implements \\Absent\\Contract{}');try{(new OptionalInterfaceCompiler($root))->discoverUnavailableDeclarations($files);throw new RuntimeException('Missing class parent hidden');}catch(RuntimeException$e){interfaceCheck(str_contains($e->getMessage(),'unresolved class parent'),'missing class parent retains unsupported original boundary');}
+ foreach(['self'=>'<?php namespace Fixture;interface Unavailable extends Unavailable, \\Absent\\Contract{}','pair'=>'<?php namespace Fixture;interface Unavailable extends OtherCycle, \\Absent\\Contract{} interface OtherCycle extends Unavailable{}']as$name=>$source){file_put_contents($files[0],$source);try{(new OptionalInterfaceCompiler($root))->discoverUnavailableDeclarations($files);throw new RuntimeException('Cycle silently deferred');}catch(RuntimeException$e){interfaceCheck(str_contains($e->getMessage(),'cyclic declaration dependency'),'new interface candidate cycle remains unsupported '.$name);}}
+ echo 'PASS optional interface declarations elapsed='.round(microtime(true)-$start,3)."s\n";
+}finally{$entries=new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root,FilesystemIterator::SKIP_DOTS),RecursiveIteratorIterator::CHILD_FIRST);foreach($entries as$entry)$entry->isDir()?rmdir($entry->getPathname()):unlink($entry->getPathname());rmdir($root);}

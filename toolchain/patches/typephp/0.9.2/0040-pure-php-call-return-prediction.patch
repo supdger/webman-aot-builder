@@ -1,0 +1,19 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -95,10 +95,13 @@
+         if ($expression instanceof \PhpParser\Node\Expr\CallLike && $expression->isFirstClassCallable()) {
+             return null;
+         }
+-        $type = $this->detectTypeOfExpr($expression);
++        // Prediction precedes foreach/local scope initialization. Call return
++        // declarations supply evidence without parsing or evaluating arguments.
++        $type = $expression instanceof \PhpParser\Node\Expr\FuncCall
++            ? $this->valueParameterCallType($expression)
++            : $this->detectTypeOfExpr($expression);
+         if ($type === Type::VAR && $expression instanceof \PhpParser\Node\Expr\FuncCall) {
+-            $type = $this->valueParameterCallType($expression);
+-            if ($type === Type::VAR) { return [Type::VAR => true]; }
++            return [Type::VAR => true];
+         }
+         if (!in_array($type, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)) {
+             return null;

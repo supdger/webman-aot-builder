@@ -53,6 +53,50 @@ try {
     require $overlay['path'];
     $generator = new Tinywan\Typephp\Compiler\ProjectGenerator($project);
     $class = new ReflectionClass($generator);
+    echo "STAGE compiler-supported closure binding passes through unchanged\n";
+    $bindingTransform = new ReflectionMethod($generator, 'patchSwitchTerminals');
+    $bindingRules = 0;
+    foreach ($class->getConstant('SWITCH_TERMINAL_REPLACEMENTS') as $path => $replacements) {
+        foreach ($replacements as $search => $replacement) {
+            if (!(str_contains($search, '->bindTo(') || str_contains($search, 'Closure::bind('))
+                || !str_contains($replacement, 'binding is not supported.')
+            ) { continue; }
+            $base = str_contains($path, '/Carbon/') ? file_get_contents($project . '/' . $path) : '<?php ';
+            $input = $base . ' class BindingSource { public function unchanged($callback, $macro, $driver, $name) {' . $search
+                . '} public function additional($callback) { return $callback->bindTo($this, static::class); } }';
+            $output = $bindingTransform->invoke($generator, $path, $input);
+            ensure(str_contains($output, $search) && str_contains($output, 'public function additional($callback) { return $callback->bindTo($this, static::class); }'), 'compiler-supported binding was downgraded: ' . $path);
+            ++$bindingRules;
+        }
+    }
+    ensure($bindingRules === 4, 'locked obsolete binding family changed');
+    $carbonCall = '<?php return \\call_user_func_array($boundMacro ?: $macro, $parameters);';
+    foreach ($class->getConstant('SWITCH_TERMINAL_REPLACEMENTS') as $path => $replacements) {
+        if (!isset($replacements['return \\call_user_func_array($boundMacro ?: $macro, $parameters);'])) { continue; }
+        $input = file_get_contents($project . '/' . $path) . ' function boundCall($boundMacro, $macro, $parameters) {' . substr($carbonCall, 6) . '}';
+        ensure(str_contains($bindingTransform->invoke($generator, $path, $input), substr($carbonCall, 6)), 'bound Carbon macro was discarded');
+    }
+    echo "PASS four binding downgrades and bound macro invocation preserve input\n";
+    echo "STAGE optional project conversion preserves whole input on partial matches\n";
+    $optional = new UpstreamSourceRule();
+    $partial = '<?php $before = 1; $newerSource = 2;';
+    $pair = ['$before = 1;' => '$after = 1;', '$olderSource = 2;' => '$prepared = 2;'];
+    ensure($optional->applyIfPresent('project.php', $partial, $pair, $applicable) === $partial && !$applicable, 'partial conversion escaped original-input rollback');
+    rejects(fn () => $optional->replace('project.php', $partial, $pair), 'structure drift');
+    $known = '<?php $before = 1; $olderSource = 2;';
+    $prepared = $optional->replace('project.php', $known, $pair);
+    ensure($optional->applyIfPresent('project.php', $known, $pair) === $prepared, 'known optional conversion differs from strict conversion');
+    ensure($optional->applyIfPresent('project.php', $prepared, $pair) === $prepared, 'optional conversion is not idempotent');
+    rejects(fn () => $optional->applyIfPresent('project.php', $known, ['' => '$invalid = 1;']), 'no executable source contract');
+    $strPath = 'vendor/illuminate/support/Str.php';
+    $strSource = file_get_contents($project . '/' . $strPath);
+    ensure($bindingTransform->invoke($generator, $strPath, $strSource) === $strSource, 'new Str source was partially renamed');
+    $intervalPath = 'vendor/nesbot/carbon/src/Carbon/CarbonInterval.php';
+    $intervalSource = str_replace('CarbonInterface::ONE_DAY_WORDS', 'CarbonInterface::NEW_DAY_WORDS', file_get_contents($project . '/' . $intervalPath));
+    $intervalPrepared = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($intervalSource);
+    ensure($intervalPrepared !== $intervalSource, 'fixture did not exercise the Carbon pre-step');
+    ensure($bindingTransform->invoke($generator, $intervalPath, $intervalSource) === $intervalSource, 'table fallback retained a partial Carbon pre-step');
+    echo "PASS partial / known / adapted / strict-error / original Str contracts\n";
     $files = 0; $rules = 0;
     foreach (['patchSwitchTerminals' => 'SWITCH_TERMINAL_REPLACEMENTS', 'patchRefCaptures' => 'REF_CAPTURE_REPLACEMENTS'] as $method => $table) {
         echo "STAGE {$table} complete installed source matrix\n";

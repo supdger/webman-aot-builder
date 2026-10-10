@@ -23,3 +23,9 @@
 - [Windows 物理环境本轮不可导出材料] → 明示平台实跑缺口，参数沿用已存在 Windows 私有 bootstrap，不冒称实机通过。
 - [既有代理冲突] → 推荐 Composer 官方 exec 入口，真实临时 global 验证优先级；不修改永久 PATH。
 - [编译耗时和业务边界] → 复用原 Flow 的日志、失败退出、重选及实际校验范围；不以菜单通过冒称完整业务验收。
+
+## 父事件和现读取边界
+
+PRE_COMMAND_RUN 在父 Composer 中执行，先验证事件能力，再限定 global、exec、binary 精确 webman-aot，不能用子进程环境变量冒充关闭父计时器。旧 Composer 能力或禁用插件保持直接 PHP 代理恢复入口。
+
+Console 沿用 STDIN 与父 FD3 的 stream_select/前后 assertParent；1 秒周期仅用于临时非阻塞探测，finally 恢复阻塞模式。false 且非 EOF 继续等待，部分行累积到换行或 EOF；自身 fgets WARNING/NOTICE 产生终端断开错误。Flow 沿用其读取边界，正常 EOF 和无数据安全取消。两处只捕获自身 fgets 错误，不吞无关告警，finally 恢复先前处理器。Installer 和 Process 保留组件复用及下载父寿命逻辑。

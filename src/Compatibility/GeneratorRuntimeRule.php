@@ -120,7 +120,7 @@ final class GeneratorRuntimeRule
 
     public function contextWrites(string $source): string
     {
-        return (new UpstreamSourceRule())->replace('vendor/workerman/coroutine/src/Context/Fiber.php', $source, [
+        return (new UpstreamSourceRule())->applyIfPresent('vendor/workerman/coroutine/src/Context/Fiber.php', $source, [
             'static::$nonFiberContext[$name] = $value;' => 'static::$nonFiberContext->offsetSet($name, $value);',
             'static::$contexts[$fiber][$name] = $value;' => 'static::$contexts[$fiber]->offsetSet($name, $value);',
         ]);

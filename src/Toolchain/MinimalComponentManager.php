@@ -135,6 +135,50 @@ final class MinimalComponentManager
         }
     }
 
+    /** @param array{generation:string,manifestSha256:string,toolchainLockSha256:string} $previous */
+    public function reuse(array $previous, string $manifest, string $replacements, ?\Closure $progress = null): string
+    {
+        $toolchains = $this->layout->path('toolchains');
+        foreach (['candidates', 'versions'] as $directory) {
+            $path = $toolchains . '/' . $directory;
+            if (is_link($path) || (!is_dir($path) && !mkdir($path, 0700, true) && !is_dir($path))) {
+                throw new ConfigurationException('private toolchain upgrade directory is unsafe');
+            }
+        }
+        $lock = fopen($toolchains . '/repair.lock', 'c+');
+        if (!is_resource($lock) || !flock($lock, LOCK_EX)) {
+            throw new ConfigurationException('cannot acquire private toolchain preparation lock');
+        }
+        $candidate = $toolchains . '/candidates/minimal-' . bin2hex(random_bytes(8));
+        try {
+            (new MinimalComponent())->reuse(
+                $previous['generation'], $previous['manifestSha256'], $previous['toolchainLockSha256'],
+                $manifest, $replacements, $candidate, $this->host,
+                $this->component['manifestSha256'], $this->component['toolchainLockSha256'], $progress
+            );
+            $this->preparer->assertReady($candidate);
+            $destination = $toolchains . '/versions/' . gmdate('YmdHis') . '-minimal-' . bin2hex(random_bytes(4));
+            if (!rename($candidate, $destination)) {
+                throw new ConfigurationException('cannot store verified reused toolchain');
+            }
+            try { $this->preparer->assertReady($destination); }
+            catch (\Throwable $error) {
+                if (!rename($destination, $candidate)) {
+                    throw new ConfigurationException('reused toolchain rollback failed', previous: $error);
+                }
+                throw $error;
+            }
+            $progress?->__invoke('Existing component files and bundled replacements verified; no component download needed.');
+            return $destination;
+        } catch (\Throwable $error) {
+            $this->removeCandidate($candidate);
+            throw $error;
+        } finally {
+            flock($lock, LOCK_UN);
+            fclose($lock);
+        }
+    }
+
     private function validArchive(string $archive): bool
     {
         $actual = is_file($archive) && !is_link($archive)

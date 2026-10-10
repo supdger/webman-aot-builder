@@ -1,0 +1,153 @@
+--- a/src/Preprocessor.php
++++ b/src/Preprocessor.php
+@@ -3036,7 +3036,7 @@
+                 Type::VAR,
+                 true,
+             );
+-        } elseif ($normalizedMethod === 'toarray') {
++        } elseif ($this->classDef->nativeObject && $normalizedMethod === 'toarray') {
+             $this->assertKeywordConversionMethodSignature(
+                 $v,
+                 $this->classDef->getNamespacedName(false),
+@@ -3318,16 +3318,6 @@
+                 $methodDef->node = $stmt;
+                 $methodDef->functionDef = $this->parseFunctionDecl($stmt);
+                 $methodDef->functionDef->method = true;
+-                if (strtolower($methodName) === 'toarray') {
+-                    $this->assertKeywordConversionMethodSignature(
+-                        $stmt,
+-                        $this->interfaceDef->getNamespacedName(false),
+-                        $methodName,
+-                        $methodDef->functionDef,
+-                        Type::ARRAY,
+-                        false,
+-                    );
+-                }
+                 $this->interfaceDef->addMethod($methodDef);
+                 $this->resetMethod();
+                 $this->resetFunction();
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -2528,7 +2528,15 @@
+         if ($expr instanceof Expr\BinaryOp\Coalesce) {
+             return $this->getCommonNativeObjectExpressionClass([$expr->left, $expr->right]);
+         }
+-        if ($expr instanceof Expr\MethodCall && $this->isNamedMethod($expr->name)) {
++        if ($expr instanceof Expr\MethodCall && !$expr->isFirstClassCallable()
++            && $this->isDeclaredObjectToArrayCall($expr)
++            && ($function = $this->findDeclaredPropertyToArrayFunction($expr)) !== null
++        ) {
++            return $function->returnClass;
++        }
++        if ($expr instanceof Expr\MethodCall && $this->isNamedMethod($expr->name)
++            && !$this->isDeclaredObjectToArrayCall($expr)
++        ) {
+             $keywordType = $this->findKeywordMethod($this->parseIdentifier($expr->name));
+             if ($keywordType !== null && $keywordType !== Type::OBJECT) {
+                 return '';
+@@ -3458,7 +3466,15 @@
+         if ($expr instanceof Expr\ErrorSuppress) {
+             return $this->detectTypeOfExpr($expr->expr);
+         }
+-        if ($expr instanceof Expr\MethodCall && $this->isNamedMethod($expr->name)) {
++        if ($expr instanceof Expr\MethodCall && !$expr->isFirstClassCallable()
++            && $this->isDeclaredObjectToArrayCall($expr)
++            && ($function = $this->findDeclaredPropertyToArrayFunction($expr)) !== null
++        ) {
++            return $function->returnType;
++        }
++        if ($expr instanceof Expr\MethodCall && $this->isNamedMethod($expr->name)
++            && !$this->isDeclaredObjectToArrayCall($expr)
++        ) {
+             $keywordType = $this->findKeywordMethod($this->parseIdentifier($expr->name));
+             if ($keywordType !== null) {
+                 return $keywordType;
+--- a/src/Parser/MethodCallTrait.php
++++ b/src/Parser/MethodCallTrait.php
+@@ -783,6 +783,7 @@
+             }
+             $keywordType = $this->findKeywordMethod($methodName);
+             if ($keywordType !== null
++                && !$this->isDeclaredObjectToArrayCall($expr, $class)
+                 && isset(self::KEYWORD_METHOD_MAP[$methodName])
+                 && !$expr->getAttribute('nativeKeywordCall', false)
+                 && !($expr->args !== []
+@@ -806,19 +807,7 @@
+                 if ($methodName === 'toRef') {
+                     return $this->genToRefCall($expr);
+                 }
+-                $receiverClass = $class;
+-                if ($receiverClass === '' && !$this->isVarExpr($expr->var)) {
+-                    $receiverClass = $this->detectClassOfExpr($expr->var);
+-                }
+-                // A declared conversion method is called directly. Otherwise
+-                // php::toArray() applies the PHP-compatible object-property
+-                // fallback (and invokes a real toArray() method when present).
+-                $useDeclaredToArray = $methodName === 'toArray'
+-                    && $receiverClass !== ''
+-                    && $this->objectTypeDeclaresMethod($receiverClass, $methodName);
+-                if (!$useDeclaredToArray) {
+-                    return $this->genToConvertCall($object, $methodName, $receiverType);
+-                }
++                return $this->genToConvertCall($object, $methodName, $receiverType);
+             }
+             // MethodsFor('*') extensions apply to every receiver type.
+             $kwExt = $this->findKeywordExtensionMethod($methodName);
+--- a/src/Parser/UniversalMethodCall.php
++++ b/src/Parser/UniversalMethodCall.php
+@@ -514,6 +514,55 @@
+             : null;
+     }
+ 
++    /** Ordinary PHP declarations take precedence over the array keyword. */
++    protected function isDeclaredObjectToArrayCall(Expr\MethodCall $expr, string $class = ''): bool
++    {
++        if (!$this->isNamedMethod($expr->name)
++            || strtolower($expr->name->toString()) !== 'toarray'
++        ) {
++            return false;
++        }
++        if ($class === '') {
++            $class = $this->detectDeclaredClassOfExpr($expr->var);
++        }
++        if ($class === '' && ($expr->var instanceof Expr\PropertyFetch
++            || $expr->var instanceof Expr\StaticPropertyFetch)
++        ) {
++            if ($this->getNativePropertyDef($expr->var) === null) {
++                if ($expr->var instanceof Expr\PropertyFetch) {
++                    $this->getPropertyIdentifier($expr->var, $expr->var->var, $expr->var->name);
++                } else {
++                    $this->resolveNativeStaticPropertyFetch($expr->var);
++                }
++            }
++            $class = $this->getNativePropertyDef($expr->var)?->class ?? '';
++        }
++        return $class !== ''
++            && !$this->isNativeObjectClass($class)
++            && $this->objectTypeDeclaresMethod($class, 'toArray');
++    }
++
++    protected function findDeclaredPropertyToArrayFunction(Expr\MethodCall $expr): ?\TypePhp\Entity\FunctionDef
++    {
++        $property = $this->getNativePropertyDef($expr->var);
++        if ($property === null) {
++            return null;
++        }
++        $class = $property->class;
++        // Use the same lexical private slot as typed property call lowering.
++        if ($this->classDef !== null && $this->methodDef !== null
++            && $this->classDef->hasMethod('toArray')
++            && ($this->classDef->getMethodFlags('toArray') & \PhpParser\Modifiers::PRIVATE)
++            && $this->isSameOrSubclassOf($class, $this->classDef->getNamespacedName(false))
++        ) {
++            $class = $this->classDef->getNamespacedName(false);
++        } elseif ($this->hasInaccessibleTypedPropertyMethod($class, 'toArray')) {
++            return null;
++        }
++        $class = $this->getTypedPropertyMethodSignatureClass($class, 'toArray');
++        return $class === '' ? null : $this->findAotMethodFunctionDef($class, 'toArray');
++    }
++
+     private function objectTypeDeclaresMethod(string $class, string $method): bool
+     {
+         return $this->classOrInterfaceDeclaresMethod($class, $method, []);

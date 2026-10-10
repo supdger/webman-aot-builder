@@ -101,7 +101,10 @@ final class PreparedToolchain
         $tools['sdkContext'] = ['sdkDirectory' => $sdk, 'sdkSha256' => $expected,
             'derivationSha256' => $sdkPolicy['derivationSha256'], 'toolchainLockSha256' => $lockDigest,
             'toolchainLockFile' => (string) realpath($lockFile),
-            'phpVersionId' => $capabilities['phpVersionId'], 'deepcloneEnabled' => $capabilities['deepcloneEnabled']];
+            'phpVersionId' => $capabilities['phpVersionId'], 'deepcloneEnabled' => $capabilities['deepcloneEnabled'],
+            'sdkNamespacedFunctionExportsKnown' => $capabilities['sdkNamespacedFunctionExportsKnown'],
+            'sdkNamespacedFunctionExports' => $capabilities['sdkNamespacedFunctionExports'],
+            'sdkFunctionExportsSha256' => $capabilities['sdkFunctionExportsSha256']];
         $tools['sdkSha256'] = $expected;
 
         /** @var array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string,sdkContext:array{sdkDirectory:string,sdkSha256:string,derivationSha256:string,toolchainLockSha256:string,toolchainLockFile:string,phpVersionId:int,deepcloneEnabled:bool}} $tools */

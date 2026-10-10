@@ -12,7 +12,7 @@ final class NativeIntlPolyfillRule
      * @param array<string,mixed> $policy
      * @return array{shadowSha256:string,projectSha256:string}
      */
-    public function apply(string $mirrorDirectory, array $policy, array $runtimeCapabilities): array
+    public function apply(string $mirrorDirectory, array $policy, array $runtimeCapabilities, array $mappings = []): array
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror) || is_link($mirrorDirectory)
@@ -27,7 +27,8 @@ final class NativeIntlPolyfillRule
         if (($runtimeCapabilities['intlEnabled'] ?? null) !== true
             || !is_bool($runtimeCapabilities['nativeGraphemeLevenshtein'] ?? null)
         ) { throw new ConfigurationException('native intl adaptation requires proven selected SDK Intl/function capabilities'); }
-        $retained = ['grapheme_strrev'];
+        $providers = $this->selectGraphemeProvider($mirror, $runtimeCapabilities, $mappings);
+        $retained = ($runtimeCapabilities['nativeGraphemeStrrev'] ?? false) || $providers['earlier'] ? [] : ['grapheme_strrev'];
         if (!$runtimeCapabilities['nativeGraphemeLevenshtein']) { array_unshift($retained, 'grapheme_levenshtein'); }
 
         $lock = json_decode($this->read($mirror . '/composer.lock', 'Composer lock'), true);
@@ -119,7 +120,69 @@ final class NativeIntlPolyfillRule
         return [
             'shadowSha256' => hash('sha256', $adapted),
             'projectSha256' => hash('sha256', $project),
+            'providerShadows' => $providers['shadows'],
         ];
+    }
+
+    private function selectGraphemeProvider(string $mirror, array $capabilities, array $mappings): array
+    {
+        $autoload = $this->read($mirror . '/vendor/composer/autoload_files.php', 'Composer file autoload order');
+        $intl = strpos($autoload, "'/symfony/polyfill-intl-grapheme/bootstrap.php'");
+        if ($intl === false) { return ['earlier' => false, 'shadows' => []]; }
+        $winner = null;
+        $position = $intl;
+        $candidates = [];
+        foreach ($mappings as $mapping) {
+            $path = $mapping['path'] ?? '';
+            if (preg_match('#^vendor/symfony/polyfill-php[0-9]+/bootstrap[0-9]+\.php$#D', $path) !== 1) { continue; }
+            $entry = strpos($autoload, var_export('/' . substr(dirname($path), strlen('vendor/')) . '/bootstrap.php', true));
+            if ($entry === false) { continue; }
+            $source = $this->read($mirror . '/' . $path, 'PHP polyfill provider source');
+            $shadow = $this->read($mirror . '/' . $mapping['shadow'], 'PHP polyfill provider shadow');
+            if (!hash_equals($mapping['sourceSha256'], hash('sha256', $source)) || !hash_equals($mapping['shadowSha256'], hash('sha256', $shadow))) {
+                throw new ConfigurationException('PHP polyfill provider mapping evidence drifted');
+            }
+            $prepared = (new GuardedHelperSourceRule($capabilities['phpVersionId'], null, $capabilities, $mirror))->prepare($path, $source);
+            $expected = is_string($prepared) ? $this->graphemeDeclaration($prepared) : null;
+            if ($expected === null) { continue; }
+            $actual = $this->graphemeDeclaration($shadow);
+            $expectedShadow = $actual === null ? str_replace($expected, '', $prepared) : $prepared;
+            if (array_column($this->tokens($shadow), 'text') !== array_column($this->tokens($expectedShadow), 'text')) {
+                throw new ConfigurationException('Selected PHP polyfill provider declaration drifted');
+            }
+            $candidates[$mapping['shadow']] = ['source' => $shadow, 'declaration' => $actual];
+            if ($entry < $position) { $position = $entry; $winner = $mapping['shadow']; }
+        }
+        $digests = [];
+        foreach ($candidates as $path => $candidate) {
+            if ($path === $winner && !($capabilities['nativeGraphemeStrrev'] ?? false)) {
+                if ($candidate['declaration'] === null) { throw new ConfigurationException('Selected first PHP polyfill provider is missing'); }
+                continue;
+            }
+            if ($candidate['declaration'] === null) { continue; }
+            $adapted = str_replace($candidate['declaration'], '', $candidate['source'], $count);
+            if ($count !== 1) { throw new ConfigurationException('PHP polyfill provider removal is ambiguous'); }
+            token_get_all($adapted, TOKEN_PARSE);
+            if (file_put_contents($mirror . '/' . $path, $adapted, LOCK_EX) === false) { throw new ConfigurationException('Unable to write PHP polyfill provider selection'); }
+            $digests[$path] = hash('sha256', $adapted);
+        }
+        return ['earlier' => $winner !== null, 'shadows' => $digests];
+    }
+
+    private function graphemeDeclaration(string $source): ?string
+    {
+        $tokens = $this->tokens($source);
+        $declaration = null;
+        foreach ($tokens as $index => $token) {
+            if ($token['text'] !== 'function' || ($tokens[$index + 1]['text'] ?? null) !== 'grapheme_strrev') { continue; }
+            if ($declaration !== null) { throw new ConfigurationException('PHP polyfill grapheme declaration is repeated'); }
+            $parametersEnd = $this->closing($tokens, $index + 2, '(', ')');
+            $body = $parametersEnd + 1;
+            while (isset($tokens[$body]) && $tokens[$body]['text'] !== '{') { ++$body; }
+            $end = $this->closing($tokens, $body, '{', '}');
+            $declaration = substr($source, $token['offset'], $tokens[$end]['end'] - $token['offset']);
+        }
+        return $declaration;
     }
 
     /** @return array<string,string> Current function declarations, preserving their source bytes. */

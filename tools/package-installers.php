@@ -339,6 +339,61 @@ final class InstallerPackager
             ) {
                 throw new RuntimeException('minimal component has an incompatible manifest identity');
             }
+            if (!$full && isset($this->options['prepared-typephp'])) {
+            // Ship exact target bytes, not a patch replay against unknown older prepared sources.
+            $upgrade = $stage . '/payload/app/toolchain/minimal-upgrade';
+            $this->createDirectory($upgrade . '/files');
+            if (file_put_contents($upgrade . '/minimal-component.json', $manifest) === false) {
+                throw new RuntimeException('cannot stage locked upgrade manifest');
+            }
+            $preparedJson = $zip->getFromName('prepared/prepared-toolchain.json');
+            $prepared = is_string($preparedJson) ? json_decode($preparedJson, true, flags: JSON_THROW_ON_ERROR) : [];
+            $typephp = $prepared['typephp'] ?? null;
+            if (!is_string($typephp) || !preg_match('~^[A-Za-z0-9._/-]+$~D', $typephp)
+                || in_array('..', explode('/', $typephp), true)) {
+                throw new RuntimeException('target prepared TypePHP path is unsafe');
+            }
+            $patch = $this->readJson($this->root . '/toolchain/patches/typephp/0.9.2/manifest.json');
+            $selected = ['manifest.json' => null, 'toolchain.lock.json' => null,
+                'prepared/prepared-toolchain.json' => null, 'component-derivation.json' => null];
+            $preparedTypephp = $this->requiredOption('prepared-typephp');
+            require_once __DIR__ . '/../src/Cli/ConfigurationException.php';
+            require_once __DIR__ . '/../src/Toolchain/TypePhpPatchSourceVerifier.php';
+            (new WebmanAotBuilder\Toolchain\TypePhpPatchSourceVerifier())->verify(
+                $preparedTypephp, $this->root . '/toolchain/patches/typephp/0.9.2/manifest.json'
+            );
+            $guards = [];
+            foreach ($patch['rules'] ?? [] as $rule) {
+                $guards['prepared/' . $typephp . '/' . $rule['path']] = $rule;
+                $selected['prepared/' . $typephp . '/' . $rule['path']] = $rule['afterSha256'];
+            }
+            foreach ($selected as $name => $ruleHash) {
+                $entry = $manifestData['entries'][$name] ?? null;
+                if ($entry === null && $ruleHash === null) { continue; }
+                $bytes = $zip->getFromName($name);
+                if (!is_array($entry) || ($entry['type'] ?? null) !== 'file' || !is_string($bytes)
+                    || strlen($bytes) !== $entry['size'] || hash('sha256', $bytes) !== $entry['sha256']
+                    || str_contains($name, '..') || str_starts_with($name, '/') || str_contains($name, '\\')) {
+                    throw new RuntimeException('target upgrade replacement differs from locked component: ' . $name);
+                }
+                if ($ruleHash !== null) {
+                    $rule = $guards[$name];
+                    if (!in_array($entry['sha256'], array_filter([
+                        $rule['beforeSha256'], $rule['preparedBeforeSha256'] ?? null, $rule['afterSha256'],
+                    ]), true)) { throw new RuntimeException('target source is outside its reviewed patch chain: ' . $name); }
+                    $sourceFile = rtrim($preparedTypephp, '/\\') . '/' . $rule['path'];
+                    $bytes = is_file($sourceFile) && !is_link($sourceFile) ? file_get_contents($sourceFile) : false;
+                    if (!is_string($bytes) || hash('sha256', $bytes) !== $ruleHash) {
+                        throw new RuntimeException('prepared replacement differs from reviewed source: ' . $name);
+                    }
+                }
+                $path = $upgrade . '/files/' . $name;
+                $this->createDirectory(dirname($path));
+                if (file_put_contents($path, $bytes) === false || hash_file('sha256', $path) !== hash('sha256', $bytes)) {
+                    throw new RuntimeException('cannot stage target upgrade replacement: ' . $name);
+                }
+            }
+            }
         } finally {
             $zip->close();
         }

@@ -66,6 +66,9 @@ final class UpstreamProjectGenerator
             }
             $this->assertSelectedSdk($sdkDirectory, $sdkContext);
             $targetCapabilities = (new \WebmanAotBuilder\Toolchain\StaticTargetLayout())->runtimeCapabilities($sdkDirectory);
+            foreach (['sdkNamespacedFunctionExportsKnown', 'sdkNamespacedFunctionExports', 'sdkFunctionExportsSha256'] as $key) {
+                if (($targetCapabilities[$key] ?? null) !== ($sdkContext[$key] ?? null)) { throw new ConfigurationException('generator selected SDK function export evidence drifted: ' . $key); }
+            }
             if (($targetCapabilities['phpVersionId'] ?? null) !== $sdkContext['phpVersionId']) {
                 throw new ConfigurationException('generator selected SDK runtime capability drifted');
             }
@@ -115,6 +118,7 @@ final class UpstreamProjectGenerator
             throw new ConfigurationException('generated main entrypoint differs from the verified generator stub');
         }
         $adaptations = (new GeneratedProjectAdapter())->apply($mirror, $lock, $manifest);
+        if (isset($targetCapabilities['sdkFunctionExportsSha256'])) { $adaptations['sdkFunctionExportsSha256'] = $targetCapabilities['sdkFunctionExportsSha256']; }
         foreach ($manifest as &$mapping) {
             if ($mapping['shadow'] === '.typephp/build/workerman-worker.php') {
                 $mapping['shadowSha256'] = $adaptations['workerShadowSha256'];
@@ -134,23 +138,17 @@ final class UpstreamProjectGenerator
             $adaptations['saiAdminProfileOverlaySha256'] = hash_file('sha256', $profileFile);
         }
         $completion = new PluginSourceCompletion();
-        $pluginSourcesSha256 = $completion->apply($mirror, $profile, $lock['dynamicPhp'] ?? [], $manifest);
-        if ($pluginSourcesSha256 !== null) {
-            $adaptations['pluginSourcesSha256'] = $pluginSourcesSha256;
-        }
-        if ($completion->includes($mirror, 'vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php')) {
-            $monologDigest = (new MonologWebProcessorRule())->apply($mirror, $lock['optionalAdaptations']['monolog/monolog'] ?? []);
-            if ($monologDigest !== null) { $adaptations['monologWebProcessorSha256'] = $monologDigest; }
-        }
         $intlActive = true;
         foreach (['grapheme', 'idn', 'normalizer'] as $name) {
             $intlActive = $intlActive && $completion->includes($mirror, ".typephp/build/symfony-{$name}-functions.php");
         }
         if ($intlActive) {
-            $intl = (new NativeIntlPolyfillRule())->apply($mirror, $lock['optionalAdaptations']['symfony/native-intl-polyfill'] ?? [], $targetCapabilities);
+            $intl = (new NativeIntlPolyfillRule())->apply($mirror, $lock['optionalAdaptations']['symfony/native-intl-polyfill'] ?? [], $targetCapabilities, $manifest);
             $adaptations['nativeIntlShadowSha256'] = $intl['shadowSha256'];
             $adaptations['nativeIntlProjectSha256'] = $intl['projectSha256'];
+            $adaptations['nativeIntlProviderSha256'] = hash('sha256', json_encode($intl['providerShadows'], JSON_THROW_ON_ERROR));
             foreach ($manifest as &$mapping) {
+                if (isset($intl['providerShadows'][$mapping['shadow']])) { $mapping['shadowSha256'] = $intl['providerShadows'][$mapping['shadow']]; }
                 if ($mapping['shadow'] === '.typephp/build/symfony-grapheme-functions.php') {
                     $mapping['shadowSha256'] = $intl['shadowSha256'];
                 }
@@ -168,6 +166,14 @@ final class UpstreamProjectGenerator
                 $manifest[] = $mapping;
                 $adaptations[$mapping['shadow']] = $mapping['shadowSha256'];
             }
+        }
+        $pluginSourcesSha256 = $completion->apply($mirror, $profile, $lock['dynamicPhp'] ?? [], $manifest);
+        if ($pluginSourcesSha256 !== null) {
+            $adaptations['pluginSourcesSha256'] = $pluginSourcesSha256;
+        }
+        if ($completion->includes($mirror, 'vendor/monolog/monolog/src/Monolog/Processor/WebProcessor.php')) {
+            $monologDigest = (new MonologWebProcessorRule())->apply($mirror, $lock['optionalAdaptations']['monolog/monolog'] ?? []);
+            if ($monologDigest !== null) { $adaptations['monologWebProcessorSha256'] = $monologDigest; }
         }
         $this->assertIntlFunctionProviders($mirror, $targetCapabilities, $manifest);
         $projectFile = $mirror . '/project.linux.yml';
@@ -237,7 +243,7 @@ final class UpstreamProjectGenerator
             throw new ConfigurationException('PHP85 Intl provider mirror is missing or unsafe');
         }
         $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $resolvedMirror);
-        foreach (['intlEnabled', 'nativeLocaleIsRightToLeft', 'nativeGraphemeLevenshtein'] as $key) {
+        foreach (['intlEnabled', 'nativeLocaleIsRightToLeft', 'nativeGraphemeLevenshtein', 'nativeGraphemeStrrev'] as $key) {
             if (!is_bool($capabilities[$key] ?? null)) {
                 throw new ConfigurationException("PHP85 Intl provider target capability is missing: {$key}");
             }
@@ -288,7 +294,7 @@ final class UpstreamProjectGenerator
                 $digests[$mapping[$pathKey]] = $mapping[$digestKey];
             }
         }
-        $providers = ['locale_is_right_to_left' => [], 'grapheme_levenshtein' => []];
+        $providers = ['locale_is_right_to_left' => [], 'grapheme_levenshtein' => [], 'grapheme_strrev' => []];
         foreach ($files as $path => $absolute) {
             if (!str_ends_with($path, '.php')) { continue; }
             $source = file_get_contents($absolute);
@@ -297,7 +303,7 @@ final class UpstreamProjectGenerator
             }
             foreach ($this->intlGlobalDeclarations($source) as $name) { $providers[$name][] = $path; }
         }
-        foreach (['locale_is_right_to_left' => 'nativeLocaleIsRightToLeft', 'grapheme_levenshtein' => 'nativeGraphemeLevenshtein'] as $name => $key) {
+        foreach (['locale_is_right_to_left' => 'nativeLocaleIsRightToLeft', 'grapheme_levenshtein' => 'nativeGraphemeLevenshtein', 'grapheme_strrev' => 'nativeGraphemeStrrev'] as $name => $key) {
             $expected = !$capabilities['intlEnabled'] || $capabilities[$key] ? 0 : 1;
             if (count($providers[$name]) !== $expected) {
                 throw new ConfigurationException("PHP85 Intl provider {$name} expected {$expected} global PHP declarations, got " . count($providers[$name]));
@@ -347,7 +353,7 @@ final class UpstreamProjectGenerator
                 if (($tokens[$next]['text'] ?? null) === '&') { ++$next; }
                 if ($classDepth === 0 && $functionDepth === 0 && $namespace === '' && ($tokens[$next]['id'] ?? null) === T_STRING) {
                     $name = strtolower($tokens[$next]['text']);
-                    if (in_array($name, ['locale_is_right_to_left', 'grapheme_levenshtein'], true)) {
+                    if (in_array($name, ['locale_is_right_to_left', 'grapheme_levenshtein', 'grapheme_strrev'], true)) {
                         foreach ($stack as $scope) {
                             if ($scope[0] !== 'namespace') { throw new ConfigurationException("PHP85 Intl provider {$name} declaration is conditional"); }
                         }

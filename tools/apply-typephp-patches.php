@@ -58,6 +58,8 @@ try {
         throw new RuntimeException('TypePHP patch manifest has no rules');
     }
 
+    (new UnifiedPatchApplier())->verifyManifestCoverage($patchDirectory . '/manifest.json', $rules);
+
     $alreadyApplied = true;
     foreach ($rules as $rule) {
         $target = $typephp . '/' . (string) ($rule['path'] ?? '');
@@ -69,13 +71,21 @@ try {
     }
     if ($alreadyApplied) {
         fwrite(STDOUT, json_encode(['component' => 'typephp-source', 'version' => $manifest['version'],
-            'patches' => 27, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
+            'patches' => 51, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
         exit(0);
     }
 
     foreach ($rules as $rule) {
         $path = (string) ($rule['path'] ?? '');
         $expected = (string) ($rule['beforeSha256'] ?? '');
+        if (array_key_exists('added', $rule)) {
+            if ($rule['added'] !== true || $expected !== hash('sha256', '')
+                || array_key_exists('preparedBeforeSha256', $rule)
+                || file_exists($typephp . '/' . $path) || is_link($typephp . '/' . $path)) {
+                throw new RuntimeException("TypePHP added source must be absent before patching: {$path}");
+            }
+            continue;
+        }
         $actual = is_file($typephp . '/' . $path)
             ? hash_file('sha256', $typephp . '/' . $path)
             : false;
@@ -113,6 +123,30 @@ try {
         '0025-verified-object-checkpoints.patch',
         '0026-compiler-command-paths.patch',
         '0027-compiler-runtime-capabilities.patch',
+        '0028-ordinary-toarray-method-contracts.patch',
+        '0029-unavailable-composer-traits.patch',
+        '0030-polymorphic-php-local-storage.patch',
+        '0031-persistent-php-reference-storage.patch',
+        '0032-closure-exception-cleanup.patch',
+        '0033-mutable-php-value-parameters.patch',
+        '0034-native-boundary-reference-overrides.patch',
+        '0035-target-function-value-storage.patch',
+        '0036-request-namespace-function-fallback.patch',
+        '0037-php-string-bitwise-not.patch',
+        '0038-known-php-local-value-joins.patch',
+        '0039-target-internal-class-declarations.patch',
+        '0040-pure-php-call-return-prediction.patch',
+        '0041-lazy-missing-composer-interfaces.patch',
+        '0042-ordinary-constructor-return-values.patch',
+        '0043-ordinary-destructor-return-values.patch',
+        '0044-related-php-object-local-joins.patch',
+        '0045-switch-goto-termination.patch',
+        '0046-final-switch-case-exit.patch',
+        '0047-lexical-finally-goto-exits.patch',
+        '0048-php-catch-local-value-storage.patch',
+        '0049-goto-safe-expression-temporaries.patch',
+        '0050-foreach-list-local-value-storage.patch',
+        '0051-switch-selector-value-lifetime.patch',
     ] as $patch) {
         $applier->apply($patchDirectory . '/' . $patch, $typephp);
     }
@@ -132,7 +166,7 @@ try {
             [
                 'component' => 'typephp-source',
                 'version' => $manifest['version'],
-                'patches' => 27,
+                'patches' => 51,
                 'rules' => count($rules),
                 'status' => 'applied-and-verified',
             ],

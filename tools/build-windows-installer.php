@@ -21,13 +21,14 @@ $compare = null;
 $revision = 'v' . WebmanAotBuilder\Version::VALUE;
 $revisionProvided = false;
 $flavor = 'small';
+$preparedTypephp = null;
 $minimalComponentInput = null;
 $resultPath = null;
 $inputDirectory = $root . '/dist/installer-inputs';
 
 foreach (array_slice($argv, 1) as $argument) {
     if ($argument === '--help') {
-        fwrite(STDOUT, "Usage: php tools/build-windows-installer.php [--flavor=small|full] [--minimal-component=<local-zip>] [--compare=<local-zip>] [--inputs=<cache-directory>] [--output=<directory>] [--revision=<value>]\n");
+        fwrite(STDOUT, "Usage: php tools/build-windows-installer.php [--flavor=small|full] [--minimal-component=<local-zip>] [--prepared-typephp=<patched-source>] [--compare=<local-zip>] [--inputs=<cache-directory>] [--output=<directory>] [--revision=<value>]\n");
         exit(0);
     }
     if (str_starts_with($argument, '--result=')) {
@@ -41,6 +42,8 @@ foreach (array_slice($argv, 1) as $argument) {
     } elseif (str_starts_with($argument, '--revision=')) {
         $revision = substr($argument, strlen('--revision='));
         $revisionProvided = true;
+    } elseif (str_starts_with($argument, '--prepared-typephp=')) {
+        $preparedTypephp = substr($argument, strlen('--prepared-typephp='));
     } elseif (str_starts_with($argument, '--flavor=')) {
         $flavor = substr($argument, strlen('--flavor='));
     } elseif (str_starts_with($argument, '--minimal-component=')) {
@@ -49,6 +52,11 @@ foreach (array_slice($argv, 1) as $argument) {
         fwrite(STDERR, "Unknown option: {$argument}\n");
         exit(2);
     }
+}
+
+if ($preparedTypephp !== null && !is_dir($preparedTypephp)) {
+    fwrite(STDERR, 'prepared TypePHP directory is missing' . PHP_EOL);
+    exit(64);
 }
 
 if (($resultPath !== null && (preg_match('~^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)~', $resultPath) !== 1 || file_exists($resultPath) || file_exists($resultPath . '.pending')))
@@ -376,6 +384,9 @@ try {
         '--output=' . $output,
         '--revision=' . $revision,
     );
+    if ($flavor === 'small' && $preparedTypephp !== null) {
+        $command[] = '--prepared-typephp=' . $preparedTypephp;
+    }
     fwrite(STDOUT, "[build] Packaging Windows installer; this can take several minutes ...\n");
     $process = proc_open(
         $command,

@@ -1,0 +1,16 @@
+--- a/src/Preprocessor.php
++++ b/src/Preprocessor.php
+@@ -1634,9 +1634,10 @@
+         if ($nullableNativeReturn !== null) {
+             [$returnType, $class] = $nullableNativeReturn;
+         }
+-        // Zend ignores a constructor result during new, while explicit calls
+-        // can observe it. Native and stub constructors retain their void ABI.
+-        if ($this->method === '__construct' && !$this->classDef?->nativeObject && !$this->stubFile) {
++        // Zend ignores constructor and destructor results during object lifetime
++        // operations. Explicit calls retain the ordinary PHP result.
++        if (in_array($this->method, ['__construct', '__destruct'], true)
++            && !$this->classDef?->nativeObject && !$this->stubFile) {
+             $returnType = Type::VAR;
+         } elseif ($this->method and in_array($this->method, ['__construct', '__destruct', '__clone'])) {
+             $returnType = Type::VOID;

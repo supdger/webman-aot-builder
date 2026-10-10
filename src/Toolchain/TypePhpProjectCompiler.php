@@ -295,9 +295,11 @@ final class TypePhpProjectCompiler
     private function runProcess(array $command, string $directory, array $environment): int
     {
         $started = microtime(true);
+        $tail = "";
         $code = \WebmanAotBuilder\Cli\ProcessOutput::run(
             $command, $directory, $environment, STDIN,
-            static function (int $index, string $chunk): void {
+            static function (int $index, string $chunk) use (&$tail): void {
+                $tail = substr($tail . $chunk, -32768);
                 $stream = $index === 1 ? STDOUT : STDERR;
                 fwrite($stream, $chunk);
                 fflush($stream);
@@ -307,6 +309,116 @@ final class TypePhpProjectCompiler
             }
         );
         fwrite(STDERR, sprintf("[build] Compiler process %s in %.1fs; exit code %d.\n", $code === 0 ? 'completed' : 'failed', microtime(true) - $started, $code));
+        if ($code !== 0 && str_ends_with($command[1] ?? '', '/bin/tpc.php')) {
+            $hint = $this->missingDependencyHint($directory, $tail);
+            if ($hint !== null) { fwrite(STDERR, $hint . "\n"); }
+        }
         return $code;
+    }
+
+    private function diagnosticPackageMetadataValid(array $package): bool
+    {
+        if (!is_string($package['name'] ?? null) || !is_string($package['version'] ?? null)
+            || str_contains($package['name'], "\0")) { return false; }
+        if (isset($package['install-path']) && (!is_string($package['install-path'])
+            || str_contains($package['install-path'], "\0"))) { return false; }
+        foreach (['source', 'dist'] as $kind) {
+            if (!array_key_exists($kind, $package)) { continue; }
+            if (!is_array($package[$kind])) { return false; }
+            if (isset($package[$kind]['reference']) && !is_string($package[$kind]['reference'])) { return false; }
+        }
+        $autoload = $package['autoload'] ?? [];
+        if (!is_array($autoload)) { return false; }
+        foreach (['psr-0', 'psr-4'] as $kind) {
+            $namespaces = $autoload[$kind] ?? [];
+            if (!is_array($namespaces)) { return false; }
+            foreach ($namespaces as $prefix => $paths) {
+                if (!is_string($prefix)) { return false; }
+                if (is_string($paths)) { continue; }
+                if (!is_array($paths)) { return false; }
+                foreach ($paths as $path) { if (!is_string($path)) { return false; } }
+            }
+        }
+        $suggestions = $package['suggest'] ?? [];
+        if (!is_array($suggestions)) { return false; }
+        foreach ($suggestions as $name => $reason) {
+            if (!is_string($name) || !is_string($reason)) { return false; }
+        }
+        return true;
+    }
+
+    private function missingDependencyHint(string $mirror, string $output): ?string
+    {
+        if (preg_match('/Trait [`\']([^`\']+)[`\'] not found in ([^\r\n]+\.php):(\d+)/', $output, $match) !== 1) {
+            return null;
+        }
+        if (str_contains($mirror, "\0") || str_contains($match[2], "\0")) { return null; }
+        $root = realpath($mirror);
+        $file = realpath($match[2]);
+        if (!is_string($root) || !is_string($file) || !str_starts_with($file, $root . '/') || is_link($match[2])) {
+            return null;
+        }
+        $parent = dirname($match[2]);
+        while ($parent !== $root) {
+            if (is_link($parent) || dirname($parent) === $parent) { return null; }
+            $parent = dirname($parent);
+        }
+        $relative = substr($file, strlen($root) + 1);
+        $installedFile = $root . '/vendor/composer/installed.json';
+        $lockFile = $root . '/composer.lock';
+        if (!is_file($installedFile) || is_link($installedFile) || !is_file($lockFile) || is_link($lockFile)) { return null; }
+        $installed = json_decode((string) file_get_contents($installedFile), true);
+        $lock = json_decode((string) file_get_contents($lockFile), true);
+        if (!is_array($installed) || !is_array($lock)) { return null; }
+        $packages = $installed['packages'] ?? $installed;
+        if (!is_array($packages) || !is_array($lock['packages'] ?? null)) { return null; }
+        $locked = [];
+        foreach ($lock['packages'] as $package) {
+            if (!is_array($package) || !$this->diagnosticPackageMetadataValid($package)) { return null; }
+            $locked[$package['name']] = $package;
+        }
+        $devPackages = $installed['dev-package-names'] ?? [];
+        if (!is_array($devPackages)) { return null; }
+        foreach ($devPackages as $name) { if (!is_string($name)) { return null; } }
+        $devNames = array_fill_keys($devPackages, true);
+        $owner = null;
+        $ownerLength = 0;
+        $providers = [];
+        foreach ($packages as $package) {
+            if (!is_array($package) || !$this->diagnosticPackageMetadataValid($package)) { return null; }
+            if (isset($devNames[$package['name']])) { continue; }
+            $identity = $locked[$package['name']] ?? null;
+            if (!is_array($identity) || ($identity['version'] ?? null) !== ($package['version'] ?? null)
+                || ($identity['source']['reference'] ?? null) !== ($package['source']['reference'] ?? null)
+                || ($identity['dist']['reference'] ?? null) !== ($package['dist']['reference'] ?? null)
+                || ($identity['autoload'] ?? []) !== ($package['autoload'] ?? [])) { return null; }
+            $path = $package['install-path'] ?? '../' . $package['name'];
+            if (!is_string($path)) { return null; }
+            $directory = realpath(dirname($installedFile) . '/' . $path);
+            if (!is_string($directory) || !str_starts_with($directory, $root . '/vendor/')) { return null; }
+            if (str_starts_with($file, $directory . '/') && strlen($directory) > $ownerLength) {
+                $owner = $identity;
+                $ownerLength = strlen($directory);
+            }
+            foreach (['psr-4', 'psr-0'] as $kind) {
+                foreach (array_keys($identity['autoload'][$kind] ?? []) as $prefix) {
+                    if (is_string($prefix) && $prefix !== '' && str_starts_with($match[1], $prefix)) {
+                        $providers[] = $identity['name'];
+                    }
+                }
+            }
+        }
+        if (!is_array($owner)) { return null; }
+        $message = sprintf('[build] 缺少 trait %s；引用位置 %s:%s，所属已锁定包 %s %s。', $match[1], $relative, $match[3], $owner['name'], $owner['version']);
+        $providers = array_values(array_unique($providers));
+        $message .= $providers === []
+            ? ' 当前生产 Composer 锁中未找到覆盖此命名空间的已安装 PSR 来源。'
+            : ' 已安装命名空间来源：' . implode(', ', $providers) . '；需核对该来源是否实际声明此 trait。';
+        $parts = explode('\\', $match[1]);
+        $candidate = count($parts) >= 2 ? strtolower($parts[0] . '/' . $parts[1]) : '';
+        if ($candidate !== '' && isset($owner['suggest'][$candidate]) && !isset($locked[$candidate])) {
+            $message .= sprintf(' 引用包另列可选依赖 %s（%s），这是元数据线索，尚未验证缺失符号归属。', $candidate, $owner['suggest'][$candidate]);
+        }
+        return $message . ' 原始 TypePHP 错误与退出码保留；工具未自动修改依赖或跳过该来源。';
     }
 }

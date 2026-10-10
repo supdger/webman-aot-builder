@@ -1,0 +1,16 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -333,12 +333,7 @@
+             }
+             $join = count($objectClasses) !== count($classes);
+             if ($join && !$this->phpLocalWritesBeforeReads($body, $sourceName)) { continue; }
+-            foreach ($objectClasses as $left) {
+-                foreach ($objectClasses as $right) {
+-                    if (!$this->isObjectClassStaticallyAssignableTo($left, $right)
+-                        && !$this->isObjectClassStaticallyAssignableTo($right, $left)) { $join = true; }
+-                }
+-            }
++            $join = $join || count($objectClasses) > 1;
+             if (!$join) { continue; }
+             $this->context->varTypeDegradations[$name] = Type::VAR;
+             $this->context->localVars[$name] = Type::VAR;

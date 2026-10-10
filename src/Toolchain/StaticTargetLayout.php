@@ -92,14 +92,55 @@ final class StaticTargetLayout
         if (preg_match_all('/^#define[ \t]+PHP_REDIS_VERSION[ \t]+"([0-9]+\.[0-9]+\.[0-9]+(?:[a-zA-Z0-9.+-]*))"[ \t]*$/m', $redis, $matches) !== 1) {
             throw new ConfigurationException('selected SDK Redis runtime capability macro is ambiguous or incomplete');
         }
-        return ['phpVersionId' => $id, 'redisVersion' => $matches[1][0], 'deepcloneEnabled' => $this->enabledExtension($root, 'deepclone')] + $this->intlCapabilities($root);
+        return ['phpVersionId' => $id, 'redisVersion' => $matches[1][0], 'deepcloneEnabled' => $this->enabledExtension($root, 'deepclone')] + $this->intlCapabilities($root) + $this->standardCapabilities($root) + $this->namespacedFunctionExports($root);
+    }
+
+    private function namespacedFunctionExports(string $root): array
+    {
+        $functions = [];
+        $evidence = [];
+        $known = true;
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($root . '/include/php', \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if (!$file->isFile() || !str_ends_with($file->getFilename(), '_arginfo.h')) { continue; }
+            if ($file->isLink()) { throw new ConfigurationException('selected SDK function header is unsafe'); }
+            $bytes = file_get_contents($file->getPathname());
+            if (!is_string($bytes)) { throw new ConfigurationException('selected SDK function header cannot be read'); }
+            $evidence[substr($file->getPathname(), strlen($root) + 1)] = hash('sha256', $bytes);
+            $header = (string) preg_replace('~/\*.*?\*/|//[^\r\n]*~s', '', $bytes);
+            preg_match_all('/(?:static\s+)?const\s+zend_function_entry\s+([A-Za-z0-9_]+)\s*\[\s*\]\s*=\s*\{(.*?)\};/s', $header, $tables, PREG_SET_ORDER);
+            foreach ($tables as $table) {
+                if (str_ends_with($table[1], '_methods')) { continue; }
+                $depth = 0;
+                $ended = false;
+                foreach (preg_split('/\R/', trim($table[2])) ?: [] as $line) {
+                    $line = trim($line);
+                    if ($line === '') { continue; }
+                    if (preg_match('/^#\s*(if|ifdef|ifndef)\b/', $line)) { ++$depth; continue; }
+                    if (preg_match('/^#\s*endif\b/', $line)) { if (--$depth < 0) { $known = false; } continue; }
+                    if (preg_match('/^#\s*(else|elif)\b/', $line)) { continue; }
+                    if ($line === 'ZEND_FE_END' || $line === 'PHP_FE_END') { if ($ended || $depth !== 0) { $known = false; } $ended = true; continue; }
+                    if ($ended) { $known = false; continue; }
+                    if (preg_match('/^ZEND_RAW_FENTRY\(ZEND_NS_NAME\("([A-Za-z0-9_\\\\]+)",\s*"([A-Za-z0-9_]+)"\)/', $line, $match)) {
+                        $functions[strtolower(str_replace('\\\\', '\\', $match[1]) . '\\' . $match[2])] = true;
+                    } elseif (preg_match('/^ZEND_RAW_FENTRY\("([A-Za-z0-9_]+)"\s*,/', $line)
+                        || preg_match('/^(?:ZEND|PHP)_(?:FE|FALIAS|NAMED_FE|DEP_FE|DEP_FALIAS)\([A-Za-z0-9_]+\s*,/', $line)) {
+                        continue;
+                    } else { $known = false; }
+                }
+                if (!$ended || $depth !== 0) { $known = false; }
+            }
+        }
+        ksort($functions, SORT_STRING);
+        ksort($evidence, SORT_STRING);
+        return ['sdkNamespacedFunctionExportsKnown' => $known && $evidence !== [], 'sdkNamespacedFunctionExports' => array_keys($functions),
+            'sdkFunctionExportsSha256' => hash('sha256', json_encode($evidence, JSON_THROW_ON_ERROR))];
     }
 
     /** @return array{intlEnabled:bool,nativeLocaleIsRightToLeft:bool,nativeGraphemeLevenshtein:bool} */
     private function intlCapabilities(string $root): array
     {
         $enabled = $this->enabledExtension($root, 'intl');
-        $native = ['locale_is_right_to_left' => false, 'grapheme_levenshtein' => false];
+        $native = ['locale_is_right_to_left' => false, 'grapheme_levenshtein' => false, 'grapheme_strrev' => false];
         if ($enabled) {
             $header = $this->runtimeHeader($root, '/include/php/ext/intl/php_intl_arginfo.h');
             $header = (string) preg_replace('~/\*.*?\*/|//[^\r\n]*~s', '', $header);
@@ -141,9 +182,41 @@ final class StaticTargetLayout
             }
         }
         return ['intlEnabled' => $enabled, 'nativeLocaleIsRightToLeft' => $native['locale_is_right_to_left'],
-            'nativeGraphemeLevenshtein' => $native['grapheme_levenshtein']];
+            'nativeGraphemeLevenshtein' => $native['grapheme_levenshtein'], 'nativeGraphemeStrrev' => $native['grapheme_strrev']];
     }
 
+
+    private function standardCapabilities(string $root): array
+    {
+        $header = $this->runtimeHeader($root, '/include/php/ext/standard/basic_functions_arginfo.h');
+        $header = (string) preg_replace('~/\*.*?\*/|//[^\r\n]*~s', '', $header);
+        if (preg_match_all('/static\s+const\s+zend_function_entry\s+ext_functions\s*\[\s*\]\s*=\s*\{(.*?)\};/s', $header, $functions) !== 1
+            || preg_match_all('/static\s+void\s+register_basic_functions_symbols\s*\(int module_number\)\s*\{(.*?)\n\}/s', $header, $constants) !== 1
+            || !str_contains($functions[1][0], 'ZEND_FE_END')
+        ) { throw new ConfigurationException('selected SDK standard registration tables are incomplete'); }
+        $result = ['nativeClamp' => false, 'nativeArrayFilterUseValue' => false];
+        foreach ([$functions[1][0], $constants[1][0]] as $index => $table) {
+            $depth = 0;
+            $ended = false;
+            foreach (preg_split('/\R/', $table) ?: [] as $line) {
+                $line = trim($line);
+                if ($line === '') { continue; }
+                if ($ended) { throw new ConfigurationException('selected SDK standard function registration continues after its terminator'); }
+                if ($index === 0 && $line === 'ZEND_FE_END' && $depth === 0) { $ended = true; continue; }
+                if (preg_match('/^#\s*(?:if|ifdef|ifndef)\b/', $line) === 1) { ++$depth; continue; }
+                if (preg_match('/^#\s*endif\b/', $line) === 1) { if (--$depth < 0) { throw new ConfigurationException('selected SDK standard registration conditions are unbalanced'); } continue; }
+                $target = $index === 0 ? 'clamp' : 'ARRAY_FILTER_USE_VALUE';
+                if (preg_match('/\b' . $target . '\b/', $line) !== 1) { continue; }
+                $pattern = $index === 0 ? '/^ZEND_FE\(\s*clamp\s*,\s*\w+\s*\)$/' : '/^REGISTER_LONG_CONSTANT\("ARRAY_FILTER_USE_VALUE",\s*[A-Za-z_0-9]+,\s*CONST_PERSISTENT\);$/';
+                if ($depth !== 0 || preg_match($pattern, $line) !== 1) { throw new ConfigurationException('selected SDK standard capability depends on an unknown registration'); }
+                $key = $index === 0 ? 'nativeClamp' : 'nativeArrayFilterUseValue';
+                if ($result[$key]) { throw new ConfigurationException('selected SDK standard capability is repeated'); }
+                $result[$key] = true;
+            }
+            if ($depth !== 0 || ($index === 0 && !$ended)) { throw new ConfigurationException('selected SDK standard registration conditions are unbalanced or incomplete'); }
+        }
+        return $result;
+    }
 
     private function enabledExtension(string $root, string $extension): bool
     {

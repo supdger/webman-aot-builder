@@ -1,0 +1,28 @@
+--- a/src/Preprocessor.php
++++ b/src/Preprocessor.php
+@@ -1634,8 +1634,11 @@
+         if ($nullableNativeReturn !== null) {
+             [$returnType, $class] = $nullableNativeReturn;
+         }
+-        // Constructor, destructor, and clone methods cannot have a return value
+-        if ($this->method and in_array($this->method, ['__construct', '__destruct', '__clone'])) {
++        // Zend ignores a constructor result during new, while explicit calls
++        // can observe it. Native and stub constructors retain their void ABI.
++        if ($this->method === '__construct' && !$this->classDef?->nativeObject && !$this->stubFile) {
++            $returnType = Type::VAR;
++        } elseif ($this->method and in_array($this->method, ['__construct', '__destruct', '__clone'])) {
+             $returnType = Type::VOID;
+         }
+ 
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -2990,7 +2990,8 @@
+                 );
+             }
+         }
+-        if ($this->isCurrentConstructor() && !$this->context->inClosure) {
++        if ($this->isCurrentConstructor() && !$this->context->inClosure
++            && $this->functionDef->returnType === Type::VOID) {
+             $this->fatalError($v, 'Method `' . $this->getCurrentMethodDisplayName() . '()` cannot return a value');
+         }
+         if ($this->shouldCheckClosureReturnType()) {

@@ -5,7 +5,7 @@ namespace Supdger\WebmanAotInstaller;
 
 final class Installer
 {
-    public const VERSION = '0.4.3';
+    public const VERSION = '0.4.4';
     private array $release;
     private bool $interactive;
     private bool $consoleRecoveryAllowed;
@@ -58,6 +58,11 @@ final class Installer
                     $this->nextStep();
                 }
                 return 0;
+            }
+            if ($guided && $this->interactive && $this->consoleRecoveryAllowed
+                && !isset($options['non-interactive'])) {
+                $code = Console::restore($argv);
+                if ($code !== null) { return $code; }
             }
             if ($guided && !$this->interactive) {
                 if (isset($arguments[0]) && $this->consoleRecoveryAllowed && !isset($options['non-interactive'])) {
@@ -182,7 +187,7 @@ final class Installer
         }
         $this->say('1 开始（已准备资源自动复用；首次下载完整包，' . sprintf('%.1f MB', $package['size'] / 1000000) . '）'
             . "\n2 导入已下载的完整包\n0 结束");
-        while (($line = fgets(STDIN)) !== false) {
+        while (($line = Console::read()) !== false) {
             $choice = trim($line);
             if ($choice === '' || $choice === '0') {
                 return false;
@@ -299,7 +304,6 @@ final class Installer
             throw new \RuntimeException('另一个入口正在准备资源；请稍后重试。');
         }
         $started = microtime(true);
-        $extract = null;
         try {
             $this->assertOwnership($state);
             if (!is_file($state . '/owner.json')
@@ -314,10 +318,28 @@ final class Installer
             $package = $this->release['packages'][$host];
             $this->say('[准备] ' . $this->release['version'] . ' / ' . $host . ' 完整包，' . $package['size'] . ' 字节。');
             $archive = isset($options['archive']) ? self::inputPath((string) $options['archive']) : null;
+            $small = $this->release['upgrades'][$host] ?? null;
+            if ($archive === null && is_array($small) && is_file($state . '/ready.json')
+                && is_dir($state . '/runtime/current/app') && !$this->cachedPackage($state, $package)) {
+                $safeFallback = true;
+                try {
+                    $this->say('[升级] 先取得锁定的轻量包，逐文件验证可复用组件。');
+                    $smallArchive = $this->download($state, $small, $host);
+                    $this->installArchive($state, $host, $smallArchive, $small, true, $safeFallback);
+                    $this->say(sprintf('[成功] 资源升级完成，耗时 %.1f 秒。', microtime(true) - $started));
+                    return;
+                } catch (\Throwable $failure) {
+                    Console::assertParent();
+                    if (!$safeFallback) { throw $failure; }
+                    $this->say('[复用不可用] ' . $failure->getMessage() . '\n原环境保留；回退到锁定完整包。');
+                }
+            }
+
             if ($archive === null) {
                 try {
                     $archive = $this->download($state, $package, $host);
                 } catch (\Throwable $failure) {
+                    Console::assertParent();
                     $this->say('在线准备失败：' . $failure->getMessage());
                     $this->say("请下载这个完整安装包：\n" . $package['filename'] . "\n" . $package['url']);
                     if (!$this->interactive) {
@@ -329,37 +351,94 @@ final class Installer
                     }
                 }
             }
-            Archive::verify($archive, $package);
-            $this->say('[校验] 大小与 SHA-256 通过。');
-            $extract = $state . '/cache/extract-' . bin2hex(random_bytes(8));
-            $this->say('[解包] 检查安全路径并解包原始完整安装包。');
-            Archive::extract($archive, $extract, $host);
-            Archive::identity($extract, $host, $this->release['version']);
-            $this->say('[安装] 安装到独立目录，不改原安装与 PATH。');
-            $command = $host === 'macos-arm64'
-                ? ['/bin/sh', $extract . '/install.sh', '--home', $state . '/runtime', '--bin-dir', $state . '/bin', '--no-path']
-                : ['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $extract . '/install.ps1',
-                    '-InstallRoot', $state . '/runtime', '-BinDir', $state . '/bin', '-NoPath'];
-            $code = Process::run($command, $extract);
-            if ($code !== 0) {
-                throw new \RuntimeException('原安装器失败，退出码 ' . $code . '。已保留包缓存，修复后可重试。');
-            }
-            $code = $this->forward($state, $host, ['version'], (string) getcwd());
-            if ($code !== 0) {
-                throw new \RuntimeException('私有运行时自检失败，退出码 ' . $code);
-            }
-            $marker = json_encode(['version' => $this->release['version'], 'host' => $host], JSON_THROW_ON_ERROR);
-            if (file_put_contents($state . '/ready.json', $marker . "\n", LOCK_EX) === false) {
-                throw new \RuntimeException('无法记录就绪状态。');
-            }
+            $this->installArchive($state, $host, $archive, $package, false);
             $this->say(sprintf('[成功] 资源准备完成，耗时 %.1f 秒。', microtime(true) - $started));
         } finally {
-            if (is_string($extract)) {
-                $this->removeTemporary($extract);
-            }
             flock($lock, LOCK_UN);
             fclose($lock);
         }
+    }
+
+    private function installArchive(string $state, string $host, string $archive, array $package, bool $reuse, ?bool &$safeToFallback = null): void
+    {
+        $safeToFallback = true;
+        $committed = false;
+        Archive::verify($archive, $package);
+        $extract = $state . '/cache/extract-' . bin2hex(random_bytes(8));
+        $staging = $state . '/cache/install-' . bin2hex(random_bytes(8));
+        $backup = $state . '/install-backups/' . bin2hex(random_bytes(8));
+        $moved = [];
+        $installed = [];
+        try {
+            Archive::extract($archive, $extract, $host);
+            Archive::identity($extract, $host, $this->release['version'], !$reuse);
+            if (!mkdir($staging, 0700) || !is_dir($staging)) { throw new \RuntimeException('无法创建安装候选。'); }
+            $environment = getenv();
+            unset($environment['WEBMAN_AOT_REUSE_HOME']);
+            if ($reuse) { $environment['WEBMAN_AOT_REUSE_HOME'] = $state . '/runtime'; }
+            $command = $host === 'macos-arm64'
+                ? ['/bin/sh', $extract . '/install.sh', '--home', $staging . '/runtime', '--bin-dir', $staging . '/bin', '--no-path']
+                : ['powershell.exe', '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $extract . '/install.ps1',
+                    '-InstallRoot', $staging . '/runtime', '-BinDir', $staging . '/bin', '-NoPath'];
+            $this->say($reuse ? '[复用] 在候选目录校验旧组件及本版替换文件。' : '[安装] 在独立候选目录准备完整包。');
+            $code = Process::run($command, $extract, $environment);
+            if ($code !== 0) { throw new \RuntimeException('候选安装失败，退出码 ' . $code . '；原运行环境保持。'); }
+            if ($this->forward($staging, $host, ['version'], (string) getcwd()) !== 0) {
+                throw new \RuntimeException('候选私有运行时自检失败；原运行环境保持。');
+            }
+            $launcher = $staging . '/bin/' . ($host === 'macos-arm64' ? 'webman-aot' : 'webman-aot.cmd');
+            $contents = is_file($launcher) && !is_link($launcher) ? file_get_contents($launcher) : false;
+            if (!is_string($contents) || file_put_contents($launcher, str_replace(
+                [$staging . '/runtime', str_replace('/', '\\', $staging . '/runtime')],
+                [$state . '/runtime', str_replace('/', '\\', $state . '/runtime')], $contents
+            )) === false) { throw new \RuntimeException('无法准备最终私有入口。'); }
+            $marker = json_encode(['version' => $this->release['version'], 'host' => $host], JSON_THROW_ON_ERROR);
+            if (file_put_contents($staging . '/ready.json', $marker . "\n", LOCK_EX) === false) {
+                throw new \RuntimeException('无法记录候选就绪状态。');
+            }
+            if (!is_dir(dirname($backup)) && !mkdir(dirname($backup), 0700)) { throw new \RuntimeException('无法创建安装备份目录。'); }
+            if (!mkdir($backup, 0700)) { throw new \RuntimeException('无法创建安装备份。'); }
+            $safeToFallback = false;
+            foreach (['runtime', 'bin', 'ready.json'] as $name) {
+                if (is_link($state . '/' . $name)) { throw new \RuntimeException('安装目标不能是链接：' . $name); }
+                if (file_exists($state . '/' . $name)) {
+                    if (!rename($state . '/' . $name, $backup . '/' . $name)) { throw new \RuntimeException('无法备份安装目标：' . $name); }
+                    $moved[] = $name;
+                }
+                if (!rename($staging . '/' . $name, $state . '/' . $name)) { throw new \RuntimeException('无法切换安装目标：' . $name); }
+                $installed[] = $name;
+            }
+            if ($this->forward($state, $host, ['version'], (string) getcwd()) !== 0) {
+                throw new \RuntimeException('切换后的私有运行时自检失败。');
+            }
+            $committed = true;
+            $this->say('[切换成功] 已验证新环境；原环境备份：' . $backup);
+        } catch (\Throwable $error) {
+            foreach (array_reverse($installed) as $name) {
+                if (!rename($state . '/' . $name, $staging . '/' . $name)) {
+                    throw new \RuntimeException('安装失败且无法移回候选：' . $name . '；备份：' . $backup, previous: $error);
+                }
+            }
+            foreach (array_reverse($moved) as $name) {
+                if (!rename($backup . '/' . $name, $state . '/' . $name)) {
+                    throw new \RuntimeException('安装失败且无法恢复备份：' . $name . '；备份：' . $backup, previous: $error);
+                }
+            }
+            $safeToFallback = true;
+            throw $error;
+        } finally {
+            $this->removeTemporary($extract);
+            if ($safeToFallback || $committed) { $this->removeTemporary($staging); }
+        }
+    }
+
+    private function cachedPackage(string $state, array $package): bool
+    {
+        $archive = $state . '/cache/' . $package['filename'];
+        foreach ([$archive, $archive . '.' . $package['sha256'] . '.part'] as $path) {
+            try { Archive::verify($path, $package); return true; } catch (\Throwable) { continue; }
+        }
+        return false;
     }
 
     private function download(string $state, array $package, string $host): string
@@ -413,7 +492,7 @@ final class Installer
             if ($offset > 0) { array_push($command, '--continue-at', (string) $offset); }
             $command[] = $package['url'];
             try {
-                $code = Process::run($command);
+                $code = Process::download($command);
                 $response = is_file($headers) ? (string) file_get_contents($headers) : '';
             } finally {
                 if (is_file($headers)) { unlink($headers); }
@@ -467,7 +546,7 @@ final class Installer
     {
         while (true) {
             $this->say('下载后按回车检查常规 Downloads 目录，或输入/拖入完整安装包路径；输入 0 取消。');
-            $line = fgets(STDIN);
+            $line = Console::read();
             if ($line === false || trim($line) === '0') {
                 return null;
             }

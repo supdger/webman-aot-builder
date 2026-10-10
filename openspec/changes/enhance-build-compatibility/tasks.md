@@ -196,3 +196,74 @@ README、Composer README 与四页既有 Wiki 草稿同步当前结果。源码�
 
 
 主控最终依据当前独审完整清单、76 项源码冻结与本轮最终 fresh/独立 verify 判定：5.1、5.3、5.4、5.5、6.1–6.4 和 6.8 在本任务源码、能力准入及本地构建范围完成，5.2 原通过保留。机器可读证据 `/Users/supdger/.tmp/webman-aot-compatibility-resume-20261009/result.json` 绑定当前候选、新产物和真实日志；旧 `/private/tmp` 不可读且不作为当前证明。Linux 原生应用运行、Windows 原生、业务、提交、推送、Release/Wiki 发布及全局安装升级未完成，不由前述历史 4.x 发布授权扩大本轮范围。此次未执行新的安装或部署。
+
+## 项目编译职责纠正（2026-10-10）
+
+- [x] 7.1 移除 SWITCH 表四条 binding→throw 及 Carbon 丢弃绑定结果降级，保留其它转换和材料校验；初始 REF 定位已纠正。
+- [x] 7.2 项目可选转换仅处理三个明确不适用条件，整个 Switch 原文回退，严格接口及其它配置/输出错误不吞。
+- [x] 7.3 完整 installed 133 域/352 模板回归、binding 原样、partial/known/adapted/strict-error/Str 原文及 Carbon 预步回退通过，作者最终 5.101 秒。
+- [x] 7.4 实际项目隔离调用生产 ProjectBuilder/TypePHP；进入 compile，原报 ModelInfo::toArray() 必须精确 array 返回，最后 7.5 秒 exit255，未生成 ELF。原 PHP 合法，错误检查与调用区已核同锁定官方 commit。
+- [x] 7.5 独立 source gate 17 项通过：四个 fixed hash 匹配、闭包绑定原样、整 Switch compact 预步回退、严格材料及非形态配置错误传播；原项目与 mirror 4,301 项摘要/权限/link 一致。独立生产链实际进入 TypePHP 并保留原 exit255 错误，无 ELF，不沿用历史完整编译成功。证据 `/private/tmp/webman-aot-binding-independent-20261010/probe-result.json` 与 `preservation-result.json`。
+
+材料和日志位于 `/private/tmp/webman-aot-closure-native-20261010`，未写原项目/vendor/宿主运行时，先前 26 文件候选完整保留，本轮未提交或发布。
+
+## TypePHP 必要条件接续修复（本轮）
+
+- [x] 8.1 统一编译器保留普通 PHP toArray 原声明、参数、动态返回与继承合同，Native 方法仍验证必要签名；ProjectBuilder 已撤销先前镜像 array 返回注入，不再沿用接口 PHPDoc 补类型策略。
+- [x] 8.2 按实际 SDK/helper 条件与安装生产 Composer 来源补齐输入，覆盖 PSR-0/4、classmap、files、prospective overlay、提供者顺序及来源缓存 SHA/祖先路径；受影响专项通过。
+- [x] 8.3 真实失败后追加缺 trait 的来源诊断，19 项回归通过（含损坏元数据与 NUL 路径不替换原始错误），保留原始 fatal/退出码，不安装包、不创建空声明或跳过来源。
+- [x] 8.4 使用现候选和已缓存工具链复测原生产锁与已有 Queue 的独立隔离副本；原锁 38.916 秒，Queue 副本 53.139 秒，均 builder 退出 1、TypePHP 退出 255，具体缺依赖见下。
+- [x] 8.5 使用最终 A51 + G45 + B 统一候选和原生产锁完成实际完整编译、静态链接及隔离产物完整性验证；此项仅为 macOS 构建宿主产生 Linux x64 ELF 和结构/完整性验收，Linux 原生应用运行及业务未验。
+
+此前镜像注入阶段的历史结果（已由普通 PHP 编译合同替代，不作为当前阻塞结论）：原生产锁实测越过 ModelInfo 返回声明后缺 `Illuminate\Queue\Attributes\ReadsQueueAttributes`，引用位置为 illuminate/bus v13.35.0 的 DebounceLock.php:13。仅在已有 Queue v13.35.0 的临时副本继续验证，三个实际 toArray 返回声明与全部 prepare 来源均已越过，随后缺 `Illuminate\Foundation\Bus\Dispatchable`，引用位置为 illuminate/queue 的 CallQueuedClosure.php:16。原项目依赖未修改；本轮没有安装 framework 或新增包。两项不是同一个依赖快照，不能将 Queue 副本当成原锁成功。
+
+末次结果与原始日志：`/private/tmp/webman-aot-closure-native-20261010/resume-build-results.json`、`resume-original-lock.log`、`resume-queue-copy.log`。array-return-type 与 composer-source-completion 回归通过；缓存 SHA 拒绝测试改为精确实际诊断断言。README 与 Wiki 候选两页同步当前数组证明/接口合同及未 ELF 事实，未提交、推送、发布或同步宿主。
+
+### 统一编译器接续状态
+
+来源编译器成果已按固定基线逐项合入统一候选；完整补丁 pristine/after 身份、added 文件缺失条件与原子冲突保护保持校验。最终候选为 51 个编译器补丁、48 条身份规则、6 个新增编译器文件，加 G45 generator overlay 与 B。A49 switch selector 回归由 A51 修复并独验通过；最终原生产锁完整执行退出 0、615.792 秒，TypePHP 593.1 秒退出 0，2,036 个前端转换及 arginfo、1,890 个 Linux 目标原生编译单元、静态链接和隔离 dist 完整性验证均完成。最终 ELF SHA256 `d03bd693e9e5f0759f08a19c61057f47b02d76e4b5b648db17983586929e9e28`，产物验证 40 文件、82 direct、11 shadow，ldd 未在 macOS 构建宿主运行。原始证据 `/private/tmp/webman-aot-unify-A/build51.log`、`build51-result.json`；A50 产物只是此前基线，不作为最终候选证明。8.5 仅在上述源码、本地隔离构建与结构完整性范围完成；Linux 原生应用、多请求及业务运行未验，8.20 旧 nested finally return 缺口仍待办，不能声称所有项目或全部 PHP 控制流兼容。隔离 dist 写入不表示 Git、Release 或公开发布；本轮未提交、发布或升级宿主。
+
+### A35–A38-r2 已验切片（完整编译未通过）
+
+- [x] 8.6 依据目标 SDK 已验证的 possible-return 元数据保留参数入口合同，仅为适用函数体预留 PHP 动态值存储；未知结果、Native 与引用边界保持原处理。A35 独验只通过此切片，命名空间运行时反例由下一项修复，不能将 A35 单独称全运行时通过。
+- [x] 8.7 按原 PHP 命名空间/全局函数查找顺序实现精确 Zend 调用、参数与返回合同、缓存与未找到时行为；manifest coverage 对真实补丁路径完整覆盖，A36-r2 独立前端、两个宿主运行进程与 owned 反例通过。
+- [x] 8.8 保留 PHP 字符串与动态值 bitwise NOT 的结果、类型错误、警告及异常传播；A37 前端、普通 PHP 对照和两个宿主运行进程通过，不宣称全部语言运算已覆盖。
+- [x] 8.9 对已解析普通 PHP 局部变量的已知混合值合并采用动态存储，保留读前写、分支、goto、unknown、Native 与引用边界；A38-r2 前端、两个宿主运行进程、闭包/Fiber、一次求值与 warm cache 独验通过。保留原件和既有 typed 入口 ABI，不强制更改项目签名。
+
+四个独验原始记录位于 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a35/fixed-result.json`、`a36/fixed-result.json`、`a37/fixed-result.json`、`a38/fixed-result.json`；各项只证明其明确切片及宿主独立进程，未运行 Linux ZTS 多请求或完整业务。A38-r2 最终材料固定 `/private/tmp/webman-aot-unify-A/fixed-A38-source-r2.json`；这些切片本身不证明完整项目与 ELF；最终结果以 8.5 的 A51 原锁构建为准。
+
+### A39–A41-r2 后续切片（完整编译未通过）
+
+- [x] 8.10 从实际目标 SDK 归档与已验证静态注册取得内部原生类及完整方法合同；宿主 driver 未加载扩展不直接视为目标缺少扩展。A39-r3 的前端、继承、LSP、引用、final/readonly 和元数据边界独验通过；未据此前端结果宣称目标 allocator 运行时验收。
+- [x] 8.11 函数调用的已知返回类型预测不提前解析参数或执行普通转换，合法 foreach 不再因预测阶段报局部变量未定义；实际调用的参数及未知边界继续校验。A40 正反例独验通过。
+- [x] 8.12 仅对生产 Composer 惰性加载、可选且没有顶部副作用、声明图与必需依赖门槛均明确的缺失接口声明延后，实际请求保留可捕获 PHP Error；A41-r1 宿主运行对照已验且源码未变，r2 循环声明及已选提供者门槛独验通过；未运行目标 Linux ZTS 跨请求验收。
+
+独验记录沿用 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a39/fixed-result.json`、`a40/fixed-result.json`、`a41/`；候选材料见 `/private/tmp/webman-aot-unify-A/fixed-A39-source-r3.json`、`fixed-A40-source.json`、`fixed-A41-source-r2.json`。这些有界合同不替代 8.5 的完整编译、ELF 和目标运行验收。
+
+### A42–A44 与 G45 切片（完整编译未通过）
+
+- [x] 8.13 普通 PHP 构造方法显式调用保留动态返回值，new 忽略返回值；不改 PHP 原声明，Native 必需合同仍验证。A42 专项独验通过。
+- [x] 8.14 普通 PHP 析构方法显式调用保留动态返回值，自动析构忽略返回值并保持异常与清理顺序；A43 正式和父类/异常边界宿主对照独验通过。早期误用构造方法的试例不计入此证明。
+- [x] 8.15 已解析普通 PHP Child/Base 局部赋值采用动态值存储，两个以上类合并及相关类合并保留真实值；typed 调用的实际 TypeError 与 Native 边界不放宽。A44 独验通过。
+- [x] 8.16 generator overlay 仅过滤旧的无声明 toArray 强制 array 返回规则，保留实际上游输入字节、已声明类型、属性、默认值及其余 JsonResource 规则；不更改编译器 LSP。G45 正式、反例和缓存独验通过。
+
+有界独验记录位于 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a42/fixed-result.json`、`a43/fixed-result.json`、`a44/fixed-result.json`、`g45/fixed-result.json`；冻结材料沿用 `/private/tmp/webman-aot-unify-A/fixed-A42-source.json`、`fixed-A43-source.json`、`fixed-A44-source.json`、`fixed-G45-source.json`。宿主专项运行不代表目标 Linux 多请求及完整业务验收；8.5 的最终 A51 构建结果见上方，目标运行仍未验。
+
+### A45–A48 控制流与 catch 切片
+
+- [x] 8.17 非整数 switch 认可现有合法 Goto 终结；最后一个物理 case 保留 PHP 自然结束，不扩大中间 case 的隐式贯穿能力。A45 初次嵌套 finally Goto 反例由 A47 修复后，与 A46 一并独验通过。
+- [x] 8.18 Goto 依据目标 label 的词法 try/catch 边界，依次执行实际退出的 inner→outer finally，finally 异常取消待跳转；选择表达式、case 操作数与跳转副作用求值次数保持。27 个正式和 29 个独立边界用例分别通过 PHP 与两个宿主 C++ 进程对照，不作为目标 Linux ZTS 跨请求验收。
+- [x] 8.19 已知 PHP catch 局部变量使用能够保留 scalar/Object 的值存储，保留异常对象身份、引用释放及回调次数，实际未定义参数仍报错。A48 前端、19 个正式和 21 个所有权边界用例宿主对照独验通过；throw API 与 Native 合同不变。
+- [ ] 8.20 已证实的旧嵌套 finally return 缺口仍未修：没有 switch 的 nested try 中 inner finally return，PHP value=7、outer count=1，而宿主 C++ value=7、outer count=0。证据 `/private/tmp/webman-aot-unify-A/probe45-finally-return-runtime.php`。本轮 Goto 修复不代表通用 Return CFG 修复；原项目未实际报此模式，不扩大当前必要编译修复为全 CFG 重写。
+
+独验记录 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a46a47/fixed-result.json`、`a48/fixed-result.json`；冻结材料 `/private/tmp/webman-aot-unify-A/fixed-A46-A47-source.json`、`fixed-A48-source.json`。前端转换、目标原生编译、链接、ELF 完整性及目标运行是分别验证的阶段，8.5 的最终 A51 构建结果见上方，目标运行仍未验。
+
+### A49–A51 C++ 临时声明及 PHP 值生存期
+
+- [x] 8.21 普通 foreach-list 已知混合局部值使用 PHP 动态值存储，保留 iterable 求值次数、空迭代、实际对象身份与释放次数；参数、typed、Native、引用和未知来源保持门槛。仅为 list 候选使用已证明布尔结果，循环赋值不当作可能为空迭代后的支配赋值。A50 独验通过。
+- [x] 8.22 Goto 可跨越的 C++ 临时声明前置，但实际赋值保持原执行点；switch selector 的值仅在 PHP 原作用域内生存，跳出、返回或异常后释放。A49 初次专项不能覆盖后来已证实的作用域回归；A51 修订专项独验通过：原作用域 inside/outside/returned 均与 PHP 为 [1,true]，分组 Goto 及未执行 switch 求值次数保持；A49 旧回归由 A51 解决，最终 A51 原生产锁完整编译、静态链接及隔离结构完整性验证通过；Linux 原生运行未验。
+
+A50 独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a50/fixed-result.json`；A51 冻结 `/private/tmp/webman-aot-unify-A/fixed-A51-source.json`，独验 `/private/tmp/webman-aot-binding-independent-20261010/resume-diagnostic/a51/fixed-result.json`。A50 静态 ELF 基线不替代 A51 修订后的最终证明；最终 A51 完整构建已通过，目标运行仍未验，8.20 旧 nested finally return 缺口仍待办。
+
+
+最终尾核 `/private/tmp/webman-aot-unify-A/final51-verification.json`：server 为 202,168,632 字节的 x86_64 静态 ELF，PT_LOAD 存在、PT_INTERP/PT_DYNAMIC 不存在、NEEDED 为空；原项目 composer.json、composer.lock、installed.json 三个摘要与记录一致。最终 A51 7 项、联合 12 项源码身份及全部 48 个 prepared after 摘要一致。`final51-processes.json` 无匹配本任务编译、链接或监控进程；保留隔离材料供复核，未删除既有或共享资源。Linux 原生运行未执行，不将结构完整性视为业务验收。

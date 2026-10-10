@@ -115,8 +115,10 @@ try {
             Write-Output "Previous webman-aot command saved in: $legacyLauncher"
         }
     }
-    if ($full) {
+    $reuse = -not $full -and -not [string]::IsNullOrWhiteSpace($env:WEBMAN_AOT_REUSE_HOME)
+    if ($full -or $reuse) {
         $bundle = Join-Path $packageRoot 'payload\minimal-toolchain\component.zip'
+        if ($reuse) { $bundle = '--reuse' }
         $offlineScript = Join-Path $candidateCurrent 'app\installer\offline-prepare.php'
         $previousHome = $env:WEBMAN_AOT_BUILDER_HOME
         $env:WEBMAN_AOT_BUILDER_HOME = $candidate
@@ -144,6 +146,7 @@ try {
         $newToolchains = $true
         Copy-Item -LiteralPath (Join-Path $packageRoot 'payload\launcher\webman-aot.cmd') -Destination $launcher
         $newLauncher = $true
+        if ($full) {
         $previousHome = $env:WEBMAN_AOT_BUILDER_HOME
         $env:WEBMAN_AOT_BUILDER_HOME = $InstallRoot
         try {
@@ -152,6 +155,7 @@ try {
             if ($privatePhpExitCode -ne 0) { throw 'Activated offline toolchain self-check failed.' }
         } finally {
             $env:WEBMAN_AOT_BUILDER_HOME = $previousHome
+        }
         }
     } else {
         $smallBackup = Join-Path $InstallRoot ('.install-backups\current-' +

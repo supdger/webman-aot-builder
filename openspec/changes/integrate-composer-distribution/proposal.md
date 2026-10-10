@@ -20,3 +20,7 @@ Composer 入口已验证但位于额外独立仓库，使用者希望源码与�
 ## Impact
 
 仅涉及根 Composer 元数据、packages/composer-installer、轻量打包工具和受影响文档/OpenSpec。原 AOT src、installer、工具链锁与 0.3.2 资产保持不变。本次先交可审候选，原 main 推送、Release 和 Packagist 仓库切换须主控确认授权范围。
+
+## Follow-up: verified component reuse
+
+Upgrade preparation reuses existing complete caches and assembles a separately verified candidate from target-locked files. Existing published 0.4.3 assets remain unchanged. New packaging and release consumption require independent acceptance before publication.

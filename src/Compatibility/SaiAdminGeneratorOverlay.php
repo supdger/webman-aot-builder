@@ -103,7 +103,7 @@ PHP;
             }
             $pathList = var_export($paths, true);
             $contract = "\n        if (in_array(\$sourceRel, {$pathList}, true)) {\n"
-                . "            return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->replace(\$sourceRel, \$content, self::{$rules}[\$sourceRel]);\n        }\n";
+                . "            return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(\$sourceRel, \$content, self::{$rules}[\$sourceRel]);\n        }\n";
             $overlay = str_replace($entry, $entry . $contract, $overlay);
         }
         $compactStart = strpos($overlay, '    protected function expandIlluminateQueryBuilderCompactCalls(string $content): string');
@@ -148,12 +148,12 @@ PHP;
         }
         $overlay = str_replace($guardedEntry, $guardedEntry . "\n" . $intlRule, $overlay);
         $overlay = $this->applySourceContracts($overlay);
-        if ($mirror !== null) { $overlay = $this->discoverGuardedFamilies($overlay, $mirror); }
+        if ($mirror !== null) { $overlay = $this->discoverGuardedFamilies($overlay, $mirror, $targetCapabilities); }
         $guardedEntry = "    protected function prepareGuardedSource(string \$sourceRel, string \$content): string\n    {";
         $phpTarget = var_export($targetCapabilities['phpVersionId'] ?? null, true);
         $redisTarget = var_export($targetCapabilities['redisVersion'] ?? null, true);
         $runtimeTarget = var_export($targetCapabilities, true);
-        $helperContract = "        if ((\$prepared = (new \\WebmanAotBuilder\\Compatibility\\GuardedHelperSourceRule({$phpTarget}, {$redisTarget}, {$runtimeTarget}))->prepare(\$sourceRel, \$content)) !== null) {\n            return \$prepared;\n        }";
+        $helperContract = "        if ((\$prepared = (new \\WebmanAotBuilder\\Compatibility\\GuardedHelperSourceRule({$phpTarget}, {$redisTarget}, {$runtimeTarget}, \$this->basePath))->prepare(\$sourceRel, \$content)) !== null) {\n            return \$prepared;\n        }";
         if (substr_count($overlay, $guardedEntry) !== 1) { throw new ConfigurationException('locked helper contract entry is missing'); }
         $overlay = str_replace($guardedEntry, $guardedEntry . "\n" . $helperContract, $overlay);
         $digest = hash('sha256', $overlay);
@@ -194,10 +194,52 @@ PHP;
         }
         return ['path' => $target, 'sha256' => $digest];
     }
-    private function discoverGuardedFamilies(string $source, string $mirror): string
+    private function discoverGuardedFamilies(string $source, string $mirror, array $targetCapabilities): string
     {
-        $selected = [];
-        foreach (['vendor/symfony/cache/Traits' => '#^Redis(?:Cluster)?[0-9]+ProxyTrait\\.php$#D', 'vendor/symfony/polyfill-php85/Resources/stubs' => '#\\.php$#D'] as $root => $pattern) {
+        [$source, $autoloadSelected] = $this->discoverAutoloadHelpers($source, $mirror, $targetCapabilities);
+        $selected = $autoloadSelected;
+        $families = ['vendor/symfony/cache/Traits' => '#^Redis(?:Cluster)?[0-9]+ProxyTrait\\.php$#D'];
+        foreach (glob($mirror . '/vendor/symfony/polyfill-php*', GLOB_ONLYDIR) ?: [] as $polyfill) {
+            if (preg_match('#^polyfill-php[0-9]+$#D', basename($polyfill)) === 1) {
+                if (is_link($polyfill)) { throw new ConfigurationException('guarded source family directory is unsafe'); }
+                $families['vendor/symfony/' . basename($polyfill) . '/Resources/stubs'] = '#\\.php$#D';
+            }
+        }
+        foreach (array_keys($families) as $root) {
+            if (!str_starts_with($root, 'vendor/symfony/polyfill-php')) { continue; }
+            $bootstrap = substr($root, 0, -strlen('/Resources/stubs')) . '/bootstrap.php';
+            $file = $mirror . '/' . $bootstrap;
+            if (!is_file($file) || str_contains($source, var_export($bootstrap, true) . ' =>')) { continue; }
+            $manifestFile = dirname($file) . '/composer.json';
+            $autoloadFile = $mirror . '/vendor/composer/autoload_files.php';
+            if (!is_file($manifestFile) || is_link($manifestFile) || !is_file($autoloadFile) || is_link($autoloadFile)) { continue; }
+            $manifest = json_decode((string) file_get_contents($manifestFile), true);
+            $autoload = file_get_contents($autoloadFile);
+            if (!in_array('bootstrap.php', $manifest['autoload']['files'] ?? [], true)
+                || !is_string($autoload) || !str_contains($autoload, var_export('/' . substr($bootstrap, strlen('vendor/')), true))
+            ) { continue; }
+            if (is_link($file)) { throw new ConfigurationException('guarded source family contains a link'); }
+            $contents = file_get_contents($file);
+            if (!is_string($contents)) { throw new ConfigurationException('Unable to read guarded source family'); }
+            $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($bootstrap, $contents);
+            if ($prepared === $contents || str_contains($source, var_export($bootstrap, true) . ' =>')) { continue; }
+            $target = '.typephp/build/symfony-family-' . basename(dirname($file)) . '-bootstrap.php';
+            $selected[$target] = '        ' . var_export($bootstrap, true) . ' => ' . var_export($target, true) . ",\n";
+            if (preg_match("#return\\s+require\\s+__DIR__\\s*\\.\\s*['\"](/bootstrap[0-9]+\\.php)['\"]#", $contents, $delegation) === 1) {
+                $companion = dirname($bootstrap) . $delegation[1];
+                $companionFile = $mirror . '/' . $companion;
+                if (is_file($companionFile) && !is_link($companionFile)) {
+                    $companionSource = file_get_contents($companionFile);
+                    if (!is_string($companionSource)) { throw new ConfigurationException('Unable to read PHP polyfill bootstrap companion'); }
+                    $companionPrepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, null, $targetCapabilities, $mirror))->prepare($companion, $companionSource);
+                    if ($companionPrepared !== $companionSource) {
+                        $companionTarget = '.typephp/build/symfony-family-' . basename(dirname($companionFile)) . '-' . basename($companionFile);
+                        $selected[$companionTarget] = '        ' . var_export($companion, true) . ' => ' . var_export($companionTarget, true) . ",\n";
+                    }
+                }
+            }
+        }
+        foreach ($families as $root => $pattern) {
             $directory = $mirror . '/' . $root;
             if (!file_exists($directory)) { continue; }
             if (!is_dir($directory) || is_link($directory)) { throw new ConfigurationException('guarded source family directory is unsafe'); }
@@ -207,6 +249,12 @@ PHP;
                 if (!$file->isFile() || preg_match($pattern, $file->getFilename()) !== 1) { continue; }
                 $path = $root . '/' . str_replace('\\', '/', substr($file->getPathname(), strlen($directory) + 1));
                 if (str_contains($source, var_export($path, true) . ' =>')) { continue; }
+                if (str_starts_with($root, 'vendor/symfony/polyfill-php')) {
+                    $contents = file_get_contents($file->getPathname());
+                    if (!is_string($contents)) { throw new ConfigurationException('Unable to read guarded source family'); }
+                    $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($path, $contents);
+                    if ($prepared === $contents) { continue; }
+                }
                 $relative = substr($path, strlen('vendor/symfony/'));
                 $target = '.typephp/build/symfony-family-' . preg_replace('/[^A-Za-z0-9-]/', '-', substr($relative, 0, -4)) . '.php';
                 if (isset($selected[$target])) { throw new ConfigurationException('guarded source family targets collide'); }
@@ -220,13 +268,100 @@ PHP;
         return str_replace($anchor, $anchor . implode('', $selected), $source);
     }
 
+    private function composerAutoloadEntries(string $source): array
+    {
+        $tokens = [];
+        foreach (token_get_all($source) as $token) {
+            if (is_array($token) && in_array($token[0], [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) { continue; }
+            $tokens[] = is_array($token) ? $token[1] : $token;
+        }
+        if (implode('', array_slice($tokens, 0, 17)) !== '$vendorDir=dirname(__DIR__);$baseDir=dirname($vendorDir);returnarray(') { return []; }
+        $entries = [];
+        $index = 17;
+        while (isset($tokens[$index]) && $tokens[$index] !== ')') {
+            if (preg_match("/^'[a-f0-9]{32}'$/D", $tokens[$index]) !== 1 || ($tokens[$index + 1] ?? null) !== '=>'
+                || !in_array($tokens[$index + 2] ?? null, ['$vendorDir', '$baseDir'], true)
+                || ($tokens[$index + 3] ?? null) !== '.'
+                || preg_match("~^'(/[A-Za-z0-9_./-]+)'$~D", $tokens[$index + 4] ?? '', $path) !== 1
+                || ($tokens[$index + 5] ?? null) !== ','
+            ) { return []; }
+            $entries[] = [null, substr($tokens[$index + 2], 1), $path[1]];
+            $index += 6;
+        }
+        return array_slice($tokens, $index) === [')', ';'] ? $entries : [];
+    }
+
+    private function discoverAutoloadHelpers(string $source, string $mirror, array $capabilities): array
+    {
+        $autoloadFile = $mirror . '/vendor/composer/autoload_files.php';
+        if (!is_file($autoloadFile) || is_link($autoloadFile)) { return [$source, []]; }
+        $autoload = file_get_contents($autoloadFile);
+        if (!is_string($autoload)) { throw new ConfigurationException('cannot read Composer helper autoload order'); }
+        $entries = $this->composerAutoloadEntries($autoload);
+        $providers = [];
+        $selected = [];
+        $helper = new GuardedHelperSourceRule($capabilities['phpVersionId'] ?? null, $capabilities['redisVersion'] ?? null, $capabilities, $mirror);
+        foreach ($entries as $entry) {
+            $path = ($entry[1] === 'vendorDir' ? 'vendor/' : '') . ltrim($entry[2], '/');
+            if (str_contains('/' . $path . '/', '/../') || str_contains('/' . $path . '/', '/./')) { continue; }
+            $file = $mirror . '/' . $path;
+            $resolved = realpath($file);
+            if (!is_string($resolved) || !is_file($resolved) || !str_starts_with($resolved, $mirror . '/')) { continue; }
+            $cursor = $mirror;
+            foreach (explode('/', $path) as $part) { $cursor .= '/' . $part; if (is_link($cursor)) { throw new ConfigurationException('Composer helper autoload source is unsafe'); } }
+            $contents = file_get_contents($file);
+            if (!is_string($contents)) { throw new ConfigurationException('cannot read Composer helper autoload source'); }
+            $prepared = $helper->prepareAutoloadFunctions($contents, $providers);
+            if ($prepared !== null && !str_contains($source, var_export($path, true) . ' =>')) {
+                $target = '.typephp/build/composer-helper-' . hash('sha256', $path) . '.php';
+                $selected[$target] = '        ' . var_export($path, true) . ' => ' . var_export($target, true) . ",\n";
+                $entryPoint = "    protected function prepareGuardedSource(string \$sourceRel, string \$content): string\n    {";
+                $contract = "\n        if (\$sourceRel === " . var_export($path, true) . ") {\n"
+                    . "            if (hash('sha256', \$content) !== '" . hash('sha256', $contents) . "') { throw new \\WebmanAotBuilder\\Cli\\ConfigurationException('Composer helper source evidence drifted'); }\n"
+                    . '            return ' . var_export($prepared['source'], true) . ";\n        }";
+                if (substr_count($source, $entryPoint) !== 1) { throw new ConfigurationException('locked helper preparation entry is missing'); }
+                $source = str_replace($entryPoint, $entryPoint . $contract, $source);
+                foreach ($prepared['functions'] as $name) { $providers[$name] = true; }
+            } else {
+                $tokens = token_get_all($contents);
+                $namespace = '';
+                $depth = 0;
+                foreach ($tokens as $index => $token) {
+                    if ($token === '{') { ++$depth; continue; }
+                    if ($token === '}') { --$depth; continue; }
+                    if (!is_array($token)) { continue; }
+                    if ($token[0] === T_NAMESPACE) {
+                        $namespace = '';
+                        for (++$index; isset($tokens[$index]); ++$index) {
+                            $next = $tokens[$index];
+                            if ($next === ';' || $next === '{') { break; }
+                            if (is_array($next) && in_array($next[0], [T_NAME_QUALIFIED, T_STRING, T_NS_SEPARATOR], true)) { $namespace .= $next[1]; }
+                        }
+                    } elseif ($token[0] === T_FUNCTION) {
+                        for (++$index; isset($tokens[$index]); ++$index) {
+                            $next = $tokens[$index];
+                            if (is_array($next) && in_array($next[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) { continue; }
+                            if (is_array($next) && $next[0] === T_STRING) {
+                                $name = strtolower(($namespace === '' ? '' : $namespace . '\\') . $next[1]);
+                                if (!array_key_exists($name, $providers)) { $providers[$name] = $depth === 0 ? true : null; }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return [$source, $selected];
+    }
+
     private function applySourceContracts(string $overlay): string
     {
         foreach ([
             'patchRefCaptures' => <<<'BODY'
-        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->replace($sourceRel, $content, self::REF_CAPTURE_REPLACEMENTS[$sourceRel] ?? []);
+        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, self::REF_CAPTURE_REPLACEMENTS[$sourceRel] ?? []);
 BODY,
             'patchSwitchTerminals' => <<<'BODY'
+        $originalContent = $content;
         if ($sourceRel === 'plugin/saiadmin/app/cache/UserInfoCache.php') {
             return (new \WebmanAotBuilder\Compatibility\GeneratorRuntimeRule())->cacheTags($content);
         }
@@ -240,17 +375,31 @@ BODY,
             $content = (new \WebmanAotBuilder\Compatibility\GeneratorRuntimeRule())->stripPreload($content);
         }
         if ($sourceRel === 'plugin/saiadmin/utils/code/CodeEngine.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->replace($sourceRel, $content, ["defined('DS') or define('DS', DIRECTORY_SEPARATOR);" => 'const DS = DIRECTORY_SEPARATOR;']);
+            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, ["defined('DS') or define('DS', DIRECTORY_SEPARATOR);" => 'const DS = DIRECTORY_SEPARATOR;']);
         }
         $rules = self::SWITCH_TERMINAL_REPLACEMENTS[$sourceRel] ?? [];
         foreach ($rules as $search => &$replacement) {
+            if ($search === '    public function toArray()'
+                && $replacement === '    public function toArray(): array') {
+                unset($rules[$search]);
+                continue;
+            }
+            if (((str_contains($search, '->bindTo(') || str_contains($search, 'Closure::bind('))
+                    && str_contains($replacement, 'closure')
+                    && str_contains($replacement, 'binding is not supported.'))
+                || $search === 'return \call_user_func_array($boundMacro ?: $macro, $parameters);'
+            ) {
+                unset($rules[$search]);
+                continue;
+            }
             if ($sourceRel === 'vendor/illuminate/database/Schema/Blueprint.php' && str_starts_with(trim($search), 'compact(')) { unset($rules[$search]); }
             if ($sourceRel === 'plugin/saiadmin/app/cache/ReflectionCache.php') {
                 $replacement = str_replace(['__SAIADMIN_LOGIN_NO_NEED_LOGIN__', '__SAIADMIN_INSTALL_NO_NEED_LOGIN__'], [$this->readSaiAdminNoNeedLogin('LoginController.php'), $this->readSaiAdminNoNeedLogin('InstallController.php')], $replacement);
             }
         }
         unset($replacement);
-        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->replace($sourceRel, $content, $rules);
+        $prepared = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, $rules, $applicable);
+        return $applicable ? $prepared : $originalContent;
 BODY,
             'stripStrayBootstrapCalls' => '        return (new \\WebmanAotBuilder\\Compatibility\\GeneratorRuntimeRule())->stripBootstrap($content);',
             'patchCoroutineFiberContextWrites' => '        return (new \\WebmanAotBuilder\\Compatibility\\GeneratorRuntimeRule())->contextWrites($content);',
@@ -265,7 +414,7 @@ BODY,
             $body = substr($overlay, $start, $end - $start);
             $loop = strpos($body, '        foreach ($replacements as $search => $replacement) {');
             if ($loop === false) { throw new ConfigurationException('locked Symfony local conversion table drifted'); }
-            $body = substr($body, 0, $loop) . '        return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->replace(' . var_export($method, true) . ', $content, $replacements);' . "\n    ";
+            $body = substr($body, 0, $loop) . '        return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(' . var_export($method, true) . ', $content, $replacements);' . "\n    ";
             $overlay = substr_replace($overlay, $body, $start, $end - $start);
         }
         $start = strpos($overlay, "            \$content = (string) preg_replace('/^class_exists");

@@ -1,0 +1,34 @@
+--- a/src/Parser/FunctionCallTrait.php
++++ b/src/Parser/FunctionCallTrait.php
+@@ -402,8 +402,8 @@
+             }
+             $placeHolder = $this->getLiteralString($functionTarget['target']);
+             if ($functionTarget['namespacedFallback']) {
+-                $fn = $this->genTmpVarName();
+-                $this->context->beforeStmtLines[] = 'zend_function *' . $fn . ' = '
++                $fn = $this->addTmpVar('zend_function *');
++                $this->context->beforeStmtLines[] = $fn . ' = '
+                     . $this->parseNamespacedFunctionPointer($functionTarget) . ';';
+             } else {
+                 $fn = $this->getFuncPtr($name);
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -26,8 +26,8 @@
+                 $this->fatalError($case->cond, 'Native objects cannot be used as switch values');
+             }
+         }
+-        $tmp_var = $this->genTmpVarName();
+         $type    = $this->detectTypeOfExpr($cond);
++        $tmp_var = $this->addTmpVar($type);
+         $this->assertExprCanBeUsedAsValue($cond, 'switch condition');
+         if ($this->isVarExpr($cond)) {
+             $this->requireVar($v, $this->parseIdentifier($cond));
+@@ -35,7 +35,7 @@
+         [$condExpr, $condBeforeStmts, $condAfterStmts] = $this->parseExprWithCapturedStmts($cond);
+         $var_def = '';
+         $var_def .= $this->formatCapturedStmtLines($condBeforeStmts);
+-        $var_def .= $type . ' ' . $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
++        $var_def .= $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
+         $var_def .= $this->formatCapturedStmtLines($condAfterStmts);
+ 
+         $code = $this->parseBeforeStmtLines() . PHP_EOL;

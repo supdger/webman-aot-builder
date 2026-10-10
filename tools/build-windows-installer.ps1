@@ -5,6 +5,7 @@ param(
     [string]$Revision,
     [ValidateSet('small', 'full')][string]$Flavor = 'small',
     [string]$MinimalComponent,
+    [string]$PreparedTypephp,
     [string]$Result,
     [switch]$Guided,
     [switch]$Install,
@@ -28,6 +29,10 @@ Write-Output "本次源码准备日志：$bootstrapLog"
 
 if (-not [Environment]::Is64BitOperatingSystem) {
     throw '此入口需要 Windows x64。'
+}
+
+if ($PreparedTypephp -and -not (Test-Path -LiteralPath $PreparedTypephp -PathType Container)) {
+    throw 'Prepared TypePHP directory is missing.'
 }
 
 $repository = Split-Path -Parent $PSScriptRoot
@@ -283,6 +288,7 @@ try {
         if ($Revision) { $arguments += "--revision=$Revision" }
         $arguments += "--flavor=$Flavor"
         if ($MinimalComponent) { $arguments += "--minimal-component=$MinimalComponent" }
+        if ($PreparedTypephp) { $arguments += "--prepared-typephp=$PreparedTypephp" }
         Write-Output '[构包] 开始制作 Windows 安装包。'
         $callerDirectory = (Get-Location).ProviderPath
         $previousPhpCaller = $env:WEBMAN_AOT_CALLER_CWD

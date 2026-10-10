@@ -36,3 +36,21 @@
 #### Scenario: 查询版本
 - **WHEN** 非 TTY 调用 version
 - **THEN** 输出入口和目标版本而不准备资源；交互查询可另显示下一步入口
+
+### Requirement: 精确关闭父命令进程超时
+系统 SHALL 仅对具备事件能力且启用插件的父 Composer global exec、binary 精确 webman-aot 关闭本次进程超时，MUST NOT 修改全局配置或放宽其他命令。
+
+#### Scenario: 交互等待超出父默认计时
+- **WHEN** 指定入口仍在正常下载或等待输入
+- **THEN** 不因父默认进程计时结束，其他 exec 保留原超时
+
+### Requirement: 保留输入与父生命周期合同
+系统 MUST 在真实自身读取故障时失败结束并显示恢复入口，MUST 保留正常 EOF 取消、开放输入与半行持续等待、父消失结束及处理器恢复。周期探测 MUST NOT 变为交互截止时间。
+
+#### Scenario: 无数据与部分行
+- **WHEN** 父仍存在且输入管道开放、没有完整行
+- **THEN** 继续等待；收到换行或 EOF 才返回输入，恢复原阻塞模式
+
+#### Scenario: 背景终端读取 EIO
+- **WHEN** 终端读取产生自身 fgets EIO
+- **THEN** 明确失败结束，不泄漏 Notice，不吞无关错误；父 FD3 监测保持有效

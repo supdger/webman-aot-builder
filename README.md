@@ -8,6 +8,9 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 构建器在项目副本中做兼容适配，通过 TypePHP、Clang 和 PHPx 静态 SDK 生成可执行程序。
 原项目源码保持不变，配置、模板和静态资源按需保留为外置文件。
 
+0.4.4 兼容修复保留普通 PHP 方法与调用合同，并修复已验证的 switch、Goto/finally 和 catch 局部值转换；本轮原生产锁完整编译、Linux x64 静态链接及构建宿主结构/完整性验收通过，Linux 原生应用与业务仍未验，不保证所有项目均可编译。兼容范围与限制见 [AOT 适配原理](https://github.com/supdger/webman-aot-builder/wiki/Adaptation)，发布与安装状态以 [0.4.4 Release](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.4) 为准。
+当前源码候选保留普通 PHP `toArray()` 的原签名、参数和动态返回合同，由编译器处理，不要求手改原项目或 `vendor/`。不适用的旧转换模板保留原文；已确认符合 Composer 惰性加载条件、未实际使用的可选声明延后处理，实际请求仍保留 PHP 原始加载错误。工具材料与输入输出完整性保持校验，完整项目编译仍在验证，候选尚未发布。
+
 ![Webman AOT Builder 构建流程](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/build-flow.svg)
 
 当前公开包用于开发验证。安装、构建与产物校验的记录见下方示例；Linux 数据库、登录等完整业务仍需在自己的目标环境验收。
@@ -72,7 +75,7 @@ if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
 php (Join-Path $aotBin 'webman-aot') guide
 ```
 
-选择“开始”准备该入口对应的完整运行时；已就绪则复用。只更新入口不表示运行环境已升级。选择结束可暂不升级运行环境。安装器保留被替换的旧运行时备份；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
+选择“开始”准备该入口对应的运行时；已就绪则复用。升级时先校验完整包缓存和已下载完成的 `.part`，通过校验就直接使用；没有可用完整包时，若发行包支持轻量升级，会校验旧组件并复用符合新版本要求的文件，只下载程序和必要替换文件。组件缺失或校验不通过会显示原因，再取得完整包。新环境通过自检后才完成切换；失败会恢复旧环境，若恢复本身失败则停止并显示保留的备份位置。只更新入口不表示运行环境已升级，选择结束可暂不升级运行环境；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
 
 直接 PHP 入口不受 `composer global exec` 默认 300 秒子进程超时限制，适合下载完整包及长时间交互；无需修改 Composer 全局超时。
 

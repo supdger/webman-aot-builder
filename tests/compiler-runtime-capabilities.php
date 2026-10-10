@@ -22,6 +22,7 @@ $manifest = json_decode(file_get_contents($manifestFile), true, flags: JSON_THRO
 foreach ($manifest['rules'] as $rule) {
     $target = $root . '/' . $rule['path'];
     if (!is_dir(dirname($target))) { mkdir(dirname($target), 0700, true); }
+    if (($rule['added'] ?? false) === true) { continue; }
     $original = in_array($rule['path'], ['src/CompilerBase.php', 'composer.json'], true) && isset($argv[2])
         ? $argv[2] . '/' . basename($rule['path']) : $baseline . '/' . $rule['path'];
     copy($original, $target);
@@ -35,12 +36,39 @@ ensure(($componentLock['components'][$approved['host']]['manifestSha256'] ?? nul
 foreach ($manifest['rules'] as $rule) {
     if (!in_array($rule['path'], ['src/CompilerBase.php', 'composer.json'], true)) { continue; }
     $entry = $approved['entries']['prepared/typephp-source/typephp-0.9.2/' . $rule['path']];
-    $expected = $rule['preparedBeforeSha256'] ?? $rule['beforeSha256'];
-    ensure($entry['sha256'] === $expected && hash_file('sha256', $root . '/' . $rule['path']) === $expected
-        && filesize($root . '/' . $rule['path']) === $entry['size'], 'approved prepared baseline chain differs');
+    $expected = $rule['path'] === 'composer.json' ? $rule['afterSha256'] : $rule['preparedBeforeSha256'];
+    ensure($entry['sha256'] === $expected && hash_file('sha256', $baseline . '/' . $rule['path']) === $expected
+        && filesize($baseline . '/' . $rule['path']) === $entry['size'], 'approved prepared baseline chain differs');
 }
 $before = file_get_contents($root . '/src/CompilerBase.php');
 (new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0027-compiler-runtime-capabilities.patch', $root);
+foreach (['src/CompilerBase.php', 'composer.json'] as $path) {
+    ensure(hash_file('sha256', $root . '/' . $path) === $approved['entries']['prepared/typephp-source/typephp-0.9.2/' . $path]['sha256'], 'runtime patch does not reproduce approved prepared baseline');
+}
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0028-ordinary-toarray-method-contracts.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0029-unavailable-composer-traits.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0030-polymorphic-php-local-storage.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0031-persistent-php-reference-storage.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0032-closure-exception-cleanup.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0033-mutable-php-value-parameters.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0034-native-boundary-reference-overrides.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0035-target-function-value-storage.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0036-request-namespace-function-fallback.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0037-php-string-bitwise-not.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0038-known-php-local-value-joins.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0039-target-internal-class-declarations.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0040-pure-php-call-return-prediction.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0041-lazy-missing-composer-interfaces.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0042-ordinary-constructor-return-values.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0043-ordinary-destructor-return-values.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0044-related-php-object-local-joins.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0045-switch-goto-termination.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0046-final-switch-case-exit.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0047-lexical-finally-goto-exits.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0048-php-catch-local-value-storage.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0049-goto-safe-expression-temporaries.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0050-foreach-list-local-value-storage.patch', $root);
+(new WebmanAotBuilder\Toolchain\UnifiedPatchApplier())->apply($repository . '/toolchain/patches/typephp/0.9.2/0051-switch-selector-value-lifetime.patch', $root);
 $after = file_get_contents($root . '/src/CompilerBase.php');
 $manifest = json_decode(file_get_contents($repository . '/toolchain/patches/typephp/0.9.2/manifest.json'), true, flags: JSON_THROW_ON_ERROR);
 foreach ($manifest['rules'] as $rule) {

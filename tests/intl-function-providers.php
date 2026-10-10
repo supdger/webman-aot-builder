@@ -15,7 +15,7 @@ $shadowPath = '.typephp/build/symfony-php85-functions.php';
 file_put_contents($root . '/' . $sourcePath, '<?php // upstream fixture');
 $rule = new ReflectionMethod(UpstreamProjectGenerator::class, 'assertIntlFunctionProviders');
 $generator = new UpstreamProjectGenerator();
-$caps = ['intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false];
+$caps = ['intlEnabled' => true, 'nativeLocaleIsRightToLeft' => false, 'nativeGraphemeLevenshtein' => false, 'nativeGraphemeStrrev' => true];
 $cases = 0;
 $run = static function (string $name, string $php, array $capabilities, ?string $failure = null, string $ignore = '', bool $drift = false, string $mirrorSuffix = '') use ($root, $sourcePath, $shadowPath, $rule, $generator, &$cases): void {
     file_put_contents($root . '/' . $shadowPath, $php);
@@ -49,6 +49,8 @@ try {
     $run('native functions exclude PHP duplicates', $providers, array_replace($caps, ['nativeLocaleIsRightToLeft' => true]), 'locale_is_right_to_left expected 0');
     $run('both native functions need no PHP providers', '<?php class Decoy { function locale_is_right_to_left() {} }', array_replace($caps, ['nativeLocaleIsRightToLeft' => true, 'nativeGraphemeLevenshtein' => true]));
     $run('unknown selected SDK capability rejected', $providers, ['intlEnabled' => true], 'target capability is missing');
+    $run('missing Strrev provider rejected', $providers, array_replace($caps, ['nativeGraphemeStrrev' => false]), 'grapheme_strrev expected 1');
+    $run('selected Strrev provider counted', $providers . ' function grapheme_strrev() {}', array_replace($caps, ['nativeGraphemeStrrev' => false]));
     $run('current mapping digest drift rejected', $providers, $caps, 'current mapping evidence drifted', '', true);
     echo sprintf("PASS %d Intl provider cases in %.3fs\n", $cases, microtime(true) - $start);
 } finally {

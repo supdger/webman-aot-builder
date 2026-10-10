@@ -22,3 +22,7 @@
 ## Impact
 
 仅 Composer Installer、行为测试、轻量包元数据和受影响 README/Wiki。原生运行时保持 0.3.2，不重建完整包，不改变真实 PATH、已存在安装、项目源码或数据库。
+
+## 父 Composer 超时与输入恢复接续
+
+仅对已启用插件、具备实际命令事件能力的父 Composer global exec 且 binary 精确为 webman-aot 关闭本次进程超时，不改全局配置或其他命令。终端输入故障明确失败结束；正常 EOF 安全结束，开放管道与半行持续等待，不设置交互截止时间。macOS 保留恢复控制台的父 FD3 生命周期；原项目、运行时与用户 HOME 不改。

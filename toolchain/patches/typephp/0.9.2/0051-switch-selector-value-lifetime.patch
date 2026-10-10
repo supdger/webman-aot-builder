@@ -1,0 +1,38 @@
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -27,7 +27,7 @@
+             }
+         }
+         $type    = $this->detectTypeOfExpr($cond);
+-        $tmp_var = $this->addTmpVar($type);
++        $tmp_var = $this->genTmpVarName();
+         $this->assertExprCanBeUsedAsValue($cond, 'switch condition');
+         if ($this->isVarExpr($cond)) {
+             $this->requireVar($v, $this->parseIdentifier($cond));
+@@ -35,7 +35,7 @@
+         [$condExpr, $condBeforeStmts, $condAfterStmts] = $this->parseExprWithCapturedStmts($cond);
+         $var_def = '';
+         $var_def .= $this->formatCapturedStmtLines($condBeforeStmts);
+-        $var_def .= $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
++        $var_def .= $type . ' ' . $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
+         $var_def .= $this->formatCapturedStmtLines($condAfterStmts);
+ 
+         $code = $this->parseBeforeStmtLines() . PHP_EOL;
+@@ -79,7 +79,7 @@
+             $this->indentLevel--;
+             $code .= $this->getIndent() . '} while(0);' . PHP_EOL;
+ 
+-            return $var_def . $code;
++            return '{' . PHP_EOL . $var_def . $code . PHP_EOL . '}';
+         }
+ 
+         _fail:
+@@ -184,7 +184,7 @@
+         $this->indentLevel--;
+         $code .= $this->getIndent() . '} while (0);';
+ 
+-        return $var_def . $code;
++        return '{' . PHP_EOL . $var_def . $code . PHP_EOL . '}';
+     }
+ 
+ }

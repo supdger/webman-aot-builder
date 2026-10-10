@@ -40,6 +40,90 @@ $entry = '<?php require ' . var_export($root . '/src/Installer.php', true) . '; 
     . '; $tty=$argv[1]==="auto"?null:$argv[1]==="tty"; exit((new Supdger\\WebmanAotInstaller\\Installer(null,$tty))->run([$argv[0],...array_slice($argv,2)]));';
 file_put_contents($base . '/entry.php', $entry);
 try {
+    if (function_exists('pcntl_alarm') && function_exists('pcntl_async_signals')) {
+        $inputEntry = $base . '/input-errors.php';
+        $inputScript = <<<'PHP'
+<?php
+require $argv[1];
+$seen = [];
+if ($argv[4] === 'custom') {
+    set_error_handler(static function (int $severity, string $message) use (&$seen): bool {
+        $seen[] = $message;
+        return true;
+    });
+}
+pcntl_async_signals(true);
+pcntl_signal(SIGALRM, static function (): void {
+    trigger_error('UNRELATED_SIGNAL_WARNING', E_USER_WARNING);
+});
+pcntl_alarm(1);
+$object = (new ReflectionClass($argv[2]))->newInstanceWithoutConstructor();
+$method = new ReflectionMethod($object, $argv[3]);
+$value = $argv[2] === 'WebmanAotBuilder\\Guided\\Flow' ? $method->invoke($object, '输入边界回归') : $method->invoke($object);
+trigger_error('AFTER_READ_WARNING', E_USER_WARNING);
+echo json_encode(['value' => $value, 'seen' => $seen]), PHP_EOL;
+PHP;
+        file_put_contents($inputEntry, $inputScript);
+        foreach ([
+            [$root . '/src/Console.php', 'Supdger\\WebmanAotInstaller\\Console', 'read'],
+            [dirname($root, 2) . '/src/Guided/Flow.php', 'WebmanAotBuilder\\Guided\\Flow', 'read'],
+        ] as [$source, $class, $method]) {
+            foreach (['custom', 'default'] as $handler) {
+                fwrite(STDOUT, '[步骤] ' . $class . ' 读取期间保留 ' . $handler . " 错误处理\n");
+                $process = proc_open([PHP_BINARY, '-d', 'display_errors=1', $inputEntry, $source, $class, $method, $handler],
+                    [['pipe', 'r'], ['pipe', 'w'], ['redirect', 1]], $pipes);
+                if (!is_resource($process)) { throw new RuntimeException('输入边界测试无法启动'); }
+                usleep(1200000);
+                fwrite($pipes[0], "0\n");
+                fclose($pipes[0]);
+                $output = (string) stream_get_contents($pipes[1]);
+                fclose($pipes[1]);
+                $code = proc_close($process);
+                $expectedValue = $class === 'WebmanAotBuilder\\Guided\\Flow' ? '"value":"0"' : '"value":"0\n"';
+                check($code === 0 && str_contains($output, $expectedValue)
+                    && str_contains($output, 'UNRELATED_SIGNAL_WARNING') && str_contains($output, 'AFTER_READ_WARNING')
+                    && !str_contains($output, '终端输入已断开'),
+                    $class . ' 不吞读取期间无关警告，且恢复 ' . $handler . ' 处理器');
+            }
+        }
+    } else {
+        fwrite(STDOUT, "[未运行] 输入期间信号警告回归需要 pcntl。\n");
+    }
+    if (PHP_OS_FAMILY === 'Darwin') {
+        $parentEntry = $base . '/parent-input.php';
+        file_put_contents($parentEntry, '<?php require ' . var_export($root . '/src/Console.php', true)
+            . '; try { $value=Supdger\\WebmanAotInstaller\\Console::read(); echo json_encode(["value"=>$value,"blocked"=>stream_get_meta_data(STDIN)["blocked"]]); } catch(Throwable $e) { fwrite(STDERR,$e->getMessage()); exit(7); }');
+        foreach (['half-line', 'empty-eof', 'fragment-eof', 'parent-ended'] as $case) {
+            fwrite(STDOUT, '[步骤] 恢复控制台管道读取：' . $case . PHP_EOL);
+            $process = proc_open([PHP_BINARY, $parentEntry], [['pipe','r'], ['pipe','w'], ['redirect',1], ['pipe','r']], $pipes, null,
+                array_merge(getenv(), ['WEBMAN_AOT_GUIDE_CONSOLE_DEPTH'=>'1','WEBMAN_AOT_GUIDE_PARENT_FD'=>'3']));
+            if (!is_resource($process)) { throw new RuntimeException('父管道输入测试无法启动'); }
+            if ($case === 'half-line') {
+                usleep(1200000);
+                check(proc_get_status($process)['running'], '开放无数据管道继续等待，不因探测周期结束');
+                fwrite($pipes[0], 'half');
+                usleep(1200000);
+                check(proc_get_status($process)['running'], '部分行继续等待，不提前接受菜单选择');
+                fwrite($pipes[0], "-line\n");
+            } elseif ($case === 'fragment-eof') {
+                fwrite($pipes[0], 'fragment');
+            }
+            if ($case === 'parent-ended') { fclose($pipes[3]); }
+            else { fclose($pipes[0]); }
+            $output = (string) stream_get_contents($pipes[1]);
+            fclose($pipes[1]);
+            foreach ([0,3] as $descriptor) { if (is_resource($pipes[$descriptor])) { fclose($pipes[$descriptor]); } }
+            $code = proc_close($process);
+            if ($case === 'parent-ended') {
+                check($code === 7 && str_contains($output, '启动引导的父入口已结束'), '父管道消失仍停止读取，无旁路');
+            } else {
+                $expected = match ($case) { 'half-line' => "half-line\n", 'fragment-eof' => 'fragment', default => false };
+                $result = json_decode($output, true);
+                check($code === 0 && is_array($result) && $result['value'] === $expected && $result['blocked'] === true,
+                    $case . ' 保留完整行或正常EOF，恢复阻塞模式');
+            }
+        }
+    }
     $state = $base . '/untouched';
     [$code, $output] = invoke(['--state-dir=' . $state]);
     check($code === 0 && str_contains($output, 'composer global exec -- webman-aot guide') && !file_exists($state),

@@ -45,15 +45,16 @@ final class Archive
         }
     }
 
-    public static function identity(string $directory, string $host, string $version): void
+    public static function identity(string $directory, string $host, string $version, bool $complete = true): void
     {
         $file = $directory . '/package.json';
         $identity = is_file($file) ? json_decode((string) file_get_contents($file), true) : null;
         if (!is_array($identity) || ($identity['schema'] ?? '') !== 'webman-aot-builder-installer-package-v1'
             || ($identity['version'] ?? '') !== $version || ($identity['platform'] ?? '') !== $host
-            || ($identity['flavor'] ?? '') !== 'complete'
+            || ($identity['flavor'] ?? '') !== ($complete ? 'complete' : 'small')
             || !is_file($directory . '/payload-manifest.sha256')
-            || !is_file($directory . '/payload/minimal-toolchain/component.zip')) {
+            || ($complete ? !is_file($directory . '/payload/minimal-toolchain/component.zip')
+                : !is_file($directory . '/payload/app/toolchain/minimal-upgrade/minimal-component.json'))) {
             throw new \RuntimeException('完整安装包身份、平台或版本不匹配；没有执行安装器。');
         }
     }

@@ -1,0 +1,192 @@
+--- a/src/Build/UnavailableDeclarationsTrait.php
++++ b/src/Build/UnavailableDeclarationsTrait.php
+@@ -67,7 +67,12 @@
+                     $dependencies[] = $this->resolvedDeclarationName($parent);
+                 }
+                 $graph[$key] = ['name' => $name, 'file' => $file, 'traits' => $traits,
+-                    'dependencies' => $dependencies, 'isTrait' => $node instanceof Node\Stmt\Trait_];
++                    'dependencies' => $dependencies, 'isTrait' => $node instanceof Node\Stmt\Trait_,
++                    'interfaces' => array_map(fn(Node\Name $parent): string => $this->resolvedDeclarationName($parent),
++                        $node instanceof Node\Stmt\Interface_ ? $node->extends : ($node->implements ?? [])),
++                    'isInterface' => $node instanceof Node\Stmt\Interface_,
++                    'parent' => $node instanceof Node\Stmt\Class_ && $node->extends !== null
++                        ? $this->resolvedDeclarationName($node->extends) : null];
+                 $fileDeclarations[$file][] = $key;
+             }
+         }
+@@ -85,37 +90,86 @@
+                 }
+                 $missing[] = $trait;
+             }
++            $kind = 'Trait';
++            // Trait composition fails first. Missing interfaces only create a
++            // root when no missing trait already supplies the PHP load error.
++            if ($missing === []) {
++                foreach ($declaration['interfaces'] as $interface) {
++                    $interfaceKey = strtolower($interface);
++                    $reflection = \TypePhp\Resolver\Reflection::getClass($interface);
++                    if ((isset($graph[$interfaceKey]) && !$graph[$interfaceKey]['isInterface'])
++                        || ($reflection !== null && !$reflection->isInterface())
++                        || (!$this->hasInterface($interface) && $this->hasClass($interface))
++                        || ($reflection === null && \TypePhp\Resolver\Reflection::isInternalClass($interface))) {
++                        throw new \RuntimeException("{$declaration['name']} cannot implement or extend {$interface}: target is not an interface");
++                    }
++                    if (isset($graph[$interfaceKey]) || $this->hasInterface($interface) || $reflection !== null) {
++                        continue;
++                    }
++                    $missing[] = $interface;
++                }
++                $kind = 'Interface';
++            }
++            if ($missing !== [] && $kind === 'Interface' && $declaration['parent'] !== null
++                && !isset($graph[strtolower($declaration['parent'])])
++                && !$this->hasClass($declaration['parent'])
++                && !\TypePhp\Resolver\Reflection::isInternalClass($declaration['parent'])) {
++                throw new \RuntimeException("Cannot defer unavailable declaration {$declaration['name']}: unresolved class parent {$declaration['parent']}");
++            }
+             if ($missing !== []) {
+                 $this->unavailableDeclarations[$key] = $declaration + ['trait' => $missing[0],
+-                    'missingTraits' => $missing];
++                    'missingKind' => $kind, 'missingTraits' => $missing];
+                 $roots[$key] = true;
+             }
+         }
+         do {
+             $changed = false;
+             foreach ($graph as $key => $declaration) {
+-                if (isset($this->unavailableDeclarations[$key])) {
++                $current = $this->unavailableDeclarations[$key] ?? null;
++                if (($current['missingKind'] ?? null) === 'Trait') {
+                     continue;
+                 }
+                 foreach (array_merge($declaration['traits'], $declaration['dependencies']) as $dependency) {
++                    if ($current !== null && strcasecmp($dependency, $current['trait']) === 0) {
++                        break; // A direct missing interface precedes later dependencies.
++                    }
+                     $root = $this->unavailableDeclarations[strtolower($dependency)] ?? null;
+                     if ($root !== null) {
++                        if ($current !== null && $current['trait'] === $root['trait']
++                            && $current['missingKind'] === $root['missingKind']) { break; }
+                         $this->unavailableDeclarations[$key] = $declaration + ['trait' => $root['trait'],
+-                            'missingTraits' => $root['missingTraits']];
++                            'missingKind' => $root['missingKind'], 'missingTraits' => $root['missingTraits']];
+                         $changed = true;
+                         break;
+                     }
+                 }
+             }
+         } while ($changed);
++        $visiting = [];
++        $visited = [];
++        $acyclic = function (string $key) use (&$acyclic, &$visiting, &$visited, $graph): bool {
++            if (isset($visiting[$key])) { return false; }
++            if (isset($visited[$key])) { return true; }
++            $visiting[$key] = true;
++            foreach ($graph[$key]['dependencies'] as $dependency) {
++                $parent = strtolower($dependency);
++                if (isset($graph[$parent]) && !$acyclic($parent)) { return false; }
++            }
++            unset($visiting[$key]);
++            $visited[$key] = true;
++            return true;
++        };
+         foreach ($this->unavailableDeclarations as $key => $declaration) {
++            if ($declaration['missingKind'] === 'Interface' && !$acyclic($key)) {
++                throw new \RuntimeException("Cannot defer unavailable declaration {$declaration['name']}: cyclic declaration dependency");
++            }
+             $file = $declaration['file'];
+             $package = $this->lazyDeclarationPackage($file, $declaration['name'], isset($roots[$key]),
+                 $declaration['missingTraits']);
+             if ($package === null || count($fileDeclarations[$file] ?? []) !== 1
+                 || !$this->isOnlyLazyDeclaration($fileAsts[$file])) {
+                 throw new \RuntimeException("Cannot defer unavailable declaration {$declaration['name']}: "
+-                    . "Trait \"{$declaration['trait']}\" not found; source is not a single Composer lazy declaration: {$file}");
++                    . "{$declaration['missingKind']} \"{$declaration['trait']}\" not found; source is not a single Composer lazy declaration: {$file}");
+             }
+             $this->unavailableDeclarations[$key]['package'] = $package;
+             $this->unavailableDeclarationFiles[$file] = $declaration['trait'];
+--- a/src/Generator/UnavailableDeclarationGenerator.php
++++ b/src/Generator/UnavailableDeclarationGenerator.php
+@@ -11,22 +11,23 @@
+         $fileEntries = [];
+         foreach ($declarations as $declaration) {
+             $classEntries[] = '{' . $this->literal($declaration['name']) . ', '
+-                . $this->literal($declaration['trait']) . '}';
+-            $fileEntries[$declaration['file']] = $declaration['trait'];
++                . $this->literal($declaration['trait']) . ', '
++                . $this->literal($declaration['kind'] ?? 'Trait') . '}';
++            $fileEntries[$declaration['file']] = [$declaration['trait'], $declaration['kind'] ?? 'Trait'];
+         }
+         ksort($fileEntries, SORT_STRING);
+         $paths = [];
+-        foreach ($fileEntries as $file => $trait) {
+-            $paths[] = '{' . $this->literal($file) . ', ' . $this->literal($trait) . '}';
++        foreach ($fileEntries as $file => [$trait, $kind]) {
++            $paths[] = '{' . $this->literal($file) . ', ' . $this->literal($trait) . ', ' . $this->literal($kind) . '}';
+         }
+         $classes = implode(",\n", $classEntries);
+         $files = implode(",\n", $paths);
+         return <<<CPP
+-struct typephp_unavailable_class_entry { const char *name; const char *trait; };
++struct typephp_unavailable_class_entry { const char *name; const char *trait; const char *kind; };
+ static const typephp_unavailable_class_entry typephp_unavailable_classes[] = {
+ {$classes}
+ };
+-struct typephp_declaration_file_entry { const char *path; const char *trait; };
++struct typephp_declaration_file_entry { const char *path; const char *trait; const char *kind; };
+ static const typephp_declaration_file_entry typephp_declaration_files[] = {
+ {$files}
+ };
+@@ -53,6 +54,7 @@
+         relative = path + length + 1;
+     }
+     const char *missing_trait = nullptr;
++    const char *missing_kind = nullptr;
+     bool known = false;
+     if (relative) {
+         for (const auto &entry : typephp_declaration_files) {
+@@ -66,6 +68,7 @@
+             if (matches) {
+                 known = true;
+                 missing_trait = entry.trait;
++                missing_kind = entry.kind;
+                 break;
+             }
+         }
+@@ -74,7 +77,11 @@
+         zend_string_release(resolved);
+     }
+     if (known && *missing_trait) {
+-        zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", missing_trait);
++        if (strcmp(missing_kind, "Trait") == 0) {
++            zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", missing_trait);
++        }
++        zend_throw_error(nullptr, "Interface \\"%s\\" not found", missing_trait);
++        return nullptr;
+     }
+     return typephp_previous_compile_file(file, type);
+ }
+@@ -89,7 +96,11 @@
+     ZEND_PARSE_PARAMETERS_END();
+     for (const auto &entry : typephp_unavailable_classes) {
+         if (ZSTR_LEN(name) == strlen(entry.name) && memcmp(ZSTR_VAL(name), entry.name, ZSTR_LEN(name)) == 0) {
+-            zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", entry.trait);
++            if (strcmp(entry.kind, "Trait") == 0) {
++                zend_error_noreturn(E_ERROR, "Trait \\"%s\\" not found", entry.trait);
++            }
++            zend_throw_error(nullptr, "Interface \\"%s\\" not found", entry.trait);
++            return;
+         }
+     }
+ }
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -1292,7 +1292,7 @@
+                     . $declaration['name']);
+             }
+             $declarations[] = ['name' => $declaration['name'], 'trait' => $declaration['trait'],
+-                'file' => substr($identity, strlen($prefix))];
++                'kind' => $declaration['missingKind'] ?? 'Trait', 'file' => substr($identity, strlen($prefix))];
+         }
+         $loader = 'typephp_unavailable_autoload_' . $this->getModuleName();
+         return ['code' => (new \TypePhp\Generator\UnavailableDeclarationGenerator())->render(

@@ -122,15 +122,18 @@ try {
     $options = [];
     foreach (array_slice($argv, 1) as $argument) {
         if ($argument === '--help') {
-            fwrite(STDOUT, "Usage: tools/build-macos-installer.sh --flavor=small|full --result=<absolute> [--output=<directory>] [--inputs=<cache-directory>] [--minimal-component=<local-zip>]\n");
+            fwrite(STDOUT, "Usage: tools/build-macos-installer.sh --flavor=small|full --result=<absolute> [--output=<directory>] [--inputs=<cache-directory>] [--minimal-component=<local-zip>] [--prepared-typephp=<patched-source>]\n");
             exit(0);
         }
-        if (preg_match('/^--(materials|flavor|result|output|inputs|minimal-component)=(.+)$/D', $argument, $match) !== 1 || isset($options[$match[1]])) {
+        if (preg_match('/^--(materials|flavor|result|output|inputs|minimal-component|prepared-typephp)=(.+)$/D', $argument, $match) !== 1 || isset($options[$match[1]])) {
             throw new InvalidArgumentException("未知或重复参数：{$argument}", 64);
         }
         $options[$match[1]] = $match[2];
     }
     $flavor = $options['flavor'] ?? 'small';
+    if (isset($options['prepared-typephp']) && !is_dir($options['prepared-typephp'])) {
+        throw new RuntimeException('prepared TypePHP directory is missing');
+    }
     $resultPath = $options['result'] ?? null;
     if (!in_array($flavor, ['small', 'full'], true) || !is_string($resultPath) || !str_starts_with($resultPath, '/')) {
         throw new InvalidArgumentException('需要 --flavor=small|full 和 --result=绝对路径', 64);
@@ -199,7 +202,8 @@ try {
         throw new RuntimeException('无法创建构包输出目录');
     }
     fwrite(STDOUT, "[开始] 制作 macOS {$flavor} 安装包。\n");
-    $json = sourceProcess([PHP_BINARY, '-n', $root . '/tools/package-installers.php', '--platform=macos-arm64', '--mac-runtime=' . $php, '--mac-compiler-driver=' . $compiler, '--mac-runtime-license-dir=' . $materials . '/' . $materialLock['licenses'], '--php-source-archive=' . $phpSource, '--typephp-source-archive=' . $typeArchive, '--minimal-component=' . $minimalArchive, '--flavor=' . $flavor, '--output=' . $output, '--revision=' . $revision], $root, true);
+    $upgradeOptions = $flavor === 'small' && isset($options['prepared-typephp']) ? ['--prepared-typephp=' . $options['prepared-typephp']] : [];
+    $json = sourceProcess([PHP_BINARY, '-n', $root . '/tools/package-installers.php', '--platform=macos-arm64', '--mac-runtime=' . $php, '--mac-compiler-driver=' . $compiler, '--mac-runtime-license-dir=' . $materials . '/' . $materialLock['licenses'], '--php-source-archive=' . $phpSource, '--typephp-source-archive=' . $typeArchive, '--minimal-component=' . $minimalArchive, '--flavor=' . $flavor, '--output=' . $output, '--revision=' . $revision, ...$upgradeOptions], $root, true);
     $packageResult = json_decode($json, true, flags: JSON_THROW_ON_ERROR);
     $package = $packageResult['packages'][0] ?? null;
     if (($packageResult['schema'] ?? '') !== 'webman-aot-builder-installer-package-result-v1' || ($packageResult['revision'] ?? '') !== $revision || count($packageResult['packages'] ?? []) !== 1 || !is_array($package) || ($package['platform'] ?? '') !== 'macos-arm64') {
