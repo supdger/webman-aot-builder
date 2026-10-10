@@ -66,7 +66,8 @@ $job = [IntPtr]::Zero; $owner = [IntPtr]::Zero
 $process = New-Object CommandJob+Process
 $result = 78; $assigned = $false
 try {
-    $arguments = @([CommandJob]::ReadCommand($CommandFile) | ConvertFrom-Json)
+    $decoded = ConvertFrom-Json -InputObject ([CommandJob]::ReadCommand($CommandFile))
+    $arguments = @($decoded)
     if ($arguments.Count -eq 0) { throw 'Command is empty.' }
     foreach ($argument in $arguments) { if ($argument -isnot [string] -or $argument.Contains([char]0)) { throw 'Command argument is invalid.' } }
     $self = [CommandJob]::GetCurrentProcess()

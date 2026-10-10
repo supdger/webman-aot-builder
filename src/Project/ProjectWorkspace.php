@@ -194,7 +194,7 @@ final class ProjectWorkspace
                 $reason = 'file removal failed';
                 $removed = false;
                 for ($attempt = 0; $attempt < 6; $attempt++) {
-                    clearstatcache();
+                    clearstatcache(true);
                     $current = lstat($directory);
                     if (is_link($directory) || realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
                         || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
