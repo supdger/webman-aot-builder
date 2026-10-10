@@ -9,7 +9,7 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 原项目源码保持不变，配置、模板和静态资源按需保留为外置文件。
 
 0.4.6 修复临时工作区清理与本任务进程收尾，持续外部占用仍明确失败。0.4.6 兼容修复保留普通 PHP 方法与调用合同，并修复已验证的 switch、Goto/finally 和 catch 局部值转换；本轮原生产锁完整编译、Linux x64 静态链接及构建宿主结构/完整性验收通过，Linux 原生应用与业务仍未验，不保证所有项目均可编译。兼容范围与限制见 [AOT 适配原理](https://github.com/supdger/webman-aot-builder/wiki/Adaptation)，发布与安装状态以 [0.4.6 Release](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.6) 为准。
-当前源码候选保留普通 PHP `toArray()` 的原签名、参数和动态返回合同，由编译器处理，不要求手改原项目或 `vendor/`。不适用的旧转换模板保留原文；已确认符合 Composer 惰性加载条件、未实际使用的可选声明延后处理，实际请求仍保留 PHP 原始加载错误。工具材料与输入输出完整性保持校验，完整项目编译仍在验证，候选尚未发布。
+当前发布版保留普通 PHP `toArray()` 的原签名、参数和动态返回合同，由编译器处理，不要求手改原项目或 `vendor/`。不适用的旧转换模板保留原文；已确认符合 Composer 惰性加载条件、未实际使用的可选声明延后处理，实际请求仍保留 PHP 原始加载错误。工具材料与输入输出完整性保持校验。源码构建、双平台包内专项与公开消费的实际范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
 
 ![Webman AOT Builder 构建流程](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/build-flow.svg)
 
