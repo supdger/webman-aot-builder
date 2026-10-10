@@ -74,7 +74,7 @@ function Owned-Tree([int]$RootPid) {
 }
 function Wait-Records([string]$Directory,[int]$Count) {
     $clock=[Diagnostics.Stopwatch]::StartNew()
-    while ((Records $Directory).Count -lt $Count) {
+    while (@(Records $Directory).Count -lt $Count) {
         if ($clock.Elapsed.TotalSeconds -gt 8) { throw 'Worker readiness missing' }
         Start-Sleep -Milliseconds 20
     }
@@ -160,7 +160,7 @@ try {
         if ($name -eq 'transient') { Ensure ($r.removed -eq $true) 'temporary FileShare.None release recovers' }
         else {
             Ensure ($r.removed -eq $false -and $r.seconds -lt 8 -and $r.error) 'persistent FileShare.None has bounded explicit failure'
-            Ensure ((Same-Alive (Records $records)[0]) -and (Test-Path -LiteralPath ($a.paths.build+'\project\held-object.o'))) 'external holder remains alive and held file preserved'
+            Ensure ((Same-Alive @(Records $records)[0]) -and (Test-Path -LiteralPath ($a.paths.build+'\project\held-object.o'))) 'external holder remains alive and held file preserved'
         }
         $receipt.cases += @{name=$name+'-FileShare.None'; result=$r}
     }
