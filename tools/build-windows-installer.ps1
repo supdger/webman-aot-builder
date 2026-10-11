@@ -232,7 +232,8 @@ try {
         $env:TEMP = $previousTemp
         $env:TMP = $previousTmp
         try {
-            & $php -n (Join-Path $repository 'tests\generated-coverage.php')
+            if (-not $env:WEBMAN_AOT_MAINTENANCE_ROOT) { throw 'Release coverage requires the private maintenance source checkout.' }
+            & $php -n (Join-Path $env:WEBMAN_AOT_MAINTENANCE_ROOT 'tests\generated-coverage.php')
             if ($LASTEXITCODE -ne 0) { throw "Native generated coverage failed: $LASTEXITCODE" }
         } finally {
             $env:TEMP = $temporary

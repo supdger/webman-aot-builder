@@ -21,6 +21,8 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 
 构建自己的 Webman / SaiAdmin 项目，请使用[原生 setup 安装入口](#方式二原生安装包)或 [Composer 入口](#方式一composer)，无需下载本仓库。GitHub 的 **Code → Download ZIP** 和 **Source code** 压缩包供自行制作工具安装包的开发者使用。
 
+本仓库及源码压缩包保留制作安装包所需文件；开发测试、验收脚本与发布流程另行维护。
+
 只安装工具时可以暂不选择项目。要构建时，先按项目要求执行 `composer install`，准备 `vendor/`，再选择含 `composer.json`、`composer.lock`、`start.php`、`app/` 的后端根目录。
 
 ### 方式一：Composer
@@ -156,7 +158,7 @@ Successfully compiled 216 files
 
 用户实机记录展示了构建完成、产物校验及 `dist-aot/` 位置。下图保留操作结果；它代表这次项目的本机验证。
 
-![macOS 实机构建与本机产物校验成功](https://raw.githubusercontent.com/supdger/webman-aot-builder/main/docs/images/macos-build-success.png)
+![macOS 实机构建与本机产物校验成功](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/macos-build-success.png)
 
 已有用户记录也报告产物在 Linux 启动成功，但 HTTP、数据库和业务接口仍未验收。Linux 启动记录、其他平台与续编的测试范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
 

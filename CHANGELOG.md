@@ -2,6 +2,12 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.8](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.8)
+
+- 公开仓库最新工作树及新版源码 ZIP/tar.gz 只保留安装和自行构包所需文件；开发测试、验收脚本、需求记录及发布流程迁入私有维护仓库。历史提交与旧标签保持不变。
+- README 图片移至已有 Wiki，继续提供中英文入口；Composer 包移除仅维护者可用的测试命令。
+- 双平台安装包与安装入口按精简后的源码重新构包，维护流程通过隔离的公开源码检出运行原有回归与消费者验收；编译器、SDK 与项目构建行为保持不变。
+
 ## [v0.4.7](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.7)
 
 - 精简正式 Release 的源码 ZIP 与 tar.gz：不再包含 CI、OpenSpec、开发测试、测试夹具和文档图片，保留自行构包所需源码、入口、工具、组件锁、补丁与许可；仓库中的开发文件仍保留。

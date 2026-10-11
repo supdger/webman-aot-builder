@@ -1,2 +1,0 @@
-<?php
-return ['listen' => 'http://127.0.0.1:8787', 'transport' => 'tcp', 'context' => [], 'name' => 'guided-fixture', 'count' => 1, 'user' => '', 'group' => '', 'reusePort' => false, 'event_loop' => '', 'stop_timeout' => 2, 'pid_file' => __DIR__ . '/../runtime/webman.pid', 'status_file' => __DIR__ . '/../runtime/webman.status', 'stdout_file' => __DIR__ . '/../runtime/webman.stdout.log', 'log_file' => __DIR__ . '/../runtime/webman.log', 'max_package_size' => 10485760];

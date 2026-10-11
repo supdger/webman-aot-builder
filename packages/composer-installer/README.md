@@ -117,32 +117,3 @@ $aotBin = (composer global config bin-dir --absolute).Trim()
 此清理流程用 `--no-scripts` 先跳过自动项目菜单。按列表对旧原生版本、旧公开命令和历史备份选择 `y`；对“Composer 全局包（supdger/webman-aot-builder）”选择 `n` 保留新入口。需要清空已有 Composer 私有运行时以重新准备时，单独确认该状态项；安装锁与用户文件保留。若也选了卸载 Composer 全局包，需再次运行首行安装命令，然后重新取得命令目录。清理后在同一 PowerShell 窗口运行 `php (Join-Path $aotBin 'webman-aot') guide`，按同一菜单准备资源并选择项目。上述参数不修改用户 PATH，旧空 PATH 目录可另行核对整理。
 
 先只读查看类型、静态版本和绝对路径，再逐项输入 `y` 卸载、回车保留或 `q` 结束；非交互环境始终保留。入口不会先下载或安装运行时。自定义状态目录使用 `webman-aot uninstall --state-dir="目录"`；自定义原生目录可用 `--home="目录"`、命令目录用 `--bin-dir="目录"`。仅清理可确认归属的选中对象，未知旧入口保留并显示精确路径；Composer 全局包由 Composer 移除这一包，其他全局工具保留。Composer 状态根的 `setup.lock` 与额外用户文件保留，避免并发安装换锁；项目产物、独立安装根的共享工具链与 PATH 保留；卸载 Composer 私有运行时会同时移除其内部工具链、日志及缓存，之后构建需重新准备。旧备份命令不会恢复；失败返回非零并列出残留。
-
-开发检查（在原仓库根运行）：
-
-```sh
-composer validate --strict
-php packages/composer-installer/tests/run.php
-php packages/composer-installer/tests/guide.php
-php packages/composer-installer/tests/uninstall.php
-# 实际 macOS Composer PTY：先制作候选 ZIP，再传入其绝对路径；旧版 ZIP 可选。
-python3 packages/composer-installer/tests/plugin.py /候选包绝对路径.zip /旧0.3.6入口包.zip
-```
-
-本地验收不需要发布。先建立一个临时 Composer 工作目录，在该目录创建 `composer.json`，其中 `url` 改成此包的绝对目录：
-
-```json
-{
-  "repositories": [{"type": "path", "url": "/原仓库绝对路径", "options": {"symlink": false}}],
-  "require": {"supdger/webman-aot-builder": "@dev"}
-}
-```
-
-在临时目录运行 `composer install --no-plugins --no-scripts`，再执行 `vendor/bin/webman-aot --help`。准备与后续验证也使用同一个显式独立目录：
-
-```sh
-vendor/bin/webman-aot setup --state-dir="/临时目录/aot-state" --archive="/完整包路径" --non-interactive
-vendor/bin/webman-aot --state-dir="/临时目录/aot-state" --non-interactive doctor
-```
-
-构建时进入自己的项目目录，以临时工作目录下 `vendor/bin/webman-aot` 的完整路径执行 `--state-dir="/临时目录/aot-state" --non-interactive build`。Windows 的 Composer 会生成对应 `.bat` 代理，使用该代理运行。以上用于验证本地修改；这套本地检查验证修改后的包布局与命令行为，公开发行与注册信息以 Release 和 Packagist 页面为准。
