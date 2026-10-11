@@ -9,7 +9,7 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class CompilerCoverageAudit
 {
     /**
-     * @param array{source:string,sourceSha256:string,replacement:string,replacementSha256:string,policy:string,projectSourceSha256?:string}|null $entrypointMapping
+     * @param array{source:string,sourceSha256:string,replacement:string,replacementSha256:string,policy:string}|null $entrypointMapping
      */
     public function __construct(private readonly ?array $entrypointMapping = null)
     {
@@ -22,7 +22,7 @@ final class CompilerCoverageAudit
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror)
-            || !str_contains(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/')
+            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
             || is_link($mirrorDirectory)
         ) {
             throw new ConfigurationException('compiler coverage requires an isolated build mirror');
@@ -109,37 +109,23 @@ final class CompilerCoverageAudit
     ): bool {
         $mapping = $this->entrypointMapping;
         if ($mapping === null
-            || ($mapping['source'] ?? null)
-                !== 'vendor/workerman/webman-framework/src/support/bootstrap.php'
-            || ($mapping['replacement'] ?? null) !== 'main.php'
-            || ($mapping['policy'] ?? null) !== 'upstream.webman-bootstrap-entrypoint.v1'
+            || !is_string($mapping['source'] ?? null)
+            || !is_string($mapping['sourceSha256'] ?? null)
+            || !is_string($mapping['replacement'] ?? null)
+            || !is_string($mapping['replacementSha256'] ?? null)
+            || !is_string($mapping['policy'] ?? null)
+            || !is_array($mapping['sources'] ?? [])
         ) {
             return false;
         }
-        foreach (['sourceSha256', 'replacementSha256'] as $key) {
-            if (!is_string($mapping[$key] ?? null)
-                || preg_match('/^[a-f0-9]{64}$/D', $mapping[$key]) !== 1
-            ) {
-                return false;
-            }
-        }
-        return in_array(
-                $entry['path'] ?? null,
-                [$mapping['source'], 'support/bootstrap.php'],
-                true
-            )
-            && (
-                (($entry['path'] ?? null) === $mapping['source']
-                    && ($entry['owner'] ?? null) === 'webman-core')
-                || (($entry['path'] ?? null) === 'support/bootstrap.php'
-                    && ($entry['owner'] ?? null) === 'project')
-            )
+        $sources = $mapping['sources'] ?? [];
+        $sources[$mapping['source']] = $mapping['sourceSha256'];
+        $sourceDigest = $sources[$entry['path'] ?? ''] ?? null;
+        return is_string($sourceDigest)
+            && preg_match('/^[a-f0-9]{64}$/D', $sourceDigest) === 1
+            && preg_match('/^[a-f0-9]{64}$/D', $mapping['replacementSha256']) === 1
             && ($entry['policy'] ?? null) === $mapping['policy']
-            && ($entry['sourceSha256'] ?? null) === (
-                ($entry['path'] ?? null) === 'support/bootstrap.php'
-                    ? ($mapping['projectSourceSha256'] ?? $mapping['sourceSha256'])
-                    : $mapping['sourceSha256']
-            )
+            && ($entry['sourceSha256'] ?? null) === $sourceDigest
             && $replacement === $mapping['replacement']
             && $replacementDigest === $mapping['replacementSha256'];
     }
@@ -187,7 +173,26 @@ final class CompilerCoverageAudit
                 $section = null;
             }
             if ($section !== null && str_starts_with($line, '  - ')) {
-                $entry = substr($line, 4);
+                $entry = trim(substr($line, 4));
+                if (str_starts_with($entry, '"')) {
+                    $decoded = json_decode($entry, true);
+                    if (!is_string($decoded)) {
+                        throw new ConfigurationException("compiler coverage has invalid {$section} entry");
+                    }
+                    $entry = $decoded;
+                } elseif (str_starts_with($entry, "'")) {
+                    if (!str_ends_with($entry, "'")) {
+                        throw new ConfigurationException("compiler coverage has invalid {$section} entry");
+                    }
+                    $entry = str_replace("''", "'", substr($entry, 1, -1));
+                }
+                while (str_starts_with($entry, './')) {
+                    $entry = substr($entry, 2);
+                }
+                if ($entry === '.') {
+                    $result[$section][] = '.';
+                    continue;
+                }
                 if ($entry === ''
                     || $entry !== str_replace('\\', '/', $entry)
                     || str_starts_with($entry, '/')
@@ -202,7 +207,7 @@ final class CompilerCoverageAudit
                 $result[$section][] = rtrim($entry, '/');
             }
         }
-        if (!isset($seenSections['sources'], $seenSections['ignore'])
+        if (!isset($seenSections['sources'])
             || $result['sources'] === []
         ) {
             throw new ConfigurationException('compiler coverage manifest is incomplete');
@@ -216,7 +221,7 @@ final class CompilerCoverageAudit
     private function covered(string $path, array $entries): bool
     {
         foreach ($entries as $entry) {
-            if ($path === $entry || str_starts_with($path, $entry . '/')) {
+            if ($entry === '.' || $path === $entry || str_starts_with($path, $entry . '/')) {
                 return true;
             }
         }
@@ -225,10 +230,21 @@ final class CompilerCoverageAudit
 
     private function digest(string $mirror, string $relative): ?string
     {
-        if (str_starts_with($relative, '/')
+        if ($relative === '' || str_contains($relative, '\\')
+            || preg_match('/^[A-Za-z]:/', $relative) === 1
+            || in_array('.', explode('/', $relative), true)
+            || in_array('', explode('/', $relative), true)
+            || str_starts_with($relative, '/')
             || in_array('..', explode('/', $relative), true)
         ) {
             return null;
+        }
+        $componentPath = $mirror;
+        foreach (explode('/', $relative) as $component) {
+            $componentPath .= '/' . $component;
+            if (is_link($componentPath)) {
+                return null;
+            }
         }
         $path = $mirror . '/' . $relative;
         $digest = is_file($path) && !is_link($path)

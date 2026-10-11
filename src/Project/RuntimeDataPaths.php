@@ -8,15 +8,15 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 
 final class RuntimeDataPaths
 {
-    private const SOURCE_EXCLUDED_DIRECTORIES = [
+    private const WRITABLE_DATA_DIRECTORIES = [
         'public/storage',
         'plugin/saiadmin/public/export',
     ];
 
-    public static function isSourceExcluded(string $path): bool
+    public static function isWritableDataPath(string $path): bool
     {
         $path = str_replace('\\', '/', $path);
-        foreach (self::SOURCE_EXCLUDED_DIRECTORIES as $directory) {
+        foreach (self::WRITABLE_DATA_DIRECTORIES as $directory) {
             if ($path === $directory || str_starts_with($path, $directory . '/')) {
                 return true;
             }
@@ -25,10 +25,41 @@ final class RuntimeDataPaths
         return false;
     }
 
-    public static function assertNoExcludedPhp(string $projectDirectory): void
+    public static function assertEnvironmentPhpSource(string $absolutePath, string $relativePath): void
+    {
+        if (preg_match('/^\.env(?:\..+)?$/D', basename($relativePath)) !== 1
+            || strtolower(pathinfo($relativePath, PATHINFO_EXTENSION)) !== 'php'
+        ) {
+            return;
+        }
+        $contents = file_get_contents($absolutePath);
+        if (!is_string($contents)) {
+            throw new ConfigurationException("unable to read environment-named PHP source: {$relativePath}");
+        }
+        $hasPhp = false;
+        foreach (token_get_all($contents) as $token) {
+            if (!is_array($token)) {
+                continue;
+            }
+            if (in_array($token[0], [T_OPEN_TAG, T_OPEN_TAG_WITH_ECHO], true)) {
+                $hasPhp = true;
+            }
+            if ($token[0] === T_INLINE_HTML && trim($token[1]) !== '') {
+                throw new ConfigurationException(
+                    "environment-named PHP contains non-PHP data: {$relativePath}; "
+                    . 'keep environment data in .env and provide PHP source separately'
+                );
+            }
+        }
+        if (!$hasPhp) {
+            throw new ConfigurationException("environment-named PHP has no PHP source: {$relativePath}");
+        }
+    }
+
+    public static function assertSafeWritableDirectories(string $projectDirectory): void
     {
         $root = rtrim($projectDirectory, '/\\');
-        foreach (self::SOURCE_EXCLUDED_DIRECTORIES as $directory) {
+        foreach (self::WRITABLE_DATA_DIRECTORIES as $directory) {
             $absolute = $root . '/' . $directory;
             if (is_link($absolute)) {
                 throw new ConfigurationException(
@@ -49,11 +80,6 @@ final class RuntimeDataPaths
                 if ($file->isLink()) {
                     throw new ConfigurationException(
                         "writable runtime directory contains symlink: {$relative}"
-                    );
-                }
-                if ($file->isFile() && strtolower($file->getExtension()) === 'php') {
-                    throw new ConfigurationException(
-                        "PHP in writable runtime directory cannot be silently excluded: {$relative}"
                     );
                 }
             }

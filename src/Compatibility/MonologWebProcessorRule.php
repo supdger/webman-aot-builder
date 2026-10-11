@@ -24,38 +24,17 @@ final class MonologWebProcessorRule
         ) {
             throw new ConfigurationException('Monolog adaptation requires an isolated project mirror');
         }
-        $lockFile = $mirror . '/composer.lock';
-        $contents = is_file($lockFile) && !is_link($lockFile)
-            ? file_get_contents($lockFile)
-            : false;
-        if (!is_string($contents)) {
-            throw new ConfigurationException('Monolog adaptation requires composer.lock');
-        }
-        try {
-            $composer = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException $exception) {
-            throw new ConfigurationException('Monolog adaptation composer.lock is invalid', previous: $exception);
-        }
-        if (!is_array($composer)) {
-            throw new ConfigurationException('Monolog adaptation composer.lock is invalid');
-        }
-        $matches = [];
-        foreach (array_merge($composer['packages'] ?? [], $composer['packages-dev'] ?? []) as $package) {
-            if (is_array($package) && ($package['name'] ?? null) === 'monolog/monolog') {
-                $matches[] = $package;
-            }
-        }
         $sourcePath = $mirror . '/' . self::SOURCE;
-        if ($matches === [] && !file_exists($sourcePath)) {
+        if (!file_exists($sourcePath) && !is_link($sourcePath)) {
             return null;
         }
-        if (count($matches) !== 1 || !is_file($sourcePath) || is_link($sourcePath)
-            || ($policy['path'] ?? null) !== self::SOURCE
-            || !is_string($matches[0]['version'] ?? null)
-            || $matches[0]['version'] === ''
+        if (!is_file($sourcePath) || is_link($sourcePath) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($sourcePath) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $sourcePath)) {
+            throw new ConfigurationException('Monolog WebProcessor source is unsafe');
+        }
+        if (($policy['path'] ?? null) !== self::SOURCE
             || ($policy['rule'] ?? null) !== 'monolog.web-processor-global-reference.v1'
         ) {
-            throw new ConfigurationException('Monolog WebProcessor package or rule drifted');
+            throw new ConfigurationException('Monolog WebProcessor rule drifted');
         }
         $source = file_get_contents($sourcePath);
         if (!is_string($source)) {
@@ -74,10 +53,14 @@ final class MonologWebProcessorRule
                 1,
                 [self::REPLACEMENT],
                 ['__construct']
-            ))->transform($source, $matches[0]['version']);
+            ))->transform($source, 'source-verified');
             token_get_all($adapted, TOKEN_PARSE);
-        } catch (\ParseError $exception) {
-            throw new ConfigurationException('Monolog WebProcessor source structure drifted', previous: $exception);
+        } catch (\ParseError|ConfigurationException $exception) {
+            fwrite(STDERR, "[adapt] skipped Monolog WebProcessor: {$exception->getMessage()}; original compiler input retained\n");
+            return null;
+        }
+        if (file_get_contents($sourcePath) !== $source) {
+            throw new ConfigurationException('Monolog WebProcessor source changed during preparation');
         }
         $digest = hash('sha256', $adapted);
         if (file_put_contents($sourcePath, $adapted) === false) {

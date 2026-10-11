@@ -27,7 +27,7 @@ final class RuntimeLauncherWriter
 set -eu
 ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd -P)
 cd "$ROOT"
-if [ ! -x ./server ] || [ ! -f ./config/app.php ]; then
+if [ ! -x ./server ]; then
     echo "Incomplete Webman AOT Builder distribution" >&2
     exit 1
 fi

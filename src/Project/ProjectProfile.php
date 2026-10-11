@@ -6,6 +6,7 @@ namespace WebmanAotBuilder\Project;
 
 final class ProjectProfile
 {
+    public const PHP = 'php';
     public const WEBMAN = 'webman';
     public const SAIADMIN = 'saiadmin';
 

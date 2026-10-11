@@ -135,7 +135,6 @@ final class TypePhpProjectCompiler
                 $environment['PATH']
             ),
             '--job=4',
-            '--no-progress',
         ];
         if ($objectCache === null) { $compile[] = '--force'; }
         if (($this->run)($compile, $mirror, $environment) !== 0) {

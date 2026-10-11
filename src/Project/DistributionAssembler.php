@@ -71,7 +71,9 @@ final class DistributionAssembler
             || ($metadata['sourceSha256'] ?? null) !== $source['sha256']
             || ($inputs['sourceTreeSha256'] ?? null) !== $source['sha256']
             || ($inputs['composerLockSha256'] ?? null)
-                !== $this->digest($project . '/composer.lock')
+                !== (is_file($project . '/composer.lock')
+                    ? $this->digest($project . '/composer.lock')
+                    : hash('sha256', ''))
             || ($inputs['compatibilityLockSha256'] ?? null)
                 !== $this->digest($compatibilityLockFile)
             || ($inputs['toolchainLockSha256'] ?? null)

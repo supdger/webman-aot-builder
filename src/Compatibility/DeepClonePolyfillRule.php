@@ -24,22 +24,11 @@ final class DeepClonePolyfillRule
         ) {
             throw new ConfigurationException('deepclone adaptation requires an isolated project mirror');
         }
-        $composer = json_decode($this->read($mirror . '/composer.lock'), true, flags: JSON_THROW_ON_ERROR);
-        $packages = array_values(array_filter(
-            array_merge($composer['packages'] ?? [], $composer['packages-dev'] ?? []),
-            static fn (array $package): bool => ($package['name'] ?? null) === 'symfony/polyfill-deepclone'
-        ));
         $prefix = 'vendor/symfony/polyfill-deepclone/';
-        if ($packages === [] && !file_exists($mirror . '/' . $prefix)) {
-            return [];
-        }
-        if (count($packages) !== 1
-            || ($policy['rule'] ?? null) !== 'symfony.deepclone-php84-fallback.v1'
+        if (($policy['rule'] ?? null) !== 'symfony.deepclone-php84-fallback.v1'
             || ($policy['sdkPolicy'] ?? null) !== 'selected.prepared-toolchain-sdk.v1'
-            || !is_string($packages[0]['version'] ?? null)
-            || $packages[0]['version'] === ''
         ) {
-            throw new ConfigurationException('deepclone package policy drifted');
+            throw new ConfigurationException('deepclone adaptation policy drifted');
         }
         $sdk = is_string($sdkDirectory) && !is_link($sdkDirectory) ? realpath($sdkDirectory) : false;
         $selectedSdk = is_string($targetContext['sdkDirectory'] ?? null) && !is_link($targetContext['sdkDirectory'])
@@ -93,12 +82,74 @@ final class DeepClonePolyfillRule
             'Resources/stubs/NotInstantiableException.php', 'DeepClone.php'];
         $sources = [];
         foreach ($names as $name) {
+            $path = $mirror . '/' . $prefix . $name;
+            if (!file_exists($path) && !is_link($path)) {
+                return [];
+            }
             $sources[$name] = $this->read($mirror . '/' . $prefix . $name);
         }
+        try {
+            $shadows = $this->prepareShadows($sources, $targetContext['phpVersionId']);
+        } catch (ConfigurationException $exception) {
+            fwrite(STDERR, "[adapt] skipped deepclone: {$exception->getMessage()}; original compiler inputs retained\n");
+            return [];
+        }
+
+        $projectFile = $mirror . '/project.linux.yml';
+        $project = $originalProject = $this->read($projectFile);
+        if (substr_count($project, "\nignore:\n") !== 1) {
+            throw new ConfigurationException('deepclone project source sections drifted');
+        }
+        $mappings = [];
+        $writes = [];
+        foreach ($shadows as $name => $source) {
+            $relative = $prefix . $name;
+            $shadow = '.typephp/build/deepclone-' . basename($name);
+            $shadowPath = $mirror . '/' . $shadow;
+            [$sourceSection, $ignoreSection] = explode("\nignore:\n", $project);
+            $alreadyAdapted = is_file($shadowPath) && !is_link($shadowPath)
+                && $this->read($shadowPath) === $source
+                && substr_count($sourceSection . "\n", "  - {$shadow}\n") === 1
+                && substr_count($ignoreSection, "  - {$relative}\n") === 1
+                && !str_contains($sourceSection, "  - {$relative}\n")
+                && !str_contains($ignoreSection, "  - {$shadow}\n");
+            if (!is_string($source) || is_link($shadowPath)
+                || (!$alreadyAdapted && (file_exists($shadowPath)
+                    || str_contains($project, "  - {$relative}\n")
+                    || str_contains($project, "  - {$shadow}\n")))
+            ) {
+                throw new ConfigurationException("deepclone generated source entry drifted: {$name}");
+            }
+            if (!$alreadyAdapted) {
+                $project = str_replace("\nignore:\n", "\n  - {$shadow}\n\nignore:\n  - {$relative}\n", $project);
+            }
+            $writes[$mirror . '/' . $shadow] = $source;
+            $mappings[] = ['path' => $relative, 'shadow' => $shadow,
+                'sourceSha256' => hash('sha256', $sources[$name]), 'shadowSha256' => hash('sha256', $source)];
+        }
+        foreach ($sources as $name => $source) {
+            if ($this->read($mirror . '/' . $prefix . $name) !== $source) {
+                throw new ConfigurationException('deepclone source changed during preparation: ' . $name);
+            }
+        }
+        if ($this->read($projectFile) !== $originalProject) {
+            throw new ConfigurationException('deepclone project changed during preparation');
+        }
+        foreach ($writes + [$projectFile => $project] as $path => $source) {
+            if (file_put_contents($path, $source, LOCK_EX) === false) {
+                throw new ConfigurationException('unable to write deepclone fallback adaptation');
+            }
+        }
+        return $mappings;
+    }
+
+    /** Build a complete adaptation in memory before any source or manifest write. */
+    private function prepareShadows(array $sources, int $phpVersionId): array
+    {
         $shadows = [];
         // The selected target must take the verified bootstrap81 branch.
         $shadows['bootstrap.php'] = "<?php\n// Selected target fallback declarations are compiled from deepclone-bootstrap81.php.\n";
-        $this->assertBootstrap($sources['bootstrap.php'], $targetContext['phpVersionId']);
+        $this->assertBootstrap($sources['bootstrap.php'], $phpVersionId);
         $shadows['bootstrap81.php'] = $this->unguard($sources['bootstrap81.php'], null);
         foreach (['ClassNotFoundException', 'NotInstantiableException'] as $class) {
             $name = "Resources/stubs/{$class}.php";
@@ -157,44 +208,7 @@ PHP;
             $this->tokens($source);
         }
 
-        $projectFile = $mirror . '/project.linux.yml';
-        $project = $this->read($projectFile);
-        if (substr_count($project, "\nignore:\n") !== 1) {
-            throw new ConfigurationException('deepclone project source sections drifted');
-        }
-        $mappings = [];
-        $writes = [];
-        foreach ($shadows as $name => $source) {
-            $relative = $prefix . $name;
-            $shadow = '.typephp/build/deepclone-' . basename($name);
-            $shadowPath = $mirror . '/' . $shadow;
-            [$sourceSection, $ignoreSection] = explode("\nignore:\n", $project);
-            $alreadyAdapted = is_file($shadowPath) && !is_link($shadowPath)
-                && $this->read($shadowPath) === $source
-                && substr_count($sourceSection . "\n", "  - {$shadow}\n") === 1
-                && substr_count($ignoreSection, "  - {$relative}\n") === 1
-                && !str_contains($sourceSection, "  - {$relative}\n")
-                && !str_contains($ignoreSection, "  - {$shadow}\n");
-            if (!is_string($source) || is_link($shadowPath)
-                || (!$alreadyAdapted && (file_exists($shadowPath)
-                    || str_contains($project, "  - {$relative}\n")
-                    || str_contains($project, "  - {$shadow}\n")))
-            ) {
-                throw new ConfigurationException("deepclone generated source entry drifted: {$name}");
-            }
-            if (!$alreadyAdapted) {
-                $project = str_replace("\nignore:\n", "\n  - {$shadow}\n\nignore:\n  - {$relative}\n", $project);
-            }
-            $writes[$mirror . '/' . $shadow] = $source;
-            $mappings[] = ['path' => $relative, 'shadow' => $shadow,
-                'sourceSha256' => hash('sha256', $sources[$name]), 'shadowSha256' => hash('sha256', $source)];
-        }
-        foreach ($writes + [$projectFile => $project] as $path => $source) {
-            if (file_put_contents($path, $source, LOCK_EX) === false) {
-                throw new ConfigurationException('unable to write deepclone fallback adaptation');
-            }
-        }
-        return $mappings;
+        return $shadows;
     }
 
     private function transform(string $source, string $before, string $after, string $label): string
@@ -491,7 +505,7 @@ PHP;
 
     private function read(string $path): string
     {
-        if (!is_file($path) || is_link($path)) {
+        if (!is_file($path) || is_link($path) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($path) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $path)) {
             throw new ConfigurationException('deepclone adaptation source is missing or unsafe');
         }
         $source = file_get_contents($path);

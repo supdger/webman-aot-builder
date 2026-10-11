@@ -7,84 +7,98 @@ namespace WebmanAotBuilder\Compatibility;
 use WebmanAotBuilder\Cli\ConfigurationException;
 use WebmanAotBuilder\Project\ProjectDiscovery;
 use WebmanAotBuilder\Project\ProjectProfile;
+use WebmanAotBuilder\Project\WebmanSupportOverride;
 
 final class PluginSourceCompletion
 {
     private array $sourcePlans = [];
     /**
-     * Complete discovered project sources and production namespaces used by verified replacements.
-     * Existing source and ignore decisions remain untouched.
+     * Complete compiler coverage from actual project PHP, including dependencies.
      *
      * @param array<string,string> $dynamicPhp
-     * @param list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> $generatedMappings
+     * @param list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> $mappings
      */
-    public function apply(string $mirrorDirectory, string $profile, array $dynamicPhp, array $generatedMappings = []): ?string
-    {
+    public function apply(
+        string $mirrorDirectory,
+        string $profile,
+        array $dynamicPhp,
+        array $mappings = [],
+        ?array $entrypoint = null
+    ): ?string {
         $mirror = realpath($mirrorDirectory);
-        $mirror = is_string($mirror) ? str_replace(DIRECTORY_SEPARATOR, '/', $mirror) : $mirror;
         if (!is_string($mirror) || is_link($mirrorDirectory)
             || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
-            || !in_array($profile, [ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
+            || !in_array($profile, [ProjectProfile::PHP, ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
         ) {
-            throw new ConfigurationException('plugin source completion requires an isolated project mirror');
+            throw new ConfigurationException('PHP source completion requires an isolated project mirror');
         }
         $projectFile = $mirror . '/project.linux.yml';
         $project = is_file($projectFile) && !is_link($projectFile)
-            ? file_get_contents($projectFile)
-            : false;
-        if (!is_string($project) || str_contains($project, "\r")
-            || substr_count($project, "\nsources:\n") !== 1
-            || substr_count($project, "\nignore:\n") !== 1
-            || substr_count($project, "\noutput:") !== 1
-        ) {
-            throw new ConfigurationException('generated plugin source list structure drifted');
+            ? file_get_contents($projectFile) : false;
+        if (!is_string($project)) {
+            throw new ConfigurationException('TypePHP project manifest is missing');
         }
-        $sources = $this->section($project, 'sources', 'ignore');
-        $ignore = $this->section($project, 'ignore', 'output');
+        $project = str_replace("\r\n", "\n", $project);
+        if (!str_ends_with($project, "\n")) {
+            $project .= "\n";
+        }
+        $sources = $this->section($project, 'sources');
+        $ignore = $this->section($project, 'ignore');
+        $replacements = [];
+        foreach (['Request', 'Response'] as $name) {
+            $path = "vendor/workerman/webman-framework/src/support/{$name}.php";
+            $replacement = "support/{$name}.php";
+            if (WebmanSupportOverride::canReplace($mirror, $name)) {
+                $replacements[$path] = $replacement;
+                $ignore[] = $path;
+            }
+        }
+        foreach ($mappings as $mapping) {
+            $replacements[$mapping['path']] = $mapping['shadow'];
+            $sources[] = $mapping['shadow'];
+            $ignore[] = $mapping['path'];
+        }
+        if ($entrypoint !== null) {
+            $replacements[$entrypoint['source']] = $entrypoint['replacement'];
+            $ignore[] = $entrypoint['source'];
+            foreach ($entrypoint['sources'] ?? [] as $path => $_) {
+                $replacements[$path] = $entrypoint['replacement'];
+                $ignore[] = $path;
+            }
+        }
         $discovery = (new ProjectDiscovery($mirror, $dynamicPhp))
-            ->discover(new ProjectProfile($profile, [], []));
-        $missing = [];
+            ->discover(new ProjectProfile(ProjectProfile::PHP, [], []), false);
         foreach ($discovery->files() as $file) {
             $path = $file['path'];
-            $plugin = str_starts_with($file['owner'], 'plugin:');
-            $support = $file['owner'] === 'project' && str_starts_with($path, 'support/')
-                && $path !== 'support/bootstrap.php';
-            if ($file['category'] !== ProjectDiscovery::BUSINESS_PHP
-                || (!$plugin && !$support)
-                || $this->covered($path, $sources)
-            ) {
+            if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'php') {
                 continue;
             }
-            if (preg_match('~^(?:plugin/[A-Za-z0-9_-]+|support)/[A-Za-z0-9_./-]+\.php$~D', $path) !== 1
-                || $this->covered($path, $ignore)
-                || !is_file($mirror . '/' . $path)
-                || is_link($mirror . '/' . $path)
-            ) {
-                throw new ConfigurationException(
-                    "discovered project PHP cannot be added to compiler sources: {$path}"
-                );
+            if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
+                if (isset($replacements[$path])) {
+                    continue;
+                }
+                if ($this->covered($path, $ignore)) {
+                    throw new ConfigurationException("business PHP is excluded from TypePHP compilation: {$path}");
+                }
+                if (!$this->covered($path, $sources)) {
+                    $sources[] = $path;
+                }
+            } elseif (!$this->covered($path, $ignore)) {
+                $ignore[] = $path;
             }
-            $missing[] = $path;
         }
-        $missing = array_values(array_unique(array_merge($missing, $this->replacementSources($mirror, $generatedMappings, $sources, $ignore))));
-        if ($missing === []) {
+        $sources = array_merge($sources, $this->replacementSources($mirror, $mappings, $sources, $ignore));
+        $sources = array_values(array_unique($sources));
+        $ignore = array_values(array_unique($ignore));
+        $adapted = $this->replaceSection($project, 'sources', $sources);
+        $adapted = $this->replaceSection($adapted, 'ignore', $ignore);
+        if ($adapted === $project) {
             return null;
         }
-        sort($missing, SORT_STRING);
-        $lines = '';
-        foreach ($missing as $path) {
-            $lines .= "  - {$path}\n";
+        if (file_put_contents($projectFile, $adapted, LOCK_EX) !== strlen($adapted)) {
+            throw new ConfigurationException('unable to complete PHP compiler sources');
         }
-        $adapted = str_replace("\nignore:\n", "\n{$lines}ignore:\n", $project);
-        if ($adapted === $project
-            || file_put_contents($projectFile, $adapted, LOCK_EX) !== strlen($adapted)
-        ) {
-            throw new ConfigurationException('unable to complete project compiler sources');
-        }
-        return hash(
-            'sha256',
-            json_encode($missing, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES)
-        );
+        return hash('sha256', $adapted);
     }
 
     public function includes(string $mirrorDirectory, string $path): bool
@@ -98,8 +112,8 @@ final class PluginSourceCompletion
         $project = is_file($projectPath) && !is_link($projectPath) ? file_get_contents($projectPath) : false;
         if (!is_string($project)) { throw new ConfigurationException('compiler source selection is missing'); }
         if (!is_file($mirror . '/' . $path) || is_link($mirror . '/' . $path)) { return false; }
-        $sources = $this->section($project, 'sources', 'ignore');
-        $ignore = $this->section($project, 'ignore', 'output');
+        $sources = $this->section($project, 'sources');
+        $ignore = $this->section($project, 'ignore');
         if ($this->covered($path, $ignore)) { return false; }
         return $this->covered($path, $sources)
             || in_array($path, $this->replacementSources($mirror, [], $sources, $ignore), true);
@@ -114,44 +128,28 @@ final class PluginSourceCompletion
             : null;
         $records = is_array($metadata) ? ($metadata['packages'] ?? $metadata) : null;
         if (!is_array($records) || !array_is_list($records)) {
-            throw new ConfigurationException('replacement dependency installed package metadata is missing or invalid');
+            return [];
         }
         $devNames = $metadata['dev-package-names'] ?? [];
         if (!is_array($devNames) || !array_is_list($devNames)) {
-            throw new ConfigurationException('replacement dependency development package metadata is invalid');
+            return [];
         }
         foreach ($devNames as $name) {
-            if (!is_string($name)) { throw new ConfigurationException('replacement dependency development package identity is invalid'); }
+            if (!is_string($name)) { return []; }
         }
         $dev = array_fill_keys($devNames, true);
         $packages = [];
         foreach ($records as $record) {
             if (!is_array($record) || !is_array($record['require'] ?? []) || !is_array($record['autoload'] ?? [])) {
-                throw new ConfigurationException('replacement dependency package declarations are invalid');
+                return [];
             }
             $name = $record['name'] ?? null;
             if (!is_string($name) || isset($packages[$name])
                 || !is_string($record['install-path'] ?? null)
-            ) { throw new ConfigurationException('replacement dependency installed package identity is invalid'); }
+            ) { return []; }
             if (isset($dev[$name])) { continue; }
             $record['root'] = $this->sourceDirectory($mirror, $mirror . '/vendor/composer/' . $record['install-path']);
             $packages[$name] = $record;
-        }
-        $lockFile = $mirror . '/composer.lock';
-        $lock = is_file($lockFile) && !is_link($lockFile) ? json_decode((string) file_get_contents($lockFile), true) : null;
-        if (!is_array($lock) || !is_array($lock['packages'] ?? null)) { throw new ConfigurationException('production dependency Composer lock is missing or invalid'); }
-        $locked = [];
-        foreach ($lock['packages'] as $record) {
-            if (!is_array($record) || !is_string($record['name'] ?? null) || isset($locked[$record['name']])) { throw new ConfigurationException('production dependency Composer lock identities are invalid'); }
-            $locked[$record['name']] = $record;
-        }
-        foreach ($packages as $name => $record) {
-            $expected = $locked[$name] ?? null;
-            if (!is_array($expected) || ($record['version'] ?? null) !== ($expected['version'] ?? null)
-                || ($record['source']['reference'] ?? null) !== ($expected['source']['reference'] ?? null)
-                || ($record['dist']['reference'] ?? null) !== ($expected['dist']['reference'] ?? null)
-                || ($record['autoload'] ?? []) !== ($expected['autoload'] ?? [])
-            ) { throw new ConfigurationException('production dependency installed identity differs from Composer lock: ' . $name); }
         }
         $queue = array_keys($packages);
         foreach ($mappings as $mapping) {
@@ -174,11 +172,11 @@ final class PluginSourceCompletion
                 ) { $owner = $name; }
             }
             if ($owner === null) {
-                throw new ConfigurationException('replacement dependency origin has no installed production package: ' . $origin);
+                continue;
             }
             $queue[] = $owner;
         }
-        $identity = hash('sha256', $mirror . hash_file('sha256', $metadataPath) . hash_file('sha256', $lockFile));
+        $identity = hash('sha256', $mirror . hash_file('sha256', $metadataPath));
         if (isset($this->sourcePlans[$identity])) { return $this->selectPlannedSources($mirror, $this->sourcePlans[$identity], $sources, $ignore); }
         $selected = [];
         $visited = [];
@@ -341,40 +339,97 @@ final class PluginSourceCompletion
     }
 
     /** @return list<string> */
-    private function section(string $project, string $name, string $next): array
+    private function section(string $project, string $name): array
     {
-        $startMarker = "\n{$name}:\n";
-        $endMarker = "\n{$next}:";
-        $start = strpos($project, $startMarker);
-        $end = strpos($project, $endMarker);
-        if ($start === false || $end === false || $start >= $end) {
-            throw new ConfigurationException("generated {$name} section order drifted");
+        if (preg_match('/^' . $name . ':[ \t]*([^\n]*)\n((?:[ \t]+[^\n]*\n|\n)*)/m', $project, $match) !== 1) {
+            return [];
         }
-        $block = substr($project, $start + strlen($startMarker), $end - $start - strlen($startMarker));
+        $inline = trim($match[1]);
+        if ($inline !== '' && !str_starts_with($inline, '#')) {
+            if (!str_starts_with($inline, '[') || !str_ends_with($inline, ']')) {
+                throw new ConfigurationException("TypePHP project {$name} must be a YAML list");
+            }
+            $items = [];
+            $current = '';
+            $quote = null;
+            $escaped = false;
+            foreach (str_split(substr($inline, 1, -1)) as $character) {
+                if ($quote !== null) {
+                    $current .= $character;
+                    if ($escaped) {
+                        $escaped = false;
+                    } elseif ($character === '\\' && $quote === '"') {
+                        $escaped = true;
+                    } elseif ($character === $quote) {
+                        $quote = null;
+                    }
+                } elseif ($character === '"' || $character === "'") {
+                    $quote = $character;
+                    $current .= $character;
+                } elseif ($character === ',') {
+                    $items[] = $current;
+                    $current = '';
+                } else {
+                    $current .= $character;
+                }
+            }
+            if ($quote !== null || $escaped) {
+                throw new ConfigurationException("invalid TypePHP project {$name} inline list");
+            }
+            if (trim($current) !== '') {
+                $items[] = $current;
+            }
+            $match[2] = implode("\n", array_map(static fn(string $item): string => '  - ' . trim($item), $items));
+        }
         $entries = [];
-        foreach (explode("\n", $block) as $line) {
-            if ($line === '') {
+        foreach (explode("\n", $match[2]) as $line) {
+            if (trim($line) === '' || str_starts_with(ltrim($line), '#')) {
                 continue;
             }
-            if (preg_match('~^  - ([A-Za-z0-9_./-]+)$~D', $line, $matches) !== 1
-                || str_contains('/' . $matches[1] . '/', '/../')
-                || str_contains('/' . $matches[1] . '/', '/./')
-            ) {
-                throw new ConfigurationException("generated {$name} entry drifted");
+            if (preg_match('/^[ \t]+-[ \t]+(.+)$/D', $line, $item) !== 1) {
+                throw new ConfigurationException("invalid TypePHP project {$name} entry");
             }
-            $entries[] = rtrim($matches[1], '/');
-        }
-        if ($entries === [] || count($entries) !== count(array_unique($entries))) {
-            throw new ConfigurationException("generated {$name} entries are empty or duplicated");
+            $path = trim($item[1]);
+            if (str_starts_with($path, '"')) {
+                $path = json_decode($path, true, flags: JSON_THROW_ON_ERROR);
+            } elseif (str_starts_with($path, "'") && str_ends_with($path, "'")) {
+                $path = str_replace("''", "'", substr($path, 1, -1));
+            }
+            if (!is_string($path) || $path === '' || str_starts_with($path, '/')
+                || in_array('..', explode('/', str_replace('\\', '/', $path)), true)
+                || preg_match('/[\x00-\x1f\x7f]/', $path) === 1
+            ) {
+                throw new ConfigurationException("unsafe TypePHP project {$name} path");
+            }
+            $entries[] = rtrim($path, '/');
         }
         return $entries;
+    }
+
+    /** @param list<string> $entries */
+    private function replaceSection(string $project, string $name, array $entries): string
+    {
+        $block = "{$name}:\n";
+        foreach ($entries as $path) {
+            $encoded = preg_match('~^[A-Za-z0-9_./*-]+$~D', $path) === 1
+                ? $path : json_encode($path, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $block .= "  - {$encoded}\n";
+        }
+        $block .= "\n";
+        $pattern = '/^' . $name . ':[ \t]*[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m';
+        if (preg_match($pattern, $project) !== 1) {
+            return rtrim($project) . "\n\n" . $block;
+        }
+        return (string) preg_replace_callback($pattern, static fn(): string => $block, $project, 1);
     }
 
     /** @param list<string> $entries */
     private function covered(string $path, array $entries): bool
     {
         foreach ($entries as $entry) {
-            if ($path === $entry || str_starts_with($path, $entry . '/')) {
+            if ($path === $entry || str_starts_with($path, $entry . '/')
+                || (str_contains($entry, '*') && fnmatch($entry, $path))
+            ) {
                 return true;
             }
         }

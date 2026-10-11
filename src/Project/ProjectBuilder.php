@@ -55,7 +55,9 @@ final class ProjectBuilder
         ) { throw new ConfigurationException('selected SDK context belongs to a different build toolchain lock'); }
         $compilerPatchSha256 = (new TypePhpPatchManifestFingerprint())
             ->digest($compilerPatchManifestFile);
-        $composerSha256 = $this->digest($project . '/composer.lock');
+        $composerSha256 = is_file($project . '/composer.lock')
+            ? $this->digest($project . '/composer.lock')
+            : hash('sha256', '');
         $cacheKey = (new WorkspaceCacheKey())->create(
             $profile,
             $coverage,

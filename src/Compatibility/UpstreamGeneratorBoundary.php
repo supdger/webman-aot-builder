@@ -9,6 +9,9 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class UpstreamGeneratorBoundary
 {
     /**
+     * Project package versions and historical source hashes are compatibility examples.
+     * The generator artifact and this generation's actual inputs remain integrity checked.
+     *
      * @param array<string,array{version:string,reference:string}> $packages
      * @param array<string,array{shadow:string,sourceSha256:string,shadowSha256:string}> $expected
      * @return list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>
@@ -23,389 +26,187 @@ final class UpstreamGeneratorBoundary
         bool $saiAdminGenerated = false
     ): array {
         $mirror = realpath($mirrorDirectory);
-        if (!is_string($mirror) || !$this->isBuildMirror($mirror) || $expected === []) {
-            throw new ConfigurationException('upstream generator requires a nonempty isolated build mirror');
+        if (!is_string($mirror) || is_link($mirrorDirectory)
+            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
+        ) {
+            throw new ConfigurationException('upstream generator requires an isolated build mirror');
         }
-        $this->assertPackages($mirror, $packages);
         $this->assertDigest($generatorSha256);
         if (!is_file($generatorFile) || is_link($generatorFile)
             || hash_file('sha256', $generatorFile) !== $generatorSha256
         ) {
             throw new ConfigurationException('upstream generator source digest mismatch');
         }
-        $generatedRoot = $mirror . DIRECTORY_SEPARATOR . '.typephp'
-            . DIRECTORY_SEPARATOR . 'build';
-        if (file_exists($generatedRoot) || is_link($generatedRoot)) {
+        $generatedRoot = $mirror . '/.typephp/build';
+        if (file_exists($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
             throw new ConfigurationException('upstream generator output is not a clean mirror');
         }
-
-        $targets = [];
-        foreach ($expected as $source => $entry) {
-            $shadow = $entry['shadow'] ?? '';
-            $this->assertRelativePhp($source, 'source');
-            $this->assertRelativePhp($shadow, 'shadow');
-            if (!str_starts_with($source, 'vendor/')
-                || !str_starts_with($shadow, '.typephp/build/')
-                || isset($targets[$shadow])
-            ) {
-                throw new ConfigurationException("invalid upstream generator mapping: {$source}");
-            }
-            $targets[$shadow] = true;
-            $path = $this->inside($mirror, $source);
-            $expected[$source]['sourceSha256'] = $this->digestFile($path, $source);
-        }
-
-        $sourceDigests = $this->sourceDigests($mirror);
-        $generate();
-
-        if (!is_dir($generatedRoot)
-            || is_link($generatedRoot)
-            || is_link($mirror . DIRECTORY_SEPARATOR . '.typephp')
-        ) {
+        $beforeSources = $this->sourceDigests($mirror);
+        $result = $generate();
+        if (!is_dir($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
             throw new ConfigurationException('upstream generator did not create a safe output directory');
         }
         if (hash_file('sha256', $generatorFile) !== $generatorSha256) {
             throw new ConfigurationException('upstream generator changed during execution');
         }
         $afterSources = $this->sourceDigests($mirror);
-        if ($afterSources !== $sourceDigests) {
-            foreach (array_unique(array_merge(array_keys($sourceDigests), array_keys($afterSources))) as $path) {
-                if (($sourceDigests[$path] ?? null) !== ($afterSources[$path] ?? null)) {
-                    throw new ConfigurationException('upstream generator changed source input: ' . $path);
+        if (!isset($beforeSources['main.php'])) {
+            unset($afterSources['main.php']);
+        }
+        if ($afterSources !== $beforeSources) {
+            throw new ConfigurationException('upstream generator changed original PHP source inputs');
+        }
+        $manifest = [];
+        if (is_array($result)) {
+            $manifest = $result;
+        } else {
+            foreach ($expected as $source => $entry) {
+                if (is_file($mirror . '/' . $entry['shadow'])) {
+                    $manifest[] = [
+                        'path' => $source,
+                        'shadow' => $entry['shadow'],
+                        'sourceSha256' => $this->digest($mirror, $source),
+                        'shadowSha256' => $this->digest($mirror, $entry['shadow']),
+                    ];
                 }
             }
         }
-        $actual = [];
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($generatedRoot, \FilesystemIterator::SKIP_DOTS)
-        );
-        foreach ($iterator as $file) {
-            if ($file->isLink()) {
-                throw new ConfigurationException('upstream generator output contains a symlink');
-            }
-            if ($file->isFile() && strtolower($file->getExtension()) === 'php') {
-                $relative = str_replace(
-                    DIRECTORY_SEPARATOR,
-                    '/',
-                    substr($file->getPathname(), strlen($mirror) + 1)
-                );
-                $actual[$relative] = true;
-            }
-        }
-        if (class_exists(\Tinywan\Typephp\Compiler\ProjectGenerator::class, false)) {
-            $this->includeSaiAdminGenerated($mirror, $expected, $actual, $sourceDigests, $saiAdminGenerated);
-            $targets = [];
-            foreach ($expected as $entry) {
-                $targets[$entry['shadow']] = true;
-            }
-        }
-        $extra = array_diff_key($actual, $targets);
-        if ($extra !== []) {
-            throw new ConfigurationException(
-                'upstream generator emitted undeclared PHP: ' . implode(', ', array_keys($extra))
-            );
-        }
-        $missing = array_diff_key($targets, $actual);
-        if ($missing !== []) {
-            throw new ConfigurationException(
-                'upstream generator omitted declared PHP: ' . implode(', ', array_keys($missing))
-            );
-        }
-
-        $compilerInputs = $this->readCompilerInputs($mirror);
-        ksort($expected, SORT_STRING);
-        $manifest = [];
-        foreach ($expected as $source => $entry) {
-            if ($this->digestFile($this->inside($mirror, $source), $source)
-                !== $entry['sourceSha256']
+        $inputs = $this->compilerInputs($mirror);
+        $targets = [];
+        $sources = [];
+        foreach ($manifest as $entry) {
+            if (!is_array($entry) || !is_string($entry['path'] ?? null)
+                || !is_string($entry['shadow'] ?? null)
             ) {
+                throw new ConfigurationException('upstream generator mapping is invalid');
+            }
+            $source = $entry['path'];
+            $shadow = $entry['shadow'];
+            $this->assertPath($source);
+            $this->assertPath($shadow);
+            if (!str_starts_with($shadow, '.typephp/build/') || isset($sources[$source])
+                || (isset($targets[$shadow]) && $targets[$shadow] !== ($entry['shadowSha256'] ?? null))
+            ) {
+                throw new ConfigurationException("invalid upstream generator mapping: {$source}");
+            }
+            $this->assertDigest($entry['sourceSha256'] ?? '');
+            $this->assertDigest($entry['shadowSha256'] ?? '');
+            if ($this->digest($mirror, $source) !== $entry['sourceSha256']) {
                 throw new ConfigurationException("upstream generator changed source: {$source}");
             }
-            $shadow = $entry['shadow'];
-            if (!isset($compilerInputs['sources'][$shadow])
-                || !isset($compilerInputs['ignore'][$source])
-            ) {
-                throw new ConfigurationException(
-                    "upstream generator compiler coverage is open: {$source} => {$shadow}"
-                );
+            if ($this->digest($mirror, $shadow) !== $entry['shadowSha256']) {
+                throw new ConfigurationException("upstream generator shadow drift: {$shadow}");
             }
-            $shadowPath = $this->inside($mirror, $shadow);
-            $entry['shadowSha256'] = $this->digestFile($shadowPath, $shadow);
             if (isset($entry['contractSha256'])
                 && (!is_string($entry['contractSha256']) || !hash_equals($entry['contractSha256'], $entry['shadowSha256']))
             ) {
                 throw new ConfigurationException('upstream generator shadow violates its source conversion contract: ' . $shadow);
             }
+            if (!isset($inputs['sources'][$shadow]) || !isset($inputs['ignore'][$source])) {
+                throw new ConfigurationException("upstream generator compiler coverage is open: {$source} => {$shadow}");
+            }
             try {
-                token_get_all((string) file_get_contents($shadowPath), TOKEN_PARSE);
+                token_get_all((string) file_get_contents($mirror . '/' . $shadow), TOKEN_PARSE);
             } catch (\ParseError $exception) {
-                throw new ConfigurationException(
-                    "upstream generator emitted invalid PHP: {$shadow}",
-                    previous: $exception
-                );
+                throw new ConfigurationException("upstream generator emitted invalid PHP: {$shadow}", previous: $exception);
             }
-            $manifest[] = [
-                'path' => $source,
-                'shadow' => $shadow,
-                'sourceSha256' => $entry['sourceSha256'],
-                'shadowSha256' => $entry['shadowSha256'],
-            ];
+            $targets[$shadow] = $entry['shadowSha256'];
+            $sources[$source] = true;
         }
-        return $manifest;
+        $actual = [];
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($generatedRoot, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if ($file->isLink()) {
+                throw new ConfigurationException('upstream generator output contains a symlink');
+            }
+            if ($file->isFile() && strtolower($file->getExtension()) === 'php') {
+                $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
+                $actual[$relative] = true;
+            }
+        }
+        if (array_diff_key($actual, $targets) !== [] || array_diff_key($targets, $actual) !== []) {
+            throw new ConfigurationException('upstream generator PHP output does not match actual source mappings');
+        }
+        return array_map(static fn(array $entry): array => [
+            'path' => $entry['path'],
+            'shadow' => $entry['shadow'],
+            'sourceSha256' => $entry['sourceSha256'],
+            'shadowSha256' => $entry['shadowSha256'],
+        ], $manifest);
     }
 
-    /**
-     * The pinned upstream generator owns SaiAdmin's larger compatibility matrix.
-     * Its declared source-to-shadow maps and business coverage manifest must
-     * account for every generated file; no inferred filename or wildcard is
-     * accepted. Project-specific hashes are captured after generation.
-     *
-     * @param array<string,array{shadow:string,sourceSha256:string,shadowSha256:string}> $expected
-     * @param array<string,true> $actual
-     */
-    private function includeSaiAdminGenerated(string $mirror, array &$expected, array $actual, array $sourceDigests, bool $saiAdminGenerated): void
+    /** @return array{sources:array<string,true>,ignore:array<string,true>} */
+    private function compilerInputs(string $mirror): array
     {
-        $generator = \Tinywan\Typephp\Compiler\ProjectGenerator::class;
-        $maps = [
-            'GUARDED_SOURCES',
-            'NULLABLE_STATIC_SOURCES',
-            'STRAY_BOOTSTRAP_SOURCES',
-            'PRELOAD_HINT_SOURCES',
-            'VARIADIC_HANDLER_SOURCES',
-            'SWITCH_TERMINAL_SOURCES',
-            'REF_CAPTURE_SOURCES',
-        ];
-        $declared = [];
-        foreach ($maps as $name) {
-            $rules = constant($generator . '::' . $name);
-            if (!is_array($rules)) {
-                throw new ConfigurationException("upstream SaiAdmin mapping is invalid: {$name}");
-            }
-            foreach ($rules as $source => $specification) {
-                $shadow = is_array($specification) ? ($specification[0] ?? null) : $specification;
-                $this->addSaiAdminDeclaration($declared, $source, $shadow);
-            }
-        }
-        foreach ((new $generator($mirror))->discoverProjectGuardedSources() as $source => $shadow) {
-            $this->addSaiAdminDeclaration($declared, $source, $shadow);
-        }
-        if ($saiAdminGenerated) {
-            $coveragePath = $mirror . '/.typephp/build/source-coverage.json';
-            $coverageContents = is_file($coveragePath) && !is_link($coveragePath)
-                ? file_get_contents($coveragePath)
-                : false;
-            if (!is_string($coverageContents)) {
-                throw new ConfigurationException('SaiAdmin generated business coverage is missing');
-            }
-            try {
-                $coverage = json_decode($coverageContents, true, flags: JSON_THROW_ON_ERROR);
-            } catch (\JsonException $exception) {
-                throw new ConfigurationException(
-                    'SaiAdmin generated business coverage is invalid',
-                    previous: $exception
-                );
-            }
-            if (!is_array($coverage)
-                || ($coverage['profile'] ?? null) !== 'saiadmin'
-                || !is_array($coverage['files'] ?? null)
-            ) {
-                throw new ConfigurationException('SaiAdmin generated business coverage shape drifted');
-            }
-            foreach ($coverage['files'] as $entry) {
-                if (!is_array($entry) || ($entry['mode'] ?? null) !== 'generated') {
-                    continue;
-                }
-                $source = $entry['path'] ?? null;
-                if (!is_string($source)
-                    || !preg_match('~^(app|support|plugin/[A-Za-z0-9_-]+)/(?:[A-Za-z0-9_./-]+)\.php$~D', $source)
-                ) {
-                    throw new ConfigurationException('SaiAdmin business shadow has an unsafe source');
-                }
-                $this->addSaiAdminDeclaration($declared, $source, $entry['compiled_path'] ?? null);
-            }
-        }
-        $compilerInputs = $this->readCompilerInputs($mirror);
-        foreach ($actual as $shadow => $_) {
-            $source = $declared[$shadow] ?? null;
-            if (is_string($source) && isset($expected[$source])) {
-                if ($expected[$source]['shadow'] !== $shadow) {
-                    throw new ConfigurationException(
-                        "SaiAdmin generated mapping conflicts with locked shadow: {$source}"
-                    );
-                }
-                continue;
-            }
-            if (!is_string($source)
-                || !isset($compilerInputs['sources'][$shadow])
-                || !isset($compilerInputs['ignore'][$source])
-            ) {
-                throw new ConfigurationException("undeclared SaiAdmin AOT replacement: {$shadow}");
-            }
-            $this->assertRelativePhp($source, 'source');
-            $this->assertRelativePhp($shadow, 'shadow');
-            $expected[$source] = [
-                'shadow' => $shadow,
-                'sourceSha256' => $sourceDigests[$source] ?? throw new ConfigurationException("upstream generator source was not present before generation: {$source}"),
-                'shadowSha256' => $this->digestFile($this->inside($mirror, $shadow), $shadow),
-            ];
-        }
-    }
-
-    /** @param array<string,string> $declared */
-    private function addSaiAdminDeclaration(array &$declared, mixed $source, mixed $shadow): void
-    {
-        if (!is_string($source) || !is_string($shadow)) {
-            throw new ConfigurationException('upstream SaiAdmin source mapping is invalid');
-        }
-        $this->assertRelativePhp($source, 'source');
-        $this->assertRelativePhp($shadow, 'shadow');
-        if (!str_starts_with($shadow, '.typephp/build/')
-            || (isset($declared[$shadow]) && $declared[$shadow] !== $source)
-        ) {
-            throw new ConfigurationException("upstream SaiAdmin shadow mapping drifted: {$shadow}");
-        }
-        $declared[$shadow] = $source;
-    }
-
-    /**
-     * @return array{sources:array<string,true>,ignore:array<string,true>}
-     */
-    private function readCompilerInputs(string $mirror): array
-    {
-        $path = $mirror . DIRECTORY_SEPARATOR . 'project.linux.yml';
-        $contents = is_file($path) && !is_link($path) ? file_get_contents($path) : false;
-        if (!is_string($contents)) {
+        $path = $mirror . '/project.linux.yml';
+        $project = is_file($path) && !is_link($path) ? file_get_contents($path) : false;
+        if (!is_string($project)) {
             throw new ConfigurationException('upstream generator compiler manifest is missing');
         }
-        $lists = ['sources' => [], 'ignore' => []];
+        $inputs = ['sources' => [], 'ignore' => []];
         $section = null;
-        foreach (explode("\n", str_replace("\r\n", "\n", $contents)) as $line) {
+        foreach (explode("\n", $project) as $line) {
             if ($line === 'sources:' || $line === 'ignore:') {
                 $section = substr($line, 0, -1);
-                continue;
-            }
-            if ($line !== '' && $line[0] !== ' ') {
+            } elseif ($line !== '' && $line[0] !== ' ') {
                 $section = null;
-            }
-            if ($section !== null && str_starts_with($line, '  - ')) {
+            } elseif ($section !== null && str_starts_with($line, '  - ')) {
                 $item = substr($line, 4);
-                if ($item === '' || isset($lists[$section][$item])) {
-                    throw new ConfigurationException(
-                        "upstream generator compiler manifest has invalid {$section} entries"
-                    );
+                if (str_starts_with($item, '"')) {
+                    $item = json_decode($item, true, flags: JSON_THROW_ON_ERROR);
                 }
-                $lists[$section][$item] = true;
+                if (!is_string($item) || $item === '' || isset($inputs[$section][$item])) {
+                    throw new ConfigurationException("invalid upstream generator {$section} entry");
+                }
+                $inputs[$section][$item] = true;
             }
         }
-        return $lists;
+        return $inputs;
     }
 
     /** @return array<string,string> */
     private function sourceDigests(string $mirror): array
     {
         $digests = [];
-        $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($mirror, \FilesystemIterator::SKIP_DOTS));
-        foreach ($files as $file) {
-            if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') { continue; }
-            $path = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
-            if ($path === 'main.php' || str_starts_with($path, '.typephp/build/')) { continue; }
-            $digests[$path] = $this->digestFile($this->inside($mirror, $path), $path);
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($mirror, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            if ($file->isLink()) {
+                throw new ConfigurationException('upstream generator source contains a symlink');
+            }
+            if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') {
+                continue;
+            }
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
+            if (!str_starts_with($relative, '.typephp/build/')) {
+                $digests[$relative] = $this->digest($mirror, $relative);
+            }
         }
         ksort($digests, SORT_STRING);
         return $digests;
     }
 
-    private function isBuildMirror(string $path): bool
+    private function assertPath(string $path): void
     {
-        return str_contains(
-            str_replace('\\', '/', $path),
-            '/.webman-aot-builder/build/'
-        );
-    }
-
-    /**
-     * @param array<string,array{version:string,reference:string}> $expected
-     */
-    private function assertPackages(string $mirror, array $expected): void
-    {
-        $lockPath = $mirror . DIRECTORY_SEPARATOR . 'composer.lock';
-        $contents = is_file($lockPath) && !is_link($lockPath)
-            ? file_get_contents($lockPath)
-            : false;
-        if (!is_string($contents) || $expected === []) {
-            throw new ConfigurationException('upstream generator dependency lock is missing');
-        }
-        try {
-            $lock = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException $exception) {
-            throw new ConfigurationException(
-                'upstream generator dependency lock is invalid',
-                previous: $exception
-            );
-        }
-        if (!is_array($lock)
-            || !is_array($lock['packages'] ?? null)
-            || !is_array($lock['packages-dev'] ?? [])
-        ) {
-            throw new ConfigurationException('upstream generator dependency lock is invalid');
-        }
-        $installed = [];
-        foreach (array_merge($lock['packages'], $lock['packages-dev'] ?? []) as $package) {
-            if (is_array($package) && is_string($package['name'] ?? null)) {
-                if (isset($installed[$package['name']])) {
-                    throw new ConfigurationException('upstream generator dependency lock contains duplicate package: ' . $package['name']);
-                }
-                $installed[$package['name']] = $package;
-            }
-        }
-        // Package labels are diagnostic evidence. The verified generator's
-        // conversion contracts determine support; per-run digests guard integrity.
-        foreach (array_keys($expected) as $name) {
-            $actual = $installed[$name] ?? null;
-            if (!is_array($actual)
-                || !is_string($actual['version'] ?? null)
-                || $actual['version'] === ''
-            ) {
-                throw new ConfigurationException("upstream generator dependency lock drift: {$name}");
-            }
-        }
-    }
-
-    private function assertRelativePhp(string $path, string $kind): void
-    {
-        if (preg_match('~^[A-Za-z0-9_./-]+\.php$~D', $path) !== 1
-            || str_starts_with($path, '/')
-            || str_contains($path, '//')
+        if (!str_ends_with(strtolower($path), '.php') || str_starts_with($path, '/')
+            || str_contains($path, '\\') || str_contains($path, '//')
             || in_array('..', explode('/', $path), true)
+            || preg_match('/[\x00-\x1f\x7f]/', $path) === 1
         ) {
-            throw new ConfigurationException("unsafe upstream generator {$kind} path: {$path}");
+            throw new ConfigurationException("unsafe upstream generator PHP path: {$path}");
         }
     }
 
-    private function assertDigest(string $sha256): void
+    private function assertDigest(string $digest): void
     {
-        if (preg_match('/^[a-f0-9]{64}$/D', $sha256) !== 1) {
+        if (preg_match('/^[a-f0-9]{64}$/D', $digest) !== 1) {
             throw new ConfigurationException('invalid upstream generator digest');
         }
     }
 
-    private function inside(string $mirror, string $relative): string
+    private function digest(string $mirror, string $relative): string
     {
-        $path = $mirror . DIRECTORY_SEPARATOR
-            . str_replace('/', DIRECTORY_SEPARATOR, $relative);
-        $real = realpath($path);
-        if (!is_string($real) || $real !== $path) {
-            throw new ConfigurationException("upstream generator path missing or unsafe: {$relative}");
-        }
-        return $path;
-    }
-
-    private function digestFile(string $path, string $relative): string
-    {
-        $digest = is_file($path) && !is_link($path) ? hash_file('sha256', $path) : false;
-        if (!is_string($digest)) {
+        $path = $mirror . '/' . $relative;
+        if (!is_file($path) || is_link($path) || realpath($path) !== $path) {
             throw new ConfigurationException("upstream generator file missing or unsafe: {$relative}");
         }
-        return $digest;
+        return (string) hash_file('sha256', $path);
     }
 }

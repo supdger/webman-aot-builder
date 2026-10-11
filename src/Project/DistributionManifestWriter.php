@@ -161,7 +161,7 @@ final class DistributionManifestWriter
                 throw new ConfigurationException("distribution input digest is invalid: {$key}");
             }
         }
-        if (!in_array($inputs['profile'] ?? null, ['webman', 'saiadmin'], true)
+        if (!in_array($inputs['profile'] ?? null, ['php', 'webman', 'saiadmin'], true)
             || !is_array($inputs['extensions'] ?? null)
             || !array_is_list($inputs['extensions'])
             || !is_array($inputs['arguments'] ?? null)

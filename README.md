@@ -4,7 +4,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Webman AOT Builder compiles Webman / SaiAdmin projects into fully static Linux amd64 executables.
+Webman AOT Builder compiles PHP projects, including Webman / SaiAdmin, into fully static Linux amd64 executables.
 Build on a macOS Apple Silicon or Windows x64 development machine, then deploy the entire generated `dist-aot/` directory to Linux. The target machine does not need PHP installed.
 
 The builder applies compatibility adjustments to a copy of your project and generates an executable using TypePHP, Clang, and the PHPx static SDK.
@@ -19,11 +19,11 @@ The current public packages are intended for development validation. Examples be
 
 ## Installation and getting started
 
-To build your own Webman / SaiAdmin project, use the [native setup](#option-2-native-installation-packages) or [Composer entry point](#option-1-composer). You do not need to download this repository. GitHub's **Code → Download ZIP** and **Source code** archives are for developers building the tool's installation packages themselves.
+To build your own PHP project, use the [native setup](#option-2-native-installation-packages) or [Composer entry point](#option-1-composer). You do not need to download this repository. GitHub's **Code → Download ZIP** and **Source code** archives are for developers building the tool's installation packages themselves.
 
 This repository and its source archives retain the files needed to build installation packages. Development tests, acceptance scripts, and release automation are maintained separately.
 
-You can install the tool without choosing a project yet. Before building, run `composer install` as required by your project to prepare `vendor/`, then select the backend root containing `composer.json`, `composer.lock`, `start.php`, and `app/`.
+You can install the tool without choosing a project yet. Before building, prepare dependencies as required by your project, then select its source root. Ordinary PHP projects need a global `main(): void` entry point; Composer, Webman/SaiAdmin, `app/`, and `start.php` are optional. Existing TypePHP `project.yml` sources and build options are accepted. Recognized Webman startup sources are adapted automatically; other input is passed to TypePHP, which determines whether it can compile.
 
 ### Option 1: Composer
 
@@ -111,11 +111,23 @@ webman-aot build
 webman-aot verify
 ```
 
-For SaiAdmin projects, use `webman-aot build --profile=saiadmin`. See [compatibility requirements](https://github.com/supdger/webman-aot-builder/wiki/Compatibility) and the [SaiAdmin guide](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin) for supported source structures, dependency capabilities, and compiler limitations.
+The legacy `--profile=webman` and `--profile=saiadmin` options remain accepted; framework identity and dependency versions do not qualify a project for compilation. See [compatibility requirements](https://github.com/supdger/webman-aot-builder/wiki/Compatibility) and the [SaiAdmin guide](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin) for supported source structures, dependency capabilities, and compiler limitations.
 
 Builds show the current stage and actual compilation counts. When no new output arrives, they show process status and elapsed waiting time. Failures retain the original cause, local log location, and recovery advice. By default, retries reuse completed units whose inputs and integrity checks pass; other units are recompiled. Every run still links and verifies artifacts again. `webman-aot build --fresh` recompiles everything without clearing the old cache. See the [build guide](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source) for detailed rules.
 
 Use the [upgrade and uninstall guide](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall) for upgrades and cleanup. The current entry point can query older installations and remove items individually once ownership is confirmed. Residue of unknown ownership is retained; complete cleanup of every old version is not guaranteed. Project source, artifacts, and PATH are preserved. Shared toolchains and logs under standalone installation roots are retained; toolchains, logs, and caches inside Composer's private runtime are removed with that runtime.
+
+For an ordinary PHP project, a minimal `main.php` is:
+
+```php
+<?php
+function main(): void
+{
+    echo "Hello from PHP\n";
+}
+```
+
+Run the build commands above from that directory. A successful build produces `dist-aot/server`; a TypePHP error retains its original diagnostic and fails the build. Source safety, compiler/SDK integrity, and complete business PHP coverage remain checked. Environment values and upload data are not copied into the distribution.
 
 ## Build output and deployment
 
