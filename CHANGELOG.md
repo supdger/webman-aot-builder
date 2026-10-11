@@ -2,6 +2,12 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## v0.4.10
+
+- 可读 PHP 源码按 TypePHP 的编译要求原样交给编译器；不再识别框架，不审查业务代码，不设置项目、框架、插件或依赖版本门槛，也不自动改写 PHP 源码。
+- 保留编译所需的前置条件及工具材料、目标 SDK、安全隔离和完整性检查；编译成功返回产物，编译失败保留 TypePHP 的原始错误，由编译器判断源码能否编译。
+- 沿用 0.4.9 的安装、升级、下载恢复与组件校验行为。Windows 实际编译、链接与正式发行状态以本版 Release 中的验证记录为准；不宣称用户项目或业务运行已通过。
+
 ## [v0.4.9](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.9)
 
 - 支持普通 PHP 项目与已有 TypePHP 入口，Composer、Webman/SaiAdmin 身份及固定 app/start.php 布局不再作为编译条件；旧 profile 选项继续接受，已识别的框架源码按实际能力适配。

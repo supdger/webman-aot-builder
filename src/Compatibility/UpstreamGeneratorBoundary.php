@@ -50,9 +50,6 @@ final class UpstreamGeneratorBoundary
             throw new ConfigurationException('upstream generator changed during execution');
         }
         $afterSources = $this->sourceDigests($mirror);
-        if (!isset($beforeSources['main.php'])) {
-            unset($afterSources['main.php']);
-        }
         if ($afterSources !== $beforeSources) {
             throw new ConfigurationException('upstream generator changed original PHP source inputs');
         }
@@ -204,7 +201,10 @@ final class UpstreamGeneratorBoundary
     private function digest(string $mirror, string $relative): string
     {
         $path = $mirror . '/' . $relative;
-        if (!is_file($path) || is_link($path) || realpath($path) !== $path) {
+        $canonical = realpath($path);
+        if (!is_file($path) || is_link($path) || !is_string($canonical)
+            || str_replace('\\', '/', $canonical) !== str_replace('\\', '/', $path)
+        ) {
             throw new ConfigurationException("upstream generator file missing or unsafe: {$relative}");
         }
         return (string) hash_file('sha256', $path);

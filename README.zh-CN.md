@@ -7,13 +7,10 @@
 Webman AOT Builder 将 PHP 项目（包括 Webman / SaiAdmin）编译成 Linux amd64 全静态程序。
 在 macOS Apple Silicon 或 Windows x64 开发机上构建，再把生成的整个 `dist-aot/` 部署到 Linux；目标机无需安装 PHP。
 
-构建器在项目副本中做兼容适配，通过 TypePHP、Clang 和 PHPx 静态 SDK 生成可执行程序。
+构建器枚举可读 PHP 源码，在隔离副本中保持每份 PHP 文件原样交给 TypePHP，再用 Clang 和 PHPx 静态 SDK 生成可执行程序。编译成功返回产物，失败保留 TypePHP 的原始编译错误。
 原项目源码保持不变，配置、模板和静态资源按需保留为外置文件。
 
-0.4.6 修复临时工作区清理与本任务进程收尾，持续外部占用仍明确失败。0.4.6 兼容修复保留普通 PHP 方法与调用合同，并修复已验证的 switch、Goto/finally 和 catch 局部值转换；本轮原生产锁完整编译、Linux x64 静态链接及构建宿主结构/完整性验收通过，Linux 原生应用与业务仍未验，不保证所有项目均可编译。兼容范围与限制见 [AOT 适配原理](https://github.com/supdger/webman-aot-builder/wiki/Adaptation)，发布与安装状态以 [最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest) 为准。
-当前发布版保留普通 PHP `toArray()` 的原签名、参数和动态返回合同，由编译器处理，不要求手改原项目或 `vendor/`。不适用的旧转换模板保留原文；已确认符合 Composer 惰性加载条件、未实际使用的可选声明延后处理，实际请求仍保留 PHP 原始加载错误。工具材料与输入输出完整性保持校验。源码构建、双平台包内专项与公开消费的实际范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
-
-![Webman AOT Builder 构建流程](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/build-flow.svg)
+工具链材料与输入输出完整性保持校验。当前编译边界和发布状态见[最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest)，历次实际验证范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
 
 当前公开包用于开发验证。安装、构建与产物校验的记录见下方示例；Linux 数据库、登录等完整业务仍需在自己的目标环境验收。
 
@@ -23,7 +20,14 @@ Webman AOT Builder 将 PHP 项目（包括 Webman / SaiAdmin）编译成 Linux a
 
 本仓库及源码压缩包保留制作安装包所需文件；开发测试、验收脚本与发布流程另行维护。
 
-只安装工具时可以暂不选择项目。要构建时，先按项目需要准备依赖，再选择源码根目录。普通 PHP 项目需要全局 `main(): void` 入口；Composer、Webman/SaiAdmin、`app/` 和 `start.php` 均非必要条件。已有 TypePHP `project.yml` 的源码与构建选项可以沿用；识别到的 Webman 启动源码自动适配，其他输入交由 TypePHP 判断能否编译。
+只安装工具时可以暂不选择项目。构建时选择可读 PHP 源码根目录，已有 TypePHP `project.yml` 的源码与构建选项可以沿用。编译只需要以下四个前置条件：
+
+1. 能读取待编译的 PHP 源码。
+2. TypePHP 编译器和目标平台工具链可用。
+3. 输出目录可写。
+4. 要生成可执行程序时，有明确入口；编译单个文件或库时按对应模式处理。
+
+当前工具的公开构建入口生成可执行程序；文件和库模式属于 TypePHP 的对应模式。可执行程序的入口由输入源码提供，例如全局 `main(): void`；入口和语言特性是否符合要求由 TypePHP 判定。构建器不识别框架、不检查依赖版本、不审查业务代码、不生成或改写 PHP 源码，不设置项目、框架、插件、目录布局或业务运行门槛。
 
 ### 方式一：Composer
 
@@ -111,7 +115,7 @@ webman-aot build
 webman-aot verify
 ```
 
-旧 `--profile=webman` 与 `--profile=saiadmin` 选项继续接受；框架身份与依赖版本不作为编译资格。适用源码形态、依赖能力和编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)及[SaiAdmin 指南](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin)。
+旧 `--profile=webman` 与 `--profile=saiadmin` 选项继续接受，只用于命令兼容，不选择源码适配。工具环境和编译器要求见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
 
 构建会显示当前阶段和真实编译计数；没有新输出时显示进程状态和已等待时间。失败保留原始原因、本机日志位置及恢复建议。重试默认复用输入与完整性校验通过的已完成单元，其余单元重新编译；每次仍重新链接并校验产物。`webman-aot build --fresh` 全量重编，不清空旧缓存。详细规则见[构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
