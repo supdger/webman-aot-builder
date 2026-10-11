@@ -1,1 +1,10 @@
 * text=auto eol=lf
+
+# Source archives retain build inputs, but omit development-only material.
+/.github export-ignore
+/openspec export-ignore
+/tests export-ignore
+/tools/test-* export-ignore
+/tools/fixtures export-ignore
+/packages/composer-installer/tests export-ignore
+/docs export-ignore
