@@ -112,7 +112,7 @@ final class TargetPhpCapabilities
 
     private function path(string $sdk, string $relative): string
     {
-        $path = $sdk . '/' . $relative;
+        $path = $sdk . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $relative);
         if (!is_file($path) || is_link($path) || realpath($path) !== $path) {
             throw new ConfigurationException("target PHP SDK metadata missing or unsafe: {$relative}");
         }

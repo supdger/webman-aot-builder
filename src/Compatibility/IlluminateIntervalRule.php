@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Compatibility;
 
-use WebmanAotBuilder\Cli\ConfigurationException;
-
 final class IlluminateIntervalRule
 {
     private const UNITS = ['microseconds', 'milliseconds', 'seconds', 'minutes', 'hours', 'days', 'weeks', 'months', 'years'];
@@ -14,8 +12,8 @@ final class IlluminateIntervalRule
     {
         try {
             $tokens = token_get_all($source, TOKEN_PARSE);
-        } catch (\ParseError $error) {
-            $this->fail('source', 'invalid PHP: ' . $error->getMessage());
+        } catch (\ParseError) {
+            return $source;
         }
         $offset = 0;
         $items = [];
@@ -30,7 +28,7 @@ final class IlluminateIntervalRule
         $namespace = null;
         foreach ($items as $index => $item) {
             if ($item['id'] === T_NAMESPACE) {
-                if ($namespace !== null) { $this->fail('source', 'multiple namespaces'); }
+                if ($namespace !== null) { return $source; }
                 $namespace = strtolower($items[$index + 1]['text'] ?? '');
             }
             if ($item['id'] !== T_USE
@@ -42,34 +40,34 @@ final class IlluminateIntervalRule
                 $intervalNames[] = strtolower($items[$index + 3]['text']);
             }
         }
-        if ($namespace !== 'illuminate\\support') { $this->fail('source', 'unexpected namespace'); }
+        if ($namespace !== 'illuminate\\support') { return $source; }
         $found = [];
         $edits = [];
         for ($index = 0; $index < count($items); ++$index) {
             if ($items[$index]['id'] !== T_FUNCTION) { continue; }
             $unit = strtolower($items[$index + 1]['text'] ?? '');
             if (!in_array($unit, self::UNITS, true)) { continue; }
-            if (isset($found[$unit])) { $this->fail($unit, 'duplicate helper'); }
+            if (isset($found[$unit])) { return $source; }
             $found[$unit] = true;
             $cursor = $index + 2;
-            if (($items[$cursor]['text'] ?? '') !== '(') { $this->fail($unit, 'invalid parameters'); }
+            if (($items[$cursor]['text'] ?? '') !== '(') { return $source; }
             $parameters = [];
             while (isset($items[++$cursor]) && $items[$cursor]['text'] !== ')') { $parameters[] = $items[$cursor]['text']; }
             $variables = array_values(array_filter($parameters, static fn(string $text): bool => str_starts_with($text, '$')));
             if (count($variables) !== 1 || !in_array(implode('', array_slice($parameters, 0, -1)), ['int', 'int|float', 'float|int'], true)
                 || end($parameters) !== $variables[0]
-            ) { $this->fail($unit, 'unsupported parameters'); }
+            ) { return $source; }
             $variable = $variables[0];
             $returnType = [];
             while (isset($items[++$cursor]) && $items[$cursor]['text'] !== '{') { $returnType[] = $items[$cursor]['text']; }
             if (($returnType[0] ?? null) !== ':' || !$this->isInterval(implode('', array_slice($returnType, 1)), $intervalNames)) {
-                $this->fail($unit, 'unsupported return type');
+                return $source;
             }
-            if (($items[++$cursor]['text'] ?? '') !== 'return') { $this->fail($unit, 'unsupported helper body'); }
+            if (($items[++$cursor]['text'] ?? '') !== 'return') { return $source; }
             $start = ++$cursor;
             $expression = [];
             while (isset($items[$cursor]) && $items[$cursor]['text'] !== ';') { $expression[] = $items[$cursor++]['text']; }
-            if (($items[$cursor + 1]['text'] ?? '') !== '}') { $this->fail($unit, 'unsupported helper body'); }
+            if (($items[$cursor + 1]['text'] ?? '') !== '}') { return $source; }
             $expression = $this->unwrap($expression);
             $constructor = $this->constructor($unit, $variable);
             if (($expression[0] ?? '') === 'new' && $this->isInterval($expression[1] ?? '', $intervalNames)
@@ -77,7 +75,7 @@ final class IlluminateIntervalRule
             ) { continue; }
             if (!$this->isInterval($expression[0] ?? '', $intervalNames) || ($expression[1] ?? '') !== '::'
                 || ($expression[3] ?? '') !== '(' || end($expression) !== ')'
-            ) { $this->fail($unit, 'unsupported interval expression'); }
+            ) { return $source; }
             $methodName = $expression[2];
             $method = strtolower($methodName);
             $arguments = array_slice($expression, 4, -1);
@@ -97,7 +95,7 @@ final class IlluminateIntervalRule
                 && in_array(strtolower($arguments[0]), ["'{$unit}'", '"' . $unit . '"'], true)
                 && array_slice($arguments, 1) === [',', '[', $variable, ']']
             ) { continue; }
-            if ($method !== $unit || $arguments !== [$variable]) { $this->fail($unit, 'unsupported interval arguments'); }
+            if ($method !== $unit || $arguments !== [$variable]) { return $source; }
             $replacement = $expression[0] . "::__callStatic('{$methodName}', [{$variable}])";
             $original = substr($source, $items[$start]['offset'], $items[$cursor]['offset'] - $items[$start]['offset']);
             foreach (token_get_all('<?php ' . $original) as $part) {
@@ -107,7 +105,7 @@ final class IlluminateIntervalRule
             }
             $edits[] = [$items[$start]['offset'], $items[$cursor]['offset'], $replacement];
         }
-        foreach (self::UNITS as $unit) { if (!isset($found[$unit])) { $this->fail($unit, 'missing helper'); } }
+        foreach (self::UNITS as $unit) { if (!isset($found[$unit])) { return $source; } }
         foreach (array_reverse($edits) as [$start, $end, $replacement]) {
             $source = substr_replace($source, $replacement, $start, $end - $start);
         }
@@ -141,11 +139,5 @@ final class IlluminateIntervalRule
         $arguments = array_fill(0, $position, '0');
         $arguments[] = $unit === 'milliseconds' ? $variable . '*1000' : $variable;
         return 'new CarbonInterval(' . implode(',', $arguments) . ')';
-    }
-
-    private function fail(string $unit, string $reason): never
-    {
-        throw new ConfigurationException('Illuminate support interval compatibility in vendor/illuminate/support/functions.php: '
-            . $unit . ': ' . $reason);
     }
 }
