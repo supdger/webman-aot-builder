@@ -7,13 +7,10 @@
 Webman AOT Builder compiles PHP projects, including Webman / SaiAdmin, into fully static Linux amd64 executables.
 Build on a macOS Apple Silicon or Windows x64 development machine, then deploy the entire generated `dist-aot/` directory to Linux. The target machine does not need PHP installed.
 
-The builder applies compatibility adjustments to a copy of your project and generates an executable using TypePHP, Clang, and the PHPx static SDK.
+The builder enumerates readable PHP sources and passes an unchanged, isolated copy of each PHP file to TypePHP, then generates an executable using Clang and the PHPx static SDK. It returns the artifact on success or preserves TypePHP's original compilation errors on failure.
 Your original source code stays unchanged. Configuration, templates, and static assets remain external files as needed.
 
-0.4.6 fixes temporary workspace cleanup and process cleanup for the current task; persistent external locks still cause an explicit failure. Its compatibility fixes preserve ordinary PHP method and call contracts and correct the verified transformations of switch, Goto/finally, and local values in catch blocks. Full compilation with the original production lock, Linux x64 static linking, and build-host structure and integrity checks passed in that round. Native Linux application and business checks remain unverified; successful compilation is not guaranteed for every project. See [AOT adaptation](https://github.com/supdger/webman-aot-builder/wiki/Adaptation) for compatibility scope and limits, and the [latest release](https://github.com/supdger/webman-aot-builder/releases/latest) for release and installation status.
-The current release preserves the original signature, arguments, and dynamic return contract of ordinary PHP `toArray()` methods, leaving them to the compiler; no manual changes to your project or `vendor/` are required. Old transformation templates that do not apply are left unchanged. Unused optional declarations confirmed to meet Composer lazy-loading conditions are deferred; actual requests retain PHP's original loading errors. Tool materials and input/output integrity remain checked. See the [test and verification records](https://github.com/supdger/webman-aot-builder/wiki/Verification) for the actual scope of source builds, targeted checks inside both platform packages, and public consumption checks.
-
-![Webman AOT Builder build workflow](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/build-flow-en.svg)
+Toolchain materials and input/output integrity remain checked. See the [latest release](https://github.com/supdger/webman-aot-builder/releases/latest) for the compilation boundary and release status, and the [test and verification records](https://github.com/supdger/webman-aot-builder/wiki/Verification) for the actual scope of past checks.
 
 The current public packages are intended for development validation. Examples below record installation, builds, and artifact verification; full Linux business flows, including databases and login, still need acceptance checks in your own target environment.
 
@@ -23,7 +20,14 @@ To build your own PHP project, use the [native setup](#option-2-native-installat
 
 This repository and its source archives retain the files needed to build installation packages. Development tests, acceptance scripts, and release automation are maintained separately.
 
-You can install the tool without choosing a project yet. Before building, prepare dependencies as required by your project, then select its source root. Ordinary PHP projects need a global `main(): void` entry point; Composer, Webman/SaiAdmin, `app/`, and `start.php` are optional. Existing TypePHP `project.yml` sources and build options are accepted. Recognized Webman startup sources are adapted automatically; other input is passed to TypePHP, which determines whether it can compile.
+You can install the tool without choosing a project yet. To build, select the readable PHP source root. Existing TypePHP `project.yml` sources and build options are accepted. Compilation has only four prerequisites:
+
+1. The PHP source to compile is readable.
+2. TypePHP and the target platform toolchain are available.
+3. The output directory is writable.
+4. Executable builds have an explicit entrypoint; individual files and libraries follow their corresponding compilation modes.
+
+The tool's current public build entry produces executables; file and library modes belong to TypePHP's corresponding modes. The input source supplies the executable entrypoint, such as a global `main(): void`. TypePHP decides whether the entrypoint and language features meet its requirements. The builder does not identify frameworks, check dependency versions, review business code, generate or rewrite PHP source, or impose project, framework, plugin, directory layout, or business startup requirements.
 
 ### Option 1: Composer
 
@@ -111,7 +115,7 @@ webman-aot build
 webman-aot verify
 ```
 
-The legacy `--profile=webman` and `--profile=saiadmin` options remain accepted; framework identity and dependency versions do not qualify a project for compilation. See [compatibility requirements](https://github.com/supdger/webman-aot-builder/wiki/Compatibility) and the [SaiAdmin guide](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin) for supported source structures, dependency capabilities, and compiler limitations.
+The legacy `--profile=webman` and `--profile=saiadmin` options remain accepted for command compatibility and do not select source adaptations. See [compatibility requirements](https://github.com/supdger/webman-aot-builder/wiki/Compatibility) for tool environment and compiler requirements.
 
 Builds show the current stage and actual compilation counts. When no new output arrives, they show process status and elapsed waiting time. Failures retain the original cause, local log location, and recovery advice. By default, retries reuse completed units whose inputs and integrity checks pass; other units are recompiled. Every run still links and verifies artifacts again. `webman-aot build --fresh` recompiles everything without clearing the old cache. See the [build guide](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source) for detailed rules.
 

@@ -175,9 +175,6 @@ final class ProjectMirror
                 if ($entry->isLink()) {
                     throw new ConfigurationException("project mirror refuses symlink: {$relative}");
                 }
-                if ($entry->isFile()) {
-                    RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $relative);
-                }
                 return true;
             }
         );

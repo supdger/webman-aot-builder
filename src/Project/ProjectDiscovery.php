@@ -33,7 +33,7 @@ final class ProjectDiscovery
         }
         RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
         $sourceInputs = $useRecordedInputs ? $this->sourceInputs() : null;
-        $explicitSources = $this->explicitSources();
+        $explicitSources = [];
         $files = [];
         $this->scanRoot($files, $sourceInputs, $explicitSources);
         foreach ($sourceInputs ?? [] as $path => $present) {
@@ -104,7 +104,6 @@ final class ProjectDiscovery
                 continue;
             }
             $path = $this->relative($entry->getPathname());
-            RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $path);
             $category = $this->classify($path, $explicitSources);
             $record = [
                 'path' => $path,
@@ -181,66 +180,9 @@ final class ProjectDiscovery
         $basename = basename($normalized);
         if ($basename === '.ds_store'
             || preg_match('/^(?:readme|license|changelog|notice)(?:\.(?:md|txt|rst))?$/D', $basename) === 1
-            || in_array($normalized, ['composer.json', 'composer.lock', 'project.linux.yml', 'vendor/autoload.php'], true)
-            || preg_match('#^vendor/composer/[^/]+\.php$#D', $normalized) === 1
+            || in_array($normalized, ['composer.json', 'composer.lock', 'project.linux.yml'], true)
         ) {
             return self::SOURCE_METADATA;
-        }
-        $dynamicDigest = $this->dynamicPhp[$path] ?? null;
-        if (str_starts_with($path, 'vendor/')
-            && is_string($dynamicDigest)
-            && preg_match('/^[a-f0-9]{64}$/D', $dynamicDigest) === 1
-            && hash_file('sha256', $this->absolute($path)) === $dynamicDigest
-        ) {
-            return self::THIRD_PARTY_DYNAMIC_PHP;
-        }
-        if (str_starts_with($normalized, 'vendor/saithink/saiadmin/src/plugin/saiadmin/')
-            || str_starts_with($normalized, 'vendor/saithink/saiadmin/src/orm/')
-        ) {
-            return self::INSTALL_ONLY;
-        }
-        if (in_array($normalized, [
-            'vendor/workerman/webman-framework/src/install.php',
-            'vendor/workerman/webman-framework/src/start.php',
-            'vendor/workerman/webman-framework/src/windows.php',
-            'vendor/workerman/webman-framework/src/support/plugin.php',
-        ], true)
-            || preg_match('#^plugin/[^/]+/(?:install\.php|db/)#D', $normalized) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/(?:install\.php|db/)#D',
-                $normalized
-            ) === 1
-        ) {
-            return self::INSTALL_ONLY;
-        }
-        if (str_starts_with($normalized, 'config/')
-            || preg_match('#^plugin/[^/]+/config/#D', $normalized) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/config/#D',
-                $normalized
-            ) === 1
-        ) {
-            return $this->phpResourceCategory($path, self::CONFIG, $explicitSources);
-        }
-        if (preg_match('#^(?:app/)?(?:view|views|template|templates)/#D', $normalized) === 1
-            || preg_match(
-                '#^plugin/[^/]+/app/(?:view|views|template|templates)/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^plugin/[^/]+/utils/code/stub/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/app/(?:view|views|template|templates)/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/utils/code/stub/#D',
-                $normalized
-            ) === 1
-        ) {
-            return $this->phpResourceCategory($path, self::TEMPLATE, $explicitSources);
         }
         if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
             return self::BUSINESS_PHP;
@@ -249,144 +191,8 @@ final class ProjectDiscovery
         return self::STATIC_ASSET;
     }
 
-    /** @param list<string> $explicitSources */
-    private function phpResourceCategory(string $path, string $category, array $explicitSources): string
-    {
-        if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php'
-            && ($this->hasDeclarations($path) || $this->isExplicitSource($path, $explicitSources))
-        ) {
-            return self::BUSINESS_PHP;
-        }
-        return $category;
-    }
-
-    private function hasDeclarations(string $path): bool
-    {
-        $source = file_get_contents($this->absolute($path));
-        if (!is_string($source)) {
-            throw new ConfigurationException("unable to read project PHP: {$path}");
-        }
-        $tokens = token_get_all($source);
-        $previous = null;
-        foreach ($tokens as $index => $token) {
-            if (is_array($token) && in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
-                continue;
-            }
-            if (is_array($token)) {
-                if (in_array($token[0], [T_INTERFACE, T_TRAIT, T_ENUM], true)
-                    || ($token[0] === T_CLASS
-                        && (!is_array($previous) || $previous[0] !== T_DOUBLE_COLON))
-                ) {
-                    return true;
-                }
-                if ($token[0] === T_FUNCTION) {
-                    for ($next = $index + 1; isset($tokens[$next]); ++$next) {
-                        $candidate = $tokens[$next];
-                        if ((is_array($candidate)
-                                && in_array($candidate[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true))
-                            || (is_array($candidate) && $candidate[1] === '&')
-                            || $candidate === '&'
-                        ) {
-                            continue;
-                        }
-                        if (is_array($candidate) && $candidate[0] === T_STRING) {
-                            for ($afterName = $next + 1; isset($tokens[$afterName]); ++$afterName) {
-                                $following = $tokens[$afterName];
-                                if (is_array($following)
-                                    && in_array($following[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)
-                                ) {
-                                    continue;
-                                }
-                                if ($following === '(') {
-                                    return true;
-                                }
-                                break;
-                            }
-                        }
-                        break;
-                    }
-                }
-            }
-            $previous = $token;
-        }
-        return false;
-    }
-
-    /** @param list<string> $sources */
-    private function isExplicitSource(string $path, array $sources): bool
-    {
-        foreach ($sources as $source) {
-            if ($source === '.' || $path === $source || str_starts_with($path, $source . '/')) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** @return list<string> */
-    private function explicitSources(): array
-    {
-        $path = $this->absolute('project.linux.yml');
-        if (is_link($path)) {
-            throw new ConfigurationException('project discovery refuses symlink: project.linux.yml');
-        }
-        if (!is_file($path)) {
-            return [];
-        }
-        $manifest = file_get_contents($path);
-        if (!is_string($manifest)) {
-            throw new ConfigurationException('unable to read project compiler sources');
-        }
-        $sources = [];
-        $inSources = false;
-        foreach (explode("\n", $manifest) as $line) {
-            if (rtrim($line) === 'sources:') {
-                $inSources = true;
-                continue;
-            }
-            if ($line !== '' && $line[0] !== ' ' && $line[0] !== "\t") {
-                $inSources = false;
-            }
-            if (!$inSources || preg_match('/^\s+-\s+(.+?)\s*$/D', $line, $matches) !== 1) {
-                continue;
-            }
-            $source = $matches[1];
-            if (str_starts_with($source, '"')) {
-                $source = json_decode($source, true);
-            } elseif (str_starts_with($source, "'")) {
-                $source = str_ends_with($source, "'")
-                    ? str_replace("''", "'", substr($source, 1, -1)) : null;
-            }
-            if (!is_string($source)) {
-                throw new ConfigurationException('project compiler source entry is invalid');
-            }
-            while (str_starts_with($source, './')) {
-                $source = substr($source, 2);
-            }
-            $source = rtrim($source, '/');
-            if ($source === '' || str_contains($source, '\\')
-                || str_starts_with($source, '/') || preg_match('/^[A-Za-z]:/', $source) === 1
-                || in_array('..', explode('/', $source), true)
-                || ($source !== '.' && in_array('.', explode('/', $source), true))
-            ) {
-                throw new ConfigurationException('project compiler source entry is unsafe');
-            }
-            $sources[] = $source;
-        }
-        return $sources;
-    }
-
     private function owner(string $path): string
     {
-        if (str_starts_with($path, 'vendor/workerman/webman-framework/src/')) {
-            return 'webman-core';
-        }
-        if (preg_match('#^plugin/([^/]+)/#D', $path, $matches) === 1) {
-            return 'plugin:' . $matches[1];
-        }
-        if (preg_match('#^vendor/([^/]+/[^/]+)/#D', $path, $matches) === 1) {
-            return 'dependency:' . $matches[1];
-        }
         return 'project';
     }
 

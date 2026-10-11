@@ -62,9 +62,6 @@ final class SourceTreeSnapshot
                     );
                 }
 
-                if ($entry->isFile()) {
-                    RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $relative);
-                }
                 return true;
             }
         );
