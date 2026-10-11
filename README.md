@@ -19,6 +19,8 @@ The current public packages are intended for development validation. Examples be
 
 ## Installation and getting started
 
+To build your own Webman / SaiAdmin project, use the [native setup](#option-2-native-installation-packages) or [Composer entry point](#option-1-composer). You do not need to download this repository. GitHub's **Code → Download ZIP** and **Source code** archives are for developers building the tool's installation packages themselves.
+
 You can install the tool without choosing a project yet. Before building, run `composer install` as required by your project to prepare `vendor/`, then select the backend root containing `composer.json`, `composer.lock`, `start.php`, and `app/`.
 
 ### Option 1: Composer
@@ -92,7 +94,7 @@ Select a lightweight or full package in the menu, review the installation locati
 
 See the [installation guide](https://github.com/supdger/webman-aot-builder/wiki/Install) for both platforms' launch commands, entry-point checks, and complete installation steps. If macOS blocks the first launch, follow that page to verify the source and checksums, then complete the system confirmation.
 
-### Option 3: Build installation packages from source
+### Option 3: For developers building installation packages from source
 
 Download **Source code (zip)** from the [latest stable release](https://github.com/supdger/webman-aot-builder/releases/latest), extract the entire archive, and enter the tool source root containing `build.command` and `build.cmd`. On Mac, run `sh ./build.command`; in Windows PowerShell, run `.\build.cmd`.
 
@@ -154,7 +156,7 @@ This successful record establishes the Windows build and local artifact verifica
 
 The user's real-machine record shows build completion, artifact verification, and the `dist-aot/` location. The image below preserves the operation's result and represents local verification of that project.
 
-![Successful macOS build and local artifact verification](docs/images/macos-build-success.png)
+![Successful macOS build and local artifact verification](https://raw.githubusercontent.com/supdger/webman-aot-builder/main/docs/images/macos-build-success.png)
 
 Existing user records also report successful artifact startup on Linux, but HTTP, database, and business API acceptance checks remain incomplete. See the [test and verification records](https://github.com/supdger/webman-aot-builder/wiki/Verification) for Linux startup records and the scope of other platform and resumed-build checks.
 

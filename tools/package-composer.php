@@ -79,7 +79,7 @@ try {
     if (!is_resource($process) || proc_close($process) !== 0) {
         throw new RuntimeException('Composer archive failed.');
     }
-    $expected = ['LICENSE', 'README.md', 'composer.json', 'packages/composer-installer/bin/webman-aot',
+    $expected = ['LICENSE', 'README.md', 'README.zh-CN.md', 'composer.json', 'packages/composer-installer/bin/webman-aot',
         'packages/composer-installer/resources/extract-windows.ps1', 'packages/composer-installer/resources/releases.json',
         'packages/composer-installer/resources/uninstall-launchers.json', 'packages/composer-installer/src/Uninstaller.php',
         'packages/composer-installer/src/Archive.php', 'packages/composer-installer/src/Console.php', 'packages/composer-installer/src/Installer.php', 'packages/composer-installer/src/Plugin.php', 'packages/composer-installer/src/Process.php'];
