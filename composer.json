@@ -20,9 +20,6 @@
       "Supdger\\WebmanAotInstaller\\": "packages/composer-installer/src/"
     }
   },
-  "scripts": {
-    "test": "@php packages/composer-installer/tests/run.php"
-  },
   "archive": {
     "exclude": [
       "/.git",
@@ -56,6 +53,6 @@
   },
   "dist": {
     "type": "zip",
-    "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.7/webman-aot-builder-0.4.7-composer.zip"
+    "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.8/webman-aot-builder-0.4.8-composer.zip"
   }
 }

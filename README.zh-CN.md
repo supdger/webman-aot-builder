@@ -156,7 +156,7 @@ Successfully compiled 216 files
 
 用户实机记录展示了构建完成、产物校验及 `dist-aot/` 位置。下图保留操作结果；它代表这次项目的本机验证。
 
-![macOS 实机构建与本机产物校验成功](https://raw.githubusercontent.com/supdger/webman-aot-builder/main/docs/images/macos-build-success.png)
+![macOS 实机构建与本机产物校验成功](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/macos-build-success.png)
 
 已有用户记录也报告产物在 Linux 启动成功，但 HTTP、数据库和业务接口仍未验收。Linux 启动记录、其他平台与续编的测试范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
 

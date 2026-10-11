@@ -156,7 +156,7 @@ This successful record establishes the Windows build and local artifact verifica
 
 The user's real-machine record shows build completion, artifact verification, and the `dist-aot/` location. The image below preserves the operation's result and represents local verification of that project.
 
-![Successful macOS build and local artifact verification](https://raw.githubusercontent.com/supdger/webman-aot-builder/main/docs/images/macos-build-success.png)
+![Successful macOS build and local artifact verification](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/macos-build-success.png)
 
 Existing user records also report successful artifact startup on Linux, but HTTP, database, and business API acceptance checks remain incomplete. See the [test and verification records](https://github.com/supdger/webman-aot-builder/wiki/Verification) for Linux startup records and the scope of other platform and resumed-build checks.
 
