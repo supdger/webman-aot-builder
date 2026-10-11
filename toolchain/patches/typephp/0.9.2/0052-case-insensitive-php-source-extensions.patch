@@ -1,0 +1,22 @@
+--- a/src/Build/FileScanner.php
++++ b/src/Build/FileScanner.php
+@@ -49,7 +49,7 @@
+ 
+     public static function isPhpFile(string $file): bool
+     {
+-        return in_array(self::getFileExt($file), self::PHP_EXT);
++        return in_array(strtolower(self::getFileExt($file)), self::PHP_EXT, true);
+     }
+ 
+     public static function isCppFile(string $file): bool
+--- a/src/Build/SourcePipelineTrait.php
++++ b/src/Build/SourcePipelineTrait.php
+@@ -505,7 +505,7 @@
+         if ($extension === 'yml' || $extension === 'yaml') {
+             return $this->parseProjectYaml($path);
+         }
+-        if ($extension === 'php') {
++        if (strtolower($extension) === 'php') {
+             // Single-file mode: no YAML parsing
+             $this->setTargetName(FileScanner::getFileName($path));
+             $this->sourceDirs[] = dirname($path);

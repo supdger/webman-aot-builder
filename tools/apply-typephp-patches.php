@@ -71,7 +71,7 @@ try {
     }
     if ($alreadyApplied) {
         fwrite(STDOUT, json_encode(['component' => 'typephp-source', 'version' => $manifest['version'],
-            'patches' => 51, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
+            'patches' => 52, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
         exit(0);
     }
 
@@ -147,6 +147,7 @@ try {
         '0049-goto-safe-expression-temporaries.patch',
         '0050-foreach-list-local-value-storage.patch',
         '0051-switch-selector-value-lifetime.patch',
+        '0052-case-insensitive-php-source-extensions.patch',
     ] as $patch) {
         $applier->apply($patchDirectory . '/' . $patch, $typephp);
     }
@@ -166,7 +167,7 @@ try {
             [
                 'component' => 'typephp-source',
                 'version' => $manifest['version'],
-                'patches' => 51,
+                'patches' => 52,
                 'rules' => count($rules),
                 'status' => 'applied-and-verified',
             ],
