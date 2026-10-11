@@ -116,7 +116,7 @@ final class RuntimeDataPaths
         $links = [];
         $cycles = [];
         $walk = static function (string $directory, string $prefix, array $ancestors) use (
-            &$walk, &$files, &$links, &$cycles, $excludedPaths, $distributionFiles, $generatedFiles, $generationPrefix, $originalInputs, $regularPath, &$unreadable
+            &$walk, &$files, &$links, &$cycles, $distributionFiles, $generatedFiles, $generationPrefix, $originalInputs, $regularPath, &$unreadable
         ): void {
             $identity = realpath($directory);
             if (!is_string($identity)) {
@@ -139,18 +139,8 @@ final class RuntimeDataPaths
                 $path = $prefix === '' ? $entry->getFilename() : $prefix . '/' . $entry->getFilename();
                 $top = explode('/', $path, 2)[0];
                 $php = strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php';
-                $excluded = false;
-                foreach ($excludedPaths as $excludedPath) {
-                    if ($excludedPath !== '.git') {
-                        continue;
-                    }
-                    if ($path === $excludedPath || str_starts_with($path, $excludedPath . '/')) {
-                        $excluded = true;
-                        break;
-                    }
-                }
-                if ($excluded
-                    || $entry->getFilename() === '.DS_Store'
+                if ($entry->getFilename() === '.DS_Store'
+                    || ($top === '.git' && !$entry->isDir() && !$php)
                     || ($top === '.webman-aot-builder' && !$entry->isDir() && !$php)
                     || (self::isWritableDataPath($path) && !$entry->isDir() && !$php)
                     || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1 && !$php)
