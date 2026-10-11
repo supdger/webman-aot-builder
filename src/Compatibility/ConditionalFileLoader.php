@@ -5,12 +5,128 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Project\ProjectMirror;
 use WebmanAotBuilder\Project\ProjectDiscovery;
 
 final class ConditionalFileLoader
 {
     /** Select declaration-only fallback files from actual Composer autoload guards. */
     public function apply(string $mirror, array $files, array $existing): array
+    {
+        $directory = ProjectMirror::generationSourceDirectory($mirror);
+        if ($directory === null) { return []; }
+        $relative = substr($directory, strlen($mirror) + 1);
+        [$plans, $types, $replaced, $fallbackPaths] = $this->selectionPlans($mirror, $files, $existing);
+        $mappings = [];
+        $selected = $replaced;
+        foreach ($plans as $loader => $guards) {
+            $choices = [];
+            foreach ($guards as $guard) {
+                $definitions = array_values(array_unique($types[$guard['name']][$guard['kind']] ?? []));
+                $primary = array_values(array_filter($definitions, static fn(string $path): bool => !isset($fallbackPaths[$path])));
+                if (count($primary) === 1
+                    && $this->pureDeclarations($this->read($mirror . '/' . ($replaced[$primary[0]] ?? $primary[0])), new ConditionalDeclarationSelector()) === [$guard['name'] => $guard['kind']]
+                ) {
+                    $choices[] = ['fallback' => $guard['fallback'], 'active' => $primary[0]];
+                } elseif ($primary === [] && $definitions === [$guard['fallback']]) {
+                    $choices[] = ['fallback' => $guard['fallback'], 'active' => $guard['fallback']];
+                } else {
+                    $choices = [];
+                    break;
+                }
+            }
+            if ($choices === []) {
+                continue;
+            }
+            $known = true;
+            foreach ($choices as $choice) {
+                $active = $choice['active'];
+                $fallback = $choice['fallback'];
+                if ($active === $fallback || isset($selected[$fallback]) || isset($selected[$active])) { continue; }
+                $mapping = $this->mapping($mirror, $fallback, $active);
+                $mapping['sourceAlias'] = ['rule' => 'conditional-declaration-loader.v1',
+                    'loader' => $loader, 'loaderSha256' => hash('sha256', $this->read($mirror . '/' . $loader)),
+                    'primary' => $active];
+                if (!$this->validateSourceAlias($mirror, $mapping)) { $known = false; break; }
+            }
+            if (!$known) { continue; }
+            foreach ($choices as $choice) {
+                $active = $choice['active'];
+                $fallback = $choice['fallback'];
+                if ($active === $fallback) {
+                    continue;
+                }
+                if (!isset($selected[$active])) {
+                    // The primary is already a compiler input; retain its file scope.
+                    $selected[$active] = $active;
+                }
+                if (!isset($selected[$fallback])) {
+                    $mapping = $this->mapping($mirror, $fallback, $selected[$active]);
+                    if ($selected[$active] === $active) {
+                        $mapping['sourceAlias'] = ['rule' => 'conditional-declaration-loader.v1',
+                            'loader' => $loader, 'loaderSha256' => hash('sha256', $this->read($mirror . '/' . $loader)),
+                            'primary' => $active];
+                    }
+                    $mappings[] = $mapping;
+                    $selected[$fallback] = $selected[$active];
+                }
+            }
+            $shadow = $relative . '/conditional-loader-' . hash('sha256', $loader) . '.php';
+            $this->write($mirror . '/' . $shadow, "<?php\n");
+            $mappings[] = $this->mapping($mirror, $loader, $shadow);
+            fwrite(STDERR, "[adapt] selected conditional declaration loader {$loader}\n");
+        }
+        return $mappings;
+    }
+
+    /** Revalidate a known inactive fallback against immutable original mirror inputs. */
+    public function validateSourceAlias(string $mirror, array $mapping): bool
+    {
+        $proof = $mapping['sourceAlias'] ?? null;
+        if (!is_array($proof) || ($proof['rule'] ?? null) !== 'conditional-declaration-loader.v1'
+            || !is_string($proof['loader'] ?? null) || !is_string($proof['loaderSha256'] ?? null)
+            || !is_string($proof['primary'] ?? null) || ($mapping['shadow'] ?? null) !== $proof['primary']
+            || !is_string($mapping['path'] ?? null) || $mapping['path'] === $proof['primary']
+        ) { return false; }
+        $inputFile = ProjectMirror::sourceInputManifestPath($mirror);
+        if ($inputFile === null) { return false; }
+        $inputs = json_decode($this->read($inputFile), true);
+        if (!is_array($inputs['digests'] ?? null)) { throw new ConfigurationException('conditional loader original input record is invalid'); }
+        foreach ([$mapping['path'] => $mapping['sourceSha256'] ?? null,
+            $proof['primary'] => $mapping['shadowSha256'] ?? null,
+            $proof['loader'] => $proof['loaderSha256']] as $path => $digest
+        ) {
+            if (!is_string($digest) || ($inputs['digests'][$path] ?? null) !== $digest) { return false; }
+        }
+        $files = [];
+        foreach ($inputs['digests'] as $path => $digest) {
+            if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'php' && basename($path) !== 'composer.json') { continue; }
+            if (hash('sha256', $this->read($mirror . '/' . $path)) !== $digest) {
+                throw new ConfigurationException('conditional loader original source evidence drifted: ' . $path);
+            }
+            if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
+                $files[] = ['path' => $path, 'category' => ProjectDiscovery::BUSINESS_PHP];
+            }
+        }
+        try { [$plans, $types] = $this->selectionPlans($mirror, $files, []); }
+        catch (SourceShapeMismatch | \ParseError) { return false; }
+        $fallbacks = [];
+        foreach ($plans as $guards) { foreach ($guards as $guard) { $fallbacks[$guard['fallback']] = true; } }
+        $matched = false;
+        foreach ($plans[$proof['loader']] ?? [] as $guard) {
+            $definitions = array_values(array_unique($types[$guard['name']][$guard['kind']] ?? []));
+            $primary = array_values(array_filter($definitions, static fn(string $path): bool => !isset($fallbacks[$path])));
+            if ($primary === [] && $definitions === [$guard['fallback']]) { continue; }
+            if (count($primary) !== 1
+                || $this->pureDeclarations($this->read($mirror . '/' . $primary[0]), new ConditionalDeclarationSelector()) !== [$guard['name'] => $guard['kind']]
+            ) { return false; }
+            if ($guard['fallback'] === $mapping['path'] && $primary === [$proof['primary']]) { $matched = true; }
+        }
+        return $matched;
+    }
+
+    /** Source-only selection proof; no compiler outputs or metadata are written. */
+    private function selectionPlans(string $mirror, array $files, array $existing): array
     {
         $sources = [];
         $loaders = $this->registeredLoaders($mirror);
@@ -20,8 +136,20 @@ final class ConditionalFileLoader
         foreach ($files as $file) {
             if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
                 $source = $this->read($mirror . '/' . ($replaced[$file['path']] ?? $file['path']));
+                try { token_get_all($source, TOKEN_PARSE); }
+                catch (\ParseError) { return [[], [], $replaced, []]; }
                 $sources[$file['path']] = $source;
-                foreach ($selector->declarations($source) as $name => $kind) {
+                $declared = $selector->declarations($source);
+                $named = 0;
+                $tokens = token_get_all($source);
+                foreach ($tokens as $index => $token) {
+                    if (!is_array($token) || !in_array($token[0], [T_CLASS, T_INTERFACE], true)) { continue; }
+                    do { $next = $tokens[++$index] ?? null; }
+                    while (is_array($next) && in_array($next[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true));
+                    if (is_array($next) && $next[0] === T_STRING) { ++$named; }
+                }
+                if ($named !== count($declared)) { return [[], [], $replaced, []]; }
+                foreach ($declared as $name => $kind) {
                     $types[strtolower($name)][$kind][] = $file['path'];
                 }
             }
@@ -63,48 +191,7 @@ final class ConditionalFileLoader
                 }
             }
         }
-        $mappings = [];
-        $selected = $replaced;
-        foreach ($plans as $loader => $guards) {
-            $choices = [];
-            foreach ($guards as $guard) {
-                $definitions = array_values(array_unique($types[$guard['name']][$guard['kind']] ?? []));
-                $primary = array_values(array_filter($definitions, static fn(string $path): bool => !isset($fallbackPaths[$path])));
-                if (count($primary) === 1) {
-                    $choices[] = ['fallback' => $guard['fallback'], 'active' => $primary[0]];
-                } elseif ($primary === [] && $definitions === [$guard['fallback']]) {
-                    $choices[] = ['fallback' => $guard['fallback'], 'active' => $guard['fallback']];
-                } else {
-                    $choices = [];
-                    break;
-                }
-            }
-            if ($choices === []) {
-                continue;
-            }
-            foreach ($choices as $choice) {
-                $active = $choice['active'];
-                $fallback = $choice['fallback'];
-                if ($active === $fallback) {
-                    continue;
-                }
-                if (!isset($selected[$active])) {
-                    $shadow = '.typephp/build/conditional-load-' . hash('sha256', $active) . '.php';
-                    $this->write($mirror . '/' . $shadow, $sources[$active]);
-                    $mappings[] = $this->mapping($mirror, $active, $shadow);
-                    $selected[$active] = $shadow;
-                }
-                if (!isset($selected[$fallback])) {
-                    $mappings[] = $this->mapping($mirror, $fallback, $selected[$active]);
-                    $selected[$fallback] = $selected[$active];
-                }
-            }
-            $shadow = '.typephp/build/conditional-loader-' . hash('sha256', $loader) . '.php';
-            $this->write($mirror . '/' . $shadow, "<?php\n");
-            $mappings[] = $this->mapping($mirror, $loader, $shadow);
-            fwrite(STDERR, "[adapt] selected conditional declaration loader {$loader}\n");
-        }
-        return $mappings;
+        return [$plans, $types, $replaced, $fallbackPaths];
     }
 
     private function registeredLoaders(string $mirror): array

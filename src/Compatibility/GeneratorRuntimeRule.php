@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Compatibility;
 
-use WebmanAotBuilder\Cli\ConfigurationException;
-
 final class GeneratorRuntimeRule
 {
     public function stripPreload(string $source): string
@@ -23,7 +21,7 @@ final class GeneratorRuntimeRule
                 && strtolower(ltrim($token['text'], '\\')) === 'class_exists'
             ) {
                 $cursor = $index + 1;
-                if (($tokens[$cursor++]['text'] ?? '') !== '(') { throw new ConfigurationException('preload declaration call is unsupported'); }
+                if (($tokens[$cursor++]['text'] ?? '') !== '(') { throw new SourceShapeMismatch('preload declaration call is unsupported'); }
                 $class = $tokens[$cursor++] ?? [];
                 if (!in_array($class['id'] ?? null, [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)
                     || ($tokens[$cursor++]['text'] ?? '') !== '::'
@@ -31,7 +29,7 @@ final class GeneratorRuntimeRule
                     || ($tokens[$cursor++]['text'] ?? '') !== ')'
                     || ($tokens[$cursor]['text'] ?? '') !== ';'
                     || ($index > 0 && !in_array($tokens[$index - 1]['text'], [';', '}'], true))
-                ) { throw new ConfigurationException('preload hint must be a standalone class declaration discovery call'); }
+                ) { throw new SourceShapeMismatch('preload hint must be a standalone class declaration discovery call'); }
                 $edits[] = [$token['offset'], $tokens[$cursor]['end']];
             }
             if ($token['text'] === '{') { ++$depth; }
@@ -53,6 +51,22 @@ final class GeneratorRuntimeRule
                 break;
             }
         }
+        $bootstrapCandidates = 0;
+        $depth = 0;
+        $namespaceDepth = 0;
+        foreach ($tokens as $index => $token) {
+            if ($token['id'] === T_NAMESPACE) {
+                for ($cursor = $index + 1; isset($tokens[$cursor]) && !in_array($tokens[$cursor]['text'], [';', '{'], true); ++$cursor) {}
+                $namespaceDepth = ($tokens[$cursor]['text'] ?? '') === '{' ? 1 : 0;
+            }
+            if ($depth === $namespaceDepth && in_array($token['text'], ['Session', 'FileSessionHandler', 'Fiber', 'Coroutine', 'Context'], true)
+                && ($tokens[$index + 1]['text'] ?? '') === '::'
+                && in_array($tokens[$index + 2]['text'] ?? '', ['initContext', 'initDriver', 'init'], true)
+                && ($tokens[$index + 3]['text'] ?? '') === '('
+            ) { ++$bootstrapCandidates; }
+            if ($token['text'] === '{') { ++$depth; }
+            elseif ($token['text'] === '}') { --$depth; }
+        }
         $replacedByMain = [
             'Workerman\\Protocols\\Http\\Session::init',
             'Workerman\\Protocols\\Http\\Session\\FileSessionHandler::init',
@@ -68,19 +82,20 @@ final class GeneratorRuntimeRule
                 || array_slice($call, 3) !== ['(', ')', ';']
             ) { break; }
             $identity = $namespace . '\\' . $call[0] . '::' . $call[2];
-            if (!in_array($identity, $replacedByMain, true)) { throw new ConfigurationException('runtime bootstrap call has no equivalent main replacement: ' . $identity); }
-            if (isset($calls[$identity])) { throw new ConfigurationException('duplicate runtime bootstrap call cannot be replaced by main'); }
+            if (!in_array($identity, $replacedByMain, true)) { throw new SourceShapeMismatch('runtime bootstrap call has no equivalent main replacement: ' . $identity); }
+            if (isset($calls[$identity])) { throw new SourceShapeMismatch('duplicate runtime bootstrap call cannot be replaced by main'); }
             $calls[$identity] = true;
             $end -= 6;
         }
+        if ($bootstrapCandidates !== count($calls)) { throw new SourceShapeMismatch('runtime bootstrap call has an unsupported argument or statement shape'); }
         if ($calls === []) { return $source; }
-        if (($tokens[$end - 1]['text'] ?? '') !== '}') { throw new ConfigurationException('runtime bootstrap call is not after its declaration'); }
+        if (($tokens[$end - 1]['text'] ?? '') !== '}') { throw new SourceShapeMismatch('runtime bootstrap call is not after its declaration'); }
         $depth = 0;
         foreach (array_slice($tokens, 0, $end) as $token) {
             if ($token['text'] === '{') { ++$depth; }
             elseif ($token['text'] === '}') { --$depth; }
         }
-        if ($depth !== 0) { throw new ConfigurationException('runtime bootstrap call is nested in an unsupported scope'); }
+        if ($depth !== 0) { throw new SourceShapeMismatch('runtime bootstrap call is nested in an unsupported scope'); }
         return substr($source, 0, $tokens[$end]['offset']);
     }
 
@@ -108,7 +123,7 @@ final class GeneratorRuntimeRule
             if ($token['id'] === T_FUNCTION && ($tokens[$index + 1]['text'] ?? '') === 'wait') {
                 $parameters = array_column(array_slice($tokens, $index + 2, 4), 'text');
                 if (($parameters[0] ?? '') === '(' && ($parameters[2] ?? '') === '&' && ($parameters[3] ?? '') === '$barrier') {
-                    if (!in_array($parameters[1] ?? '', ['object', 'mixed'], true)) { throw new ConfigurationException('Swoole Barrier reference parameter type is unsupported'); }
+                    if (!in_array($parameters[1] ?? '', ['object', 'mixed'], true)) { throw new SourceShapeMismatch('Swoole Barrier reference parameter type is unsupported'); }
                     if ($parameters[1] === 'object') {
                         $source = substr_replace($source, 'mixed', $tokens[$index + 3]['offset'], $tokens[$index + 3]['end'] - $tokens[$index + 3]['offset']);
                     }
@@ -153,7 +168,7 @@ final class GeneratorRuntimeRule
         }
         if ($edits === []) {
             $text = implode('', array_column($tokens, 'text'));
-            if (str_contains($text, '$tags=$cache[')) { throw new ConfigurationException('cache tag array/scalar branch is unsupported'); }
+            if (str_contains($text, '$tags=$cache[')) { throw new SourceShapeMismatch('cache tag array/scalar branch is unsupported'); }
             return $source;
         }
         foreach (array_reverse($edits) as [$start, $end, $replacement]) { $source = substr_replace($source, $replacement, $start, $end - $start); }

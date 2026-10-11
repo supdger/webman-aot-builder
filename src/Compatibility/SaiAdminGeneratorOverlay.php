@@ -5,11 +5,12 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Project\ProjectMirror;
 
 final class SaiAdminGeneratorOverlay
 {
     /**
-     * @return array{path:string,sha256:string}
+     * @return array{path:string,sha256:string,class:string}
      */
     public function prepare(
         string $sourceFile,
@@ -62,7 +63,7 @@ final class SaiAdminGeneratorOverlay
 PHP;
         $intervalPatch = <<<'PHP'
         if ($sourceRel === 'vendor/nesbot/carbon/src/Carbon/CarbonInterval.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($content);
+            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($content, $applicable, true);
         }
 PHP;
         if (substr_count($overlay, $patchEntry) !== 1) {
@@ -103,7 +104,7 @@ PHP;
             }
             $pathList = var_export($paths, true);
             $contract = "\n        if (in_array(\$sourceRel, {$pathList}, true)) {\n"
-                . "            return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(\$sourceRel, \$content, self::{$rules}[\$sourceRel]);\n        }\n";
+                . "            return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(\$sourceRel, \$content, self::{$rules}[\$sourceRel], \$applicable, true);\n        }\n";
             $overlay = str_replace($entry, $entry . $contract, $overlay);
         }
         $compactStart = strpos($overlay, '    protected function expandIlluminateQueryBuilderCompactCalls(string $content): string');
@@ -114,7 +115,7 @@ PHP;
         $compactMethod = <<<'PHP'
     protected function expandIlluminateQueryBuilderCompactCalls(string $content): string
     {
-        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content);
+        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content, $applicable, true);
     }
 
 PHP;
@@ -130,7 +131,7 @@ PHP;
         $blueprintEntry = "        if (\$sourceRel === 'vendor/illuminate/database/Query/Builder.php') {";
         $blueprintRule = <<<'PHP'
         if ($sourceRel === 'vendor/illuminate/database/Schema/Blueprint.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content);
+            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content, $applicable, true);
         }
 PHP;
         if (substr_count($overlay, $blueprintEntry) !== 1) {
@@ -153,9 +154,31 @@ PHP;
         $phpTarget = var_export($targetCapabilities['phpVersionId'] ?? null, true);
         $redisTarget = var_export($targetCapabilities['redisVersion'] ?? null, true);
         $runtimeTarget = var_export($targetCapabilities, true);
-        $helperContract = "        if ((\$prepared = (new \\WebmanAotBuilder\\Compatibility\\GuardedHelperSourceRule({$phpTarget}, {$redisTarget}, {$runtimeTarget}, \$this->basePath))->prepare(\$sourceRel, \$content)) !== null) {\n            return \$prepared;\n        }";
+        $helperContract = "        if ((\$prepared = (new \\WebmanAotBuilder\\Compatibility\\GuardedHelperSourceRule({$phpTarget}, {$redisTarget}, {$runtimeTarget}, \$this->basePath))->prepare(\$sourceRel, \$content, true)) !== null) {\n            return \$prepared;\n        }";
         if (substr_count($overlay, $guardedEntry) !== 1) { throw new ConfigurationException('locked helper contract entry is missing'); }
         $overlay = str_replace($guardedEntry, $guardedEntry . "\n" . $helperContract, $overlay);
+        $knownGuardedEntry = "    protected function prepareKnownGuardedSource(string \$sourceRel, string \$content): string\n    {";
+        $overlay = str_replace($guardedEntry, $knownGuardedEntry, $overlay);
+        $guardedProof = "    protected function prepareGuardedSource(string \$sourceRel, string \$content): string\n    {\n"
+            . "        \$helper = new \\WebmanAotBuilder\\Compatibility\\GuardedHelperSourceRule({$phpTarget}, {$redisTarget}, {$runtimeTarget}, \$this->basePath);\n"
+            . "        \$helper->assertFlattenable(\$content);\n"
+            . "        \$prepared = \$this->prepareKnownGuardedSource(\$sourceRel, \$content);\n"
+            . "        \$helper->assertFlattenable(\$prepared, true);\n"
+            . "        return \$prepared;\n    }\n\n";
+        $overlay = str_replace($knownGuardedEntry, $guardedProof . $knownGuardedEntry, $overlay);
+        if ($mirror !== null) {
+            $directory = ProjectMirror::generationSourceDirectory($mirror);
+            if ($directory !== null) {
+                $relative = substr($directory, strlen($mirror) + 1);
+                $overlay = str_replace('.typephp/build', $relative, $overlay);
+            }
+        }
+        $cacheIdentity = str_replace(DIRECTORY_SEPARATOR, '/', realpath($privateCache) ?: $privateCache);
+        $className = 'ProjectGenerator_' . hash('sha256', $overlay . "\0" . $cacheIdentity . "\0" . $expectedStubSha256);
+        if (substr_count($overlay, "class ProjectGenerator\n") !== 1) {
+            throw new ConfigurationException('locked generator class declaration drifted');
+        }
+        $overlay = str_replace("class ProjectGenerator\n", 'class ' . $className . "\n", $overlay);
         $digest = hash('sha256', $overlay);
         $stubSource = dirname($sourceFile, 2) . '/Stubs/main.php.stub';
         $stub = is_file($stubSource) && !is_link($stubSource)
@@ -192,7 +215,7 @@ PHP;
         } elseif (file_put_contents($target, $overlay, LOCK_EX) !== strlen($overlay)) {
             throw new ConfigurationException('cannot write private SaiAdmin generator overlay');
         }
-        return ['path' => $target, 'sha256' => $digest];
+        return ['path' => $target, 'sha256' => $digest, 'class' => 'Tinywan\\Typephp\\Compiler\\' . $className];
     }
     private function discoverGuardedFamilies(string $source, string $mirror, array $targetCapabilities): string
     {
@@ -215,13 +238,17 @@ PHP;
             if (!is_file($manifestFile) || is_link($manifestFile) || !is_file($autoloadFile) || is_link($autoloadFile)) { continue; }
             $manifest = json_decode((string) file_get_contents($manifestFile), true);
             $autoload = file_get_contents($autoloadFile);
-            if (!in_array('bootstrap.php', $manifest['autoload']['files'] ?? [], true)
+            if (!is_array($manifest) || !is_array($manifest['autoload'] ?? null)
+                || !is_array($manifest['autoload']['files'] ?? null)
+                || !in_array('bootstrap.php', $manifest['autoload']['files'], true)
                 || !is_string($autoload) || !str_contains($autoload, var_export('/' . substr($bootstrap, strlen('vendor/')), true))
             ) { continue; }
             if (is_link($file)) { throw new ConfigurationException('guarded source family contains a link'); }
             $contents = file_get_contents($file);
             if (!is_string($contents)) { throw new ConfigurationException('Unable to read guarded source family'); }
-            $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($bootstrap, $contents);
+            try {
+                $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($bootstrap, $contents, true);
+            } catch (SourceShapeMismatch) { continue; }
             if ($prepared === $contents || str_contains($source, var_export($bootstrap, true) . ' =>')) { continue; }
             $target = '.typephp/build/symfony-family-' . basename(dirname($file)) . '-bootstrap.php';
             $selected[$target] = '        ' . var_export($bootstrap, true) . ' => ' . var_export($target, true) . ",\n";
@@ -231,7 +258,9 @@ PHP;
                 if (is_file($companionFile) && !is_link($companionFile)) {
                     $companionSource = file_get_contents($companionFile);
                     if (!is_string($companionSource)) { throw new ConfigurationException('Unable to read PHP polyfill bootstrap companion'); }
-                    $companionPrepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, null, $targetCapabilities, $mirror))->prepare($companion, $companionSource);
+                    try {
+                        $companionPrepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, null, $targetCapabilities, $mirror))->prepare($companion, $companionSource, true);
+                    } catch (SourceShapeMismatch) { continue; }
                     if ($companionPrepared !== $companionSource) {
                         $companionTarget = '.typephp/build/symfony-family-' . basename(dirname($companionFile)) . '-' . basename($companionFile);
                         $selected[$companionTarget] = '        ' . var_export($companion, true) . ' => ' . var_export($companionTarget, true) . ",\n";
@@ -249,12 +278,12 @@ PHP;
                 if (!$file->isFile() || preg_match($pattern, $file->getFilename()) !== 1) { continue; }
                 $path = $root . '/' . str_replace('\\', '/', substr($file->getPathname(), strlen($directory) + 1));
                 if (str_contains($source, var_export($path, true) . ' =>')) { continue; }
-                if (str_starts_with($root, 'vendor/symfony/polyfill-php')) {
-                    $contents = file_get_contents($file->getPathname());
-                    if (!is_string($contents)) { throw new ConfigurationException('Unable to read guarded source family'); }
-                    $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($path, $contents);
-                    if ($prepared === $contents) { continue; }
-                }
+                $contents = file_get_contents($file->getPathname());
+                if (!is_string($contents)) { throw new ConfigurationException('Unable to read guarded source family'); }
+                try {
+                    $prepared = (new GuardedHelperSourceRule($targetCapabilities['phpVersionId'] ?? null, $targetCapabilities['redisVersion'] ?? null, $targetCapabilities, $mirror))->prepare($path, $contents, true);
+                } catch (SourceShapeMismatch) { continue; }
+                if ($prepared === null || $prepared === $contents) { continue; }
                 $relative = substr($path, strlen('vendor/symfony/'));
                 $target = '.typephp/build/symfony-family-' . preg_replace('/[^A-Za-z0-9-]/', '-', substr($relative, 0, -4)) . '.php';
                 if (isset($selected[$target])) { throw new ConfigurationException('guarded source family targets collide'); }
@@ -358,26 +387,58 @@ PHP;
     {
         foreach ([
             'patchRefCaptures' => <<<'BODY'
-        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, self::REF_CAPTURE_REPLACEMENTS[$sourceRel] ?? []);
+        return (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, self::REF_CAPTURE_REPLACEMENTS[$sourceRel] ?? [], $applicable, true);
 BODY,
             'patchSwitchTerminals' => <<<'BODY'
-        $originalContent = $content;
         if ($sourceRel === 'plugin/saiadmin/app/cache/UserInfoCache.php') {
             return (new \WebmanAotBuilder\Compatibility\GeneratorRuntimeRule())->cacheTags($content);
         }
         if ($sourceRel === 'vendor/nesbot/carbon/src/Carbon/CarbonInterval.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($content);
+            $content = (new \WebmanAotBuilder\Compatibility\SaiAdminCarbonIntervalRule())->transform($content, $applicable, true);
         }
         if ($sourceRel === 'vendor/illuminate/database/Query/Builder.php' || $sourceRel === 'vendor/illuminate/database/Schema/Blueprint.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content);
+            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->compactCalls($content, $applicable, true);
         }
         if ($sourceRel === 'vendor/symfony/http-foundation/Request.php') {
             $content = (new \WebmanAotBuilder\Compatibility\GeneratorRuntimeRule())->stripPreload($content);
         }
         if ($sourceRel === 'plugin/saiadmin/utils/code/CodeEngine.php') {
-            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, ["defined('DS') or define('DS', DIRECTORY_SEPARATOR);" => 'const DS = DIRECTORY_SEPARATOR;']);
+            $content = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, ["defined('DS') or define('DS', DIRECTORY_SEPARATOR);" => 'const DS = DIRECTORY_SEPARATOR;'], $applicable, true);
         }
         $rules = self::SWITCH_TERMINAL_REPLACEMENTS[$sourceRel] ?? [];
+        $controllerDefaults = [];
+        if ($sourceRel === 'plugin/saiadmin/app/cache/ReflectionCache.php') {
+            (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, $rules, $applicable, true);
+            foreach (['LoginController.php', 'InstallController.php'] as $controller) {
+                $relative = 'plugin/saiadmin/app/controller/' . $controller;
+                $path = $this->basePath;
+                foreach (explode('/', $relative) as $part) {
+                    $path .= '/' . $part;
+                    if (is_link($path)) { throw new \WebmanAotBuilder\Cli\ConfigurationException('Reflection compatibility source is unsafe: ' . $relative); }
+                }
+                if (!is_file($path)) { throw new \WebmanAotBuilder\Compatibility\SourceShapeMismatch('Reflection compatibility controller source is absent: ' . $relative); }
+                $controllerSource = file_get_contents($path);
+                if (!is_string($controllerSource)) { throw new \WebmanAotBuilder\Cli\ConfigurationException('Unable to read reflection compatibility source: ' . $relative); }
+                $tokens = array_values(array_filter(token_get_all($controllerSource), static fn($token) => !is_array($token) || !in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)));
+                $defaults = [];
+                foreach ($tokens as $index => $token) {
+                    if (!is_array($token) || $token[0] !== T_PROTECTED
+                        || ($tokens[$index + 1][0] ?? null) !== T_ARRAY
+                        || ($tokens[$index + 2][0] ?? null) !== T_VARIABLE
+                        || ($tokens[$index + 2][1] ?? null) !== '$noNeedLogin'
+                        || ($tokens[$index + 3] ?? null) !== '='
+                    ) { continue; }
+                    $value = '';
+                    for ($cursor = $index + 4; isset($tokens[$cursor]) && $tokens[$cursor] !== ';'; ++$cursor) {
+                        $value .= is_array($tokens[$cursor]) ? $tokens[$cursor][1] : $tokens[$cursor];
+                    }
+                    if (preg_match('/^\[(?:\'[A-Za-z_][A-Za-z0-9_]*\'(?:,\'[A-Za-z_][A-Za-z0-9_]*\')*,?)?\]$/D', $value) !== 1) { throw new \WebmanAotBuilder\Compatibility\SourceShapeMismatch('Reflection compatibility controller defaults are unknown: ' . $relative); }
+                    $defaults[] = $value;
+                }
+                if (count($defaults) !== 1) { throw new \WebmanAotBuilder\Compatibility\SourceShapeMismatch('Reflection compatibility controller defaults are unknown: ' . $relative); }
+                $controllerDefaults[] = $defaults[0];
+            }
+        }
         foreach ($rules as $search => &$replacement) {
             if ($search === '    public function toArray()'
                 && $replacement === '    public function toArray(): array') {
@@ -394,12 +455,12 @@ BODY,
             }
             if ($sourceRel === 'vendor/illuminate/database/Schema/Blueprint.php' && str_starts_with(trim($search), 'compact(')) { unset($rules[$search]); }
             if ($sourceRel === 'plugin/saiadmin/app/cache/ReflectionCache.php') {
-                $replacement = str_replace(['__SAIADMIN_LOGIN_NO_NEED_LOGIN__', '__SAIADMIN_INSTALL_NO_NEED_LOGIN__'], [$this->readSaiAdminNoNeedLogin('LoginController.php'), $this->readSaiAdminNoNeedLogin('InstallController.php')], $replacement);
+                $replacement = str_replace(['__SAIADMIN_LOGIN_NO_NEED_LOGIN__', '__SAIADMIN_INSTALL_NO_NEED_LOGIN__'], $controllerDefaults, $replacement);
             }
         }
         unset($replacement);
-        $prepared = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, $rules, $applicable);
-        return $applicable ? $prepared : $originalContent;
+        $prepared = (new \WebmanAotBuilder\Compatibility\UpstreamSourceRule())->applyIfPresent($sourceRel, $content, $rules, $applicable, true);
+        return $prepared;
 BODY,
             'stripStrayBootstrapCalls' => '        return (new \\WebmanAotBuilder\\Compatibility\\GeneratorRuntimeRule())->stripBootstrap($content);',
             'patchCoroutineFiberContextWrites' => '        return (new \\WebmanAotBuilder\\Compatibility\\GeneratorRuntimeRule())->contextWrites($content);',
@@ -414,7 +475,7 @@ BODY,
             $body = substr($overlay, $start, $end - $start);
             $loop = strpos($body, '        foreach ($replacements as $search => $replacement) {');
             if ($loop === false) { throw new ConfigurationException('locked Symfony local conversion table drifted'); }
-            $body = substr($body, 0, $loop) . '        return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(' . var_export($method, true) . ', $content, $replacements);' . "\n    ";
+            $body = substr($body, 0, $loop) . '        return (new \\WebmanAotBuilder\\Compatibility\\UpstreamSourceRule())->applyIfPresent(' . var_export($method, true) . ', $content, $replacements, $applicable, true);' . "\n    ";
             $overlay = substr_replace($overlay, $body, $start, $end - $start);
         }
         $start = strpos($overlay, "            \$content = (string) preg_replace('/^class_exists");

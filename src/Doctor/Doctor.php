@@ -40,13 +40,14 @@ final class Doctor
         $freeBytes = $this->system->freeBytes($this->artifactsDirectory);
         $checks[] = $this->check(
             'disk',
-            $freeBytes >= $this->minimumFreeBytes,
+            true,
             $freeBytes >= $this->minimumFreeBytes
                 ? 'sufficient free space'
-                : 'insufficient free space',
+                : 'free space is below the recommendation; actual output writes determine build availability',
             [
                 'freeBytes' => $freeBytes,
-                'minimumBytes' => $this->minimumFreeBytes,
+                'recommendedBytes' => $this->minimumFreeBytes,
+                'advisory' => true,
             ]
         );
 

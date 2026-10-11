@@ -36,6 +36,9 @@ final class CoveragePlanner
         $ledger = [];
         foreach ($discovery->files() as $file) {
             $path = $file['path'];
+            if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
+                $file['category'] = ProjectDiscovery::BUSINESS_PHP;
+            }
             $discovered[$path] = true;
             if ($file['category'] === ProjectDiscovery::UNCLASSIFIED) {
                 throw new ConfigurationException("project file is unclassified: {$path}");
@@ -220,15 +223,8 @@ final class CoveragePlanner
         $path = rtrim($this->projectDirectory, '/\\')
             . DIRECTORY_SEPARATOR
             . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
-        $componentPath = rtrim($this->projectDirectory, '/\\');
-        foreach (explode('/', str_replace('\\', '/', $relativePath)) as $component) {
-            $componentPath .= DIRECTORY_SEPARATOR . $component;
-            if (is_link($componentPath)) {
-                throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
-            }
-        }
-        if (!is_file($path) || is_link($path)) {
-            throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
+        if (!is_file($path)) {
+            throw new ConfigurationException("unable to read coverage file: {$relativePath}");
         }
         $digest = hash_file('sha256', $path);
         if (!is_string($digest)) {

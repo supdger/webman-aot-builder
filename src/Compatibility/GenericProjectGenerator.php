@@ -20,16 +20,26 @@ final class GenericProjectGenerator
         string $outputName,
         array $dynamicPhp = [],
         ?string $targetPhpVersion = null,
-        array $targetCapabilities = []
+        array $targetCapabilities = [],
+        string $generatorClass = \Tinywan\Typephp\Compiler\ProjectGenerator::class
     ): array {
         $resolved = realpath($mirror);
-        if (!is_string($resolved) || $resolved !== $mirror || is_link($mirror)
+        if (!is_string($resolved)
+            || str_replace(DIRECTORY_SEPARATOR, '/', $resolved) !== str_replace(DIRECTORY_SEPARATOR, '/', $mirror)
+            || is_link($mirror)
             || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
-            || is_link($mirror . '/.typephp') || is_link($mirror . '/.typephp/build')
         ) {
             throw new ConfigurationException('PHP generation requires an isolated project mirror');
         }
-        $build = $mirror . '/.typephp/build';
+        $mirror = $resolved;
+        $metadata = \WebmanAotBuilder\Project\ProjectMirror::generationMetadataDirectory($mirror);
+        if ($metadata === null || is_link($metadata)
+            || (!is_dir($metadata) && !mkdir($metadata, 0700, true) && !is_dir($metadata))
+        ) {
+            throw new ConfigurationException('cannot create owned PHP generation metadata directory');
+        }
+        $build = \WebmanAotBuilder\Project\ProjectMirror::generationSourceDirectory($mirror);
+        if ($build === null) { throw new ConfigurationException('cannot allocate owned PHP generation directory'); }
         if (!is_dir($build) && !mkdir($build, 0700, true) && !is_dir($build)) {
             throw new ConfigurationException('cannot create PHP generation directory');
         }
@@ -74,7 +84,8 @@ final class GenericProjectGenerator
         if ($mainFile === null) {
             throw new ConfigurationException('TypePHP entrypoint missing: binary compilation requires a global main(): void');
         }
-        $upstream = new \Tinywan\Typephp\Compiler\ProjectGenerator($mirror);
+        $sourceAliases = (new \WebmanAotBuilder\Project\GeneratedProjectCoveragePlanner())->sourceAliases($mirror);
+        $upstream = new $generatorClass($mirror);
         $variants = (new CarbonLazyVariants())->apply($mirror, $upstream, $targetPhpVersion);
         $mappings = array_merge($variants, $this->adaptSources($mirror, $upstream, array_column($variants, 'path')));
         $mappings = array_merge(
@@ -85,9 +96,10 @@ final class GenericProjectGenerator
             $mappings,
             (new ConditionalFileLoader())->apply($mirror, $discovery->files(), $mappings)
         );
+        $mappings = $this->aliasMappings($mirror, $sourceAliases, $mappings);
         if ($targetCapabilities !== []) {
             $this->write(
-                $build . '/target-php-capabilities.json',
+                $metadata . '/target-php-capabilities.json',
                 json_encode($targetCapabilities, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n"
             );
         }
@@ -129,18 +141,13 @@ final class GenericProjectGenerator
             fwrite(STDERR, "[adapt] skipped {$frameworkBootstrap}: unrecognized bootstrap statements remain compiler input\n");
         }
         $this->write(
-            $build . '/entrypoint-mapping.json',
+            $metadata . '/entrypoint-mapping.json',
             json_encode($entrypoint, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n"
         );
+        foreach ($mappings as $mapping) {
+            if ($mapping['path'] === $mainFile) { $mainFile = $mapping['shadow']; break; }
+        }
         $this->manifest($mirror, $mainFile, $mappings, $entrypoint, $outputName, $registeredDynamic);
-        $sourceFiles = (new ProjectDiscovery($mirror, $registeredDynamic))->discover($profile, false)->files();
-        $this->write(
-            $build . '/source-inputs.json',
-            json_encode([
-                'schema' => 'webman-aot-builder-source-inputs-v1',
-                'paths' => array_column($sourceFiles, 'path'),
-            ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n"
-        );
         return ['mappings' => $mappings, 'mainFile' => $mainFile, 'entrypointMapping' => $entrypoint];
     }
 
@@ -150,7 +157,7 @@ final class GenericProjectGenerator
         usort($files, static fn(array $a, array $b): int =>
             ($a['path'] === 'main.php' ? -1 : ($b['path'] === 'main.php' ? 1 : strcmp($a['path'], $b['path']))));
         foreach ($files as $file) {
-            if ($file['category'] !== ProjectDiscovery::BUSINESS_PHP) {
+            if (strtolower(pathinfo($file['path'], PATHINFO_EXTENSION)) !== 'php') {
                 continue;
             }
             $tokens = token_get_all($this->read($mirror . '/' . $file['path']));
@@ -201,6 +208,9 @@ final class GenericProjectGenerator
     /** @return list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> */
     private function adaptSources(string $mirror, object $upstream, array $alreadyMapped): array
     {
+        $generatedDirectory = \WebmanAotBuilder\Project\ProjectMirror::generationSourceDirectory($mirror);
+        if ($generatedDirectory === null) { throw new ConfigurationException('cannot allocate owned PHP generation directory'); }
+        $generatedPrefix = str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedDirectory, strlen($mirror) + 1)) . '/';
         $rules = [];
         foreach ([
             'GUARDED_SOURCES', 'NULLABLE_STATIC_SOURCES', 'STRAY_BOOTSTRAP_SOURCES',
@@ -235,12 +245,7 @@ final class GenericProjectGenerator
                     $shadow = $this->transform($upstream, $kind, $path, $shadow);
                 }
                 token_get_all($shadow, TOKEN_PARSE);
-            } catch (\RuntimeException | \ParseError $exception) {
-                if ($exception instanceof ConfigurationException
-                    || str_starts_with($exception->getMessage(), 'Unable to ')
-                ) {
-                    throw $exception;
-                }
+            } catch (SourceShapeMismatch | \ParseError $exception) {
                 fwrite(STDERR, "[adapt] skipped {$path}: {$exception->getMessage()}\n");
                 continue;
             } finally {
@@ -249,14 +254,63 @@ final class GenericProjectGenerator
             if ($source === $shadow) {
                 continue;
             }
-            $this->write($mirror . '/' . $rule['shadow'], $shadow);
+            $shadowPath = $generatedPrefix . basename($rule['shadow']);
+            $defaultShadow = $shadowPath;
+            for ($suffix = 1; file_exists($mirror . '/' . $shadowPath) || is_link($mirror . '/' . $shadowPath); ++$suffix) {
+                $shadowPath = substr($defaultShadow, 0, -4) . '-' . $suffix . '.php';
+            }
+            $this->write($mirror . '/' . $shadowPath, $shadow);
             $mappings[] = [
                 'path' => $path,
-                'shadow' => $rule['shadow'],
+                'shadow' => $shadowPath,
                 'sourceSha256' => hash('sha256', $source),
                 'shadowSha256' => hash('sha256', $shadow),
                 'contractSha256' => hash('sha256', $shadow),
             ];
+        }
+        return $mappings;
+    }
+
+    /** @return list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string,contractSha256:string}> */
+    private function aliasMappings(string $mirror, array $aliases, array $mappings): array
+    {
+        $originalMappings = $mappings;
+        $groups = [];
+        foreach ($aliases as $path => $source) { $groups[$source['canonicalSha256']][$path] = $source; }
+        $mapped = array_column($mappings, null, 'path');
+        foreach ($groups as $identity => $sources) {
+            if (count($sources) < 2) { continue; }
+            $replacements = [];
+            foreach ($sources as $path => $source) {
+                if (isset($mapped[$path])) { $replacements[$mapped[$path]['shadowSha256']] = $mapped[$path]['shadow']; }
+            }
+            if (count($replacements) === 1) {
+                $shadow = reset($replacements);
+                $contents = $this->read($mirror . '/' . $shadow);
+            } else {
+                $shadow = reset($sources)['representative'];
+                $contents = $this->read($mirror . '/' . $shadow);
+            }
+            $mappings = array_values(array_filter($mappings, static fn (array $mapping): bool => !isset($sources[$mapping['path']])));
+            foreach ($sources as $path => $source) {
+                if ($path === $shadow) { continue; }
+                $mappings[] = ['path' => $path, 'shadow' => $shadow, 'sourceSha256' => $source['sourceSha256'],
+                    'shadowSha256' => hash('sha256', $contents), 'contractSha256' => hash('sha256', $contents)];
+            }
+        }
+        $generatedDirectory = \WebmanAotBuilder\Project\ProjectMirror::generationSourceDirectory($mirror);
+        $generatedPrefix = $generatedDirectory !== null ? str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedDirectory, strlen($mirror) + 1)) . '/' : null;
+        $targets = array_column($mappings, 'shadow');
+        foreach ($originalMappings as $mapping) {
+            $shadow = $mapping['shadow'];
+            if ($generatedPrefix !== null && str_starts_with($shadow, $generatedPrefix) && !in_array($shadow, $targets, true)) {
+                $contents = $this->read($mirror . '/' . $shadow);
+                if (!hash_equals($mapping['shadowSha256'], hash('sha256', $contents))
+                    || !unlink($mirror . '/' . $shadow)
+                ) {
+                    throw new ConfigurationException('unused generated source cannot be removed safely: ' . $shadow);
+                }
+            }
         }
         return $mappings;
     }
@@ -267,7 +321,12 @@ final class GenericProjectGenerator
             (new \ReflectionMethod($generator, $method))->invoke($generator, ...$arguments);
         switch ($kind) {
             case 'GUARDED_SOURCES':
-                return $call('flattenGuardedSource', $call('prepareGuardedSource', $path, $content));
+                $prepared = $call('prepareGuardedSource', $path, $content);
+                try {
+                    return $call('flattenGuardedSource', $prepared);
+                } catch (\RuntimeException $exception) {
+                    throw new SourceShapeMismatch('guarded declaration flattening is not applicable', previous: $exception);
+                }
             case 'NULLABLE_STATIC_SOURCES':
                 return $call('stripStrayBootstrapCalls', $call('patchUninitializedScalarStatics', $content));
             case 'STRAY_BOOTSTRAP_SOURCES':
@@ -275,7 +334,7 @@ final class GenericProjectGenerator
                 return $path === 'vendor/workerman/coroutine/src/Context/Fiber.php'
                     ? $call('patchCoroutineFiberContextWrites', $content) : $content;
             case 'PRELOAD_HINT_SOURCES':
-                $content = (string) preg_replace('/^class_exists\\([^;\\r\\n]+\\);[ \\t]*\\R/m', '', $content);
+                $content = (new GeneratorRuntimeRule())->stripPreload($content);
                 return match ($path) {
                     'vendor/symfony/http-kernel/HttpKernel.php' => $call('patchSymfonyHttpKernelEvents', $content),
                     'vendor/symfony/http-foundation/Session/Storage/NativeSessionStorage.php' => $call('patchSymfonyNativeSessionStorage', $content),

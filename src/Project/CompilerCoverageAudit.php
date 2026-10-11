@@ -11,7 +11,10 @@ final class CompilerCoverageAudit
     /**
      * @param array{source:string,sourceSha256:string,replacement:string,replacementSha256:string,policy:string}|null $entrypointMapping
      */
-    public function __construct(private readonly ?array $entrypointMapping = null)
+    public function __construct(
+        private readonly ?array $entrypointMapping = null,
+        private readonly array $generatedMappings = []
+    )
     {
     }
 
@@ -28,21 +31,13 @@ final class CompilerCoverageAudit
             throw new ConfigurationException('compiler coverage requires an isolated build mirror');
         }
         $manifest = $this->readCompilerLists($mirror . '/project.linux.yml');
+        $generatedDirectory = ProjectMirror::generationSourceDirectory($mirror);
+        $generatedPrefix = $generatedDirectory !== null ? str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedDirectory, strlen($mirror) + 1)) . '/' : null;
+        $aliases = (new GeneratedProjectCoveragePlanner())->sourceAliases($mirror);
         $counts = ['direct' => 0, 'shadow' => 0];
         $problems = [];
         foreach ($ledger->files() as $entry) {
-            if (($entry['category'] ?? null) === ProjectDiscovery::THIRD_PARTY_DYNAMIC_PHP) {
-                $path = (string) $entry['path'];
-                if (($entry['status'] ?? null) !== CoverageLedger::RUNTIME_APPROVED
-                    || ($entry['policy'] ?? null) !== 'runtime.third-party-dynamic.v1'
-                    || $this->digest($mirror, $path) !== ($entry['sourceSha256'] ?? null)
-                    || !$this->covered($path, $manifest['ignore'])
-                ) {
-                    $problems[] = "registered third-party dynamic PHP is not covered: {$path}";
-                }
-                continue;
-            }
-            if (($entry['category'] ?? null) !== ProjectDiscovery::BUSINESS_PHP) {
+            if (strtolower(pathinfo((string) ($entry['path'] ?? ''), PATHINFO_EXTENSION)) !== 'php') {
                 continue;
             }
             $path = (string) $entry['path'];
@@ -78,10 +73,26 @@ final class CompilerCoverageAudit
                 $entry,
                 $replacement
             );
+            $canonicalAlias = ($entry['policy'] ?? null) === 'php.canonical-source-alias.v1'
+                && is_string($replacement)
+                && GeneratedProjectCoveragePlanner::isSourceAlias($aliases, $path, $replacement);
+            $conditionalAlias = false;
+            if (($entry['policy'] ?? null) === 'php.conditional-declaration-loader.v1') {
+                foreach ($this->generatedMappings as $mapping) {
+                    if (($mapping['path'] ?? null) === $path
+                        && ($mapping['shadow'] ?? null) === $replacement
+                        && ($mapping['sourceSha256'] ?? null) === $entry['sourceSha256']
+                        && ($mapping['shadowSha256'] ?? null) === $expectedDigest
+                    ) {
+                        $conditionalAlias = (new \WebmanAotBuilder\Compatibility\ConditionalFileLoader())->validateSourceAlias($mirror, $mapping);
+                        break;
+                    }
+                }
+            }
             if (!is_string($replacement)
-                || (!str_starts_with($replacement, '.typephp/build/')
+                || (($generatedPrefix === null || !str_starts_with($replacement, $generatedPrefix))
                     && !$entrypointReplacement
-                    && !$supportOverride)
+                    && !$supportOverride && !$canonicalAlias && !$conditionalAlias)
                 || !$sourceIgnored
                 || !$this->covered($replacement, $manifest['sources'])
                 || $this->covered($replacement, $manifest['ignore'])

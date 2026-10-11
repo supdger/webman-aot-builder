@@ -37,19 +37,48 @@ final class UpstreamGeneratorBoundary
         ) {
             throw new ConfigurationException('upstream generator source digest mismatch');
         }
-        $generatedRoot = $mirror . '/.typephp/build';
-        if (file_exists($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
-            throw new ConfigurationException('upstream generator output is not a clean mirror');
+        $generatedRoot = \WebmanAotBuilder\Project\ProjectMirror::generationSourceDirectory($mirror);
+        if ($generatedRoot === null) { throw new ConfigurationException('cannot resolve upstream generated source directory'); }
+        $generatedPrefix = str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedRoot, strlen($mirror) + 1)) . '/';
+        $aliasesFile = \WebmanAotBuilder\Project\ProjectMirror::sourceAliasManifestPath($mirror);
+        $aliasesSha256 = $aliasesFile !== null && is_file($aliasesFile) ? hash_file('sha256', $aliasesFile) : null;
+        if (is_link($generatedRoot)
+            || (file_exists($generatedRoot) && !is_dir($generatedRoot))
+        ) {
+            throw new ConfigurationException('upstream generator output is not a safe mirror directory');
         }
+        (new \WebmanAotBuilder\Project\GeneratedProjectCoveragePlanner())->sourceAliases($mirror);
+        $originalInputs = \WebmanAotBuilder\Project\RuntimeDataPaths::originalSourceInputs($mirror);
+        if ($originalInputs !== null && is_dir($generatedRoot)) {
+            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($generatedRoot, \FilesystemIterator::SKIP_DOTS)) as $file) {
+                $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
+                if ($file->isLink() || (!$file->isDir() && !isset($originalInputs[$relative]))) {
+                    throw new ConfigurationException('upstream generator has preexisting generated output: ' . $relative);
+                }
+            }
+        }
+        $inputManifest = \WebmanAotBuilder\Project\ProjectMirror::sourceInputManifestPath($mirror);
+        $inputDigest = $inputManifest !== null && is_file($inputManifest) ? hash_file('sha256', $inputManifest) : null;
         $beforeSources = $this->sourceDigests($mirror);
         $result = $generate();
-        if (!is_dir($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
+        if (!is_dir($generatedRoot) || is_link($generatedRoot)) {
             throw new ConfigurationException('upstream generator did not create a safe output directory');
+        }
+        if ($aliasesSha256 !== null && hash_file('sha256', $aliasesFile) !== $aliasesSha256) {
+            throw new ConfigurationException('mirrored source alias evidence changed during generation');
+        }
+        if ($inputDigest !== null && hash_file('sha256', $inputManifest) !== $inputDigest) {
+            throw new ConfigurationException('mirrored original source evidence changed during generation');
         }
         if (hash_file('sha256', $generatorFile) !== $generatorSha256) {
             throw new ConfigurationException('upstream generator changed during execution');
         }
         $afterSources = $this->sourceDigests($mirror);
+        foreach ($afterSources as $path => $digest) {
+            if (!isset($beforeSources[$path]) && str_starts_with($path, $generatedPrefix)) {
+                unset($afterSources[$path]);
+            }
+        }
         if (!isset($beforeSources['main.php'])) {
             unset($afterSources['main.php']);
         }
@@ -71,6 +100,7 @@ final class UpstreamGeneratorBoundary
                 }
             }
         }
+        $aliases = (new \WebmanAotBuilder\Project\GeneratedProjectCoveragePlanner())->sourceAliases($mirror);
         $inputs = $this->compilerInputs($mirror);
         $targets = [];
         $sources = [];
@@ -84,7 +114,10 @@ final class UpstreamGeneratorBoundary
             $shadow = $entry['shadow'];
             $this->assertPath($source);
             $this->assertPath($shadow);
-            if (!str_starts_with($shadow, '.typephp/build/') || isset($sources[$source])
+            if (((!str_starts_with($shadow, $generatedPrefix) || isset($beforeSources[$shadow]))
+                    && !\WebmanAotBuilder\Project\GeneratedProjectCoveragePlanner::isSourceAlias($aliases, $source, $shadow)
+                    && !(new ConditionalFileLoader())->validateSourceAlias($mirror, $entry))
+                || isset($sources[$source])
                 || (isset($targets[$shadow]) && $targets[$shadow] !== ($entry['shadowSha256'] ?? null))
             ) {
                 throw new ConfigurationException("invalid upstream generator mapping: {$source}");
@@ -105,12 +138,16 @@ final class UpstreamGeneratorBoundary
             if (!isset($inputs['sources'][$shadow]) || !isset($inputs['ignore'][$source])) {
                 throw new ConfigurationException("upstream generator compiler coverage is open: {$source} => {$shadow}");
             }
-            try {
-                token_get_all((string) file_get_contents($mirror . '/' . $shadow), TOKEN_PARSE);
-            } catch (\ParseError $exception) {
-                throw new ConfigurationException("upstream generator emitted invalid PHP: {$shadow}", previous: $exception);
+            if (str_starts_with($shadow, $generatedPrefix) && !isset($beforeSources[$shadow])) {
+                try {
+                    token_get_all((string) file_get_contents($mirror . '/' . $shadow), TOKEN_PARSE);
+                } catch (\ParseError $exception) {
+                    throw new ConfigurationException("upstream generator emitted invalid PHP: {$shadow}", previous: $exception);
+                }
             }
-            $targets[$shadow] = $entry['shadowSha256'];
+            if (str_starts_with($shadow, $generatedPrefix) && !isset($beforeSources[$shadow])) {
+                $targets[$shadow] = $entry['shadowSha256'];
+            }
             $sources[$source] = true;
         }
         $actual = [];
@@ -120,7 +157,7 @@ final class UpstreamGeneratorBoundary
             }
             if ($file->isFile() && strtolower($file->getExtension()) === 'php') {
                 $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
-                $actual[$relative] = true;
+                if (!isset($beforeSources[$relative])) { $actual[$relative] = true; }
             }
         }
         if (array_diff_key($actual, $targets) !== [] || array_diff_key($targets, $actual) !== []) {
@@ -131,7 +168,7 @@ final class UpstreamGeneratorBoundary
             'shadow' => $entry['shadow'],
             'sourceSha256' => $entry['sourceSha256'],
             'shadowSha256' => $entry['shadowSha256'],
-        ], $manifest);
+        ] + (isset($entry['sourceAlias']) ? ['sourceAlias' => $entry['sourceAlias']] : []), $manifest);
     }
 
     /** @return array{sources:array<string,true>,ignore:array<string,true>} */
@@ -175,9 +212,7 @@ final class UpstreamGeneratorBoundary
                 continue;
             }
             $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
-            if (!str_starts_with($relative, '.typephp/build/')) {
-                $digests[$relative] = $this->digest($mirror, $relative);
-            }
+            $digests[$relative] = $this->digest($mirror, $relative);
         }
         ksort($digests, SORT_STRING);
         return $digests;
@@ -204,7 +239,7 @@ final class UpstreamGeneratorBoundary
     private function digest(string $mirror, string $relative): string
     {
         $path = $mirror . '/' . $relative;
-        if (!is_file($path) || is_link($path) || realpath($path) !== $path) {
+        if (!is_file($path) || is_link($path) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($path) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $path)) {
             throw new ConfigurationException("upstream generator file missing or unsafe: {$relative}");
         }
         return (string) hash_file('sha256', $path);

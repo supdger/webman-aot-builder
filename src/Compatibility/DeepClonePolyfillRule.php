@@ -72,11 +72,12 @@ final class DeepClonePolyfillRule
             ) {
                 throw new \RuntimeException('selected SDK runtime capabilities drifted');
             }
-            if ($targetContext['deepcloneEnabled']) {
-                throw new \RuntimeException('native deepclone function, constant and exception ABI is not verified');
-            }
         } catch (\RuntimeException|\JsonException $exception) {
             throw new ConfigurationException('deepclone selected target SDK drifted: ' . $exception->getMessage(), previous: $exception);
+        }
+        if ($targetContext['deepcloneEnabled']) {
+            fwrite(STDERR, "[adapt] skipped deepclone: selected native ABI is unverified; original compiler inputs retained\n");
+            return [];
         }
         $names = ['bootstrap.php', 'bootstrap81.php', 'Resources/stubs/ClassNotFoundException.php',
             'Resources/stubs/NotInstantiableException.php', 'DeepClone.php'];
@@ -90,7 +91,7 @@ final class DeepClonePolyfillRule
         }
         try {
             $shadows = $this->prepareShadows($sources, $targetContext['phpVersionId']);
-        } catch (ConfigurationException $exception) {
+        } catch (SourceShapeMismatch $exception) {
             fwrite(STDERR, "[adapt] skipped deepclone: {$exception->getMessage()}; original compiler inputs retained\n");
             return [];
         }
@@ -100,19 +101,30 @@ final class DeepClonePolyfillRule
         if (substr_count($project, "\nignore:\n") !== 1) {
             throw new ConfigurationException('deepclone project source sections drifted');
         }
+        $generatedDirectory = \WebmanAotBuilder\Project\ProjectMirror::generationSourceDirectory($mirror);
+        if ($generatedDirectory === null) { throw new ConfigurationException('cannot allocate owned deepclone generation directory'); }
+        $generatedPrefix = str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedDirectory, strlen($mirror) + 1)) . '/';
         $mappings = [];
         $writes = [];
+        $originalInputs = \WebmanAotBuilder\Project\RuntimeDataPaths::originalSourceInputs($mirror) ?? [];
         foreach ($shadows as $name => $source) {
             $relative = $prefix . $name;
-            $shadow = '.typephp/build/deepclone-' . basename($name);
+            $shadow = $generatedPrefix . 'deepclone-' . basename($name);
             $shadowPath = $mirror . '/' . $shadow;
             [$sourceSection, $ignoreSection] = explode("\nignore:\n", $project);
-            $alreadyAdapted = is_file($shadowPath) && !is_link($shadowPath)
+            $alreadyAdapted = !isset($originalInputs[$shadow]) && is_file($shadowPath) && !is_link($shadowPath)
                 && $this->read($shadowPath) === $source
                 && substr_count($sourceSection . "\n", "  - {$shadow}\n") === 1
                 && substr_count($ignoreSection, "  - {$relative}\n") === 1
                 && !str_contains($sourceSection, "  - {$relative}\n")
                 && !str_contains($ignoreSection, "  - {$shadow}\n");
+            if (!$alreadyAdapted) {
+                $defaultShadow = $shadow;
+                for ($suffix = 1; file_exists($shadowPath) || is_link($shadowPath); ++$suffix) {
+                    $shadow = substr($defaultShadow, 0, -4) . '-' . $suffix . '.php';
+                    $shadowPath = $mirror . '/' . $shadow;
+                }
+            }
             if (!is_string($source) || is_link($shadowPath)
                 || (!$alreadyAdapted && (file_exists($shadowPath)
                     || str_contains($project, "  - {$relative}\n")
@@ -271,7 +283,7 @@ PHP;
             $bodies[] = array_slice($tokens, $bodyStart + 1, $bodyEnd - $bodyStart - 1);
         }
         if (count($bodies) !== 1) {
-            throw new ConfigurationException("deepclone {$method} method source structure drifted");
+            throw new SourceShapeMismatch("deepclone {$method} method source structure drifted");
         }
         return $bodies[0];
     }
@@ -293,7 +305,7 @@ PHP;
             }
         }
         if (count(array_filter($texts, static fn (string $text): bool => $text === $temporary)) !== ($original ? $beforeCount : $afterCount)) {
-            throw new ConfigurationException("deepclone {$label} temporary variable source structure drifted");
+            throw new SourceShapeMismatch("deepclone {$label} temporary variable source structure drifted");
         }
         if ($label === 'parent reflection') {
             foreach ($texts as $index => $text) {
@@ -305,12 +317,12 @@ PHP;
                     && (($original && array_slice($texts, $index - 2, 2) === ['while', '('])
                         || (!$original && ($texts[$index + 2] ?? null) === '$parentClass'));
                 if (!$receiver && !$assignment || in_array($texts[$index - 1] ?? null, ['&', '...'], true)) {
-                    throw new ConfigurationException('deepclone parent reflection reference or escaping local source structure drifted');
+                    throw new SourceShapeMismatch('deepclone parent reflection reference or escaping local source structure drifted');
                 }
             }
             $parentCalls = array_keys($texts, 'getParentClass', true);
             if (count($parentCalls) !== 1) {
-                throw new ConfigurationException('deepclone parent reflection source structure drifted');
+                throw new SourceShapeMismatch('deepclone parent reflection source structure drifted');
             }
             $loopBody = $parentCalls[0] + 1;
             while (($body[$loopBody]['text'] ?? null) !== '{' && $loopBody < count($body)) {
@@ -318,7 +330,7 @@ PHP;
             }
             $loopEnd = $this->closing($body, $loopBody, '{', '}');
             if (in_array('$class', array_slice($texts, $loopEnd + 1), true)) {
-                throw new ConfigurationException('deepclone parent reflection exit value source structure drifted');
+                throw new SourceShapeMismatch('deepclone parent reflection exit value source structure drifted');
             }
         }
     }
@@ -329,12 +341,12 @@ PHP;
         $texts = array_column($tokens, 'text');
         $prefix = ['use', 'Symfony\\Polyfill\\DeepClone', 'as', 'p', ';'];
         if (array_slice($texts, 0, count($prefix)) !== $prefix) {
-            throw new ConfigurationException('deepclone bootstrap source structure drifted');
+            throw new SourceShapeMismatch('deepclone bootstrap source structure drifted');
         }
         $index = count($prefix);
         foreach (['extension', 'runtime'] as $guard) {
             if (($texts[$index] ?? null) !== 'if' || ($texts[$index + 1] ?? null) !== '(') {
-                throw new ConfigurationException('deepclone bootstrap guard source structure drifted');
+                throw new SourceShapeMismatch('deepclone bootstrap guard source structure drifted');
             }
             $conditionEnd = $this->closing($tokens, $index + 1, '(', ')');
             $condition = array_slice($texts, $index + 2, $conditionEnd - $index - 2);
@@ -343,25 +355,25 @@ PHP;
             $body = array_slice($texts, $bodyStart + 1, $bodyEnd - $bodyStart - 1);
             if ($guard === 'extension') {
                 if ($condition !== ['extension_loaded', '(', "'deepclone'", ')'] || $body !== ['return', ';']) {
-                    throw new ConfigurationException('deepclone bootstrap extension guard source structure drifted');
+                    throw new SourceShapeMismatch('deepclone bootstrap extension guard source structure drifted');
                 }
             } else {
                 if ($body !== ['require', '__DIR__', '.', "'/bootstrap81.php'", ';']
                     || count($condition) !== 3
                     || !in_array($condition[1], ['>=', '>', '<=', '<', '==', '===', '!=', '!=='], true)
                 ) {
-                    throw new ConfigurationException('deepclone bootstrap runtime guard source structure drifted');
+                    throw new SourceShapeMismatch('deepclone bootstrap runtime guard source structure drifted');
                 }
                 $left = ltrim($condition[0], '\\');
                 $right = ltrim($condition[2], '\\');
                 if (($left === 'PHP_VERSION_ID') === ($right === 'PHP_VERSION_ID')) {
-                    throw new ConfigurationException('deepclone bootstrap runtime capability is unknown');
+                    throw new SourceShapeMismatch('deepclone bootstrap runtime capability is unknown');
                 }
                 $literal = $left === 'PHP_VERSION_ID' ? $right : $left;
                 if (preg_match('/^[0-9]+(?:_[0-9]+)*$/D', $literal) !== 1
                     || strlen(str_replace('_', '', $literal)) > 9
                 ) {
-                    throw new ConfigurationException('deepclone bootstrap runtime threshold is unknown');
+                    throw new SourceShapeMismatch('deepclone bootstrap runtime threshold is unknown');
                 }
                 $threshold = (int) str_replace('_', '', $literal);
                 $a = $left === 'PHP_VERSION_ID' ? $phpVersionId : $threshold;
@@ -371,13 +383,13 @@ PHP;
                     '==', '===' => $a === $b, '!=', '!==' => $a !== $b,
                 };
                 if (!$selected) {
-                    throw new ConfigurationException('deepclone fallback is not selected by the target PHP runtime');
+                    throw new SourceShapeMismatch('deepclone fallback is not selected by the target PHP runtime');
                 }
             }
             $index = $bodyEnd + 1;
         }
         if ($index !== count($tokens)) {
-            throw new ConfigurationException('deepclone bootstrap unsupported trailing source structure');
+            throw new SourceShapeMismatch('deepclone bootstrap unsupported trailing source structure');
         }
     }
 
@@ -389,12 +401,12 @@ PHP;
         $header = $class === null ? 'use Symfony\\Polyfill\\DeepClone as p;' : 'namespace DeepClone;';
         $prefix = array_column($this->tokens('<?php ' . $header), 'text');
         if (array_slice(array_column($tokens, 'text'), 0, count($prefix)) !== $prefix) {
-            throw new ConfigurationException('deepclone declaration namespace source structure drifted');
+            throw new SourceShapeMismatch('deepclone declaration namespace source structure drifted');
         }
         $output[] = '<?php' . "\n\n" . $header;
         for ($index = count($prefix); $index < count($tokens);) {
             if ($tokens[$index]['text'] !== 'if' || ($tokens[$index + 1]['text'] ?? null) !== '(') {
-                throw new ConfigurationException('deepclone fallback guard source structure drifted');
+                throw new SourceShapeMismatch('deepclone fallback guard source structure drifted');
             }
             $conditionEnd = $this->closing($tokens, $index + 1, '(', ')');
             $condition = array_column(array_slice($tokens, $index + 2, $conditionEnd - $index - 2), 'text');
@@ -404,7 +416,7 @@ PHP;
             $body = array_column($bodyTokens, 'text');
             if ($condition === ['extension_loaded', '(', "'deepclone'", ')'] && $class === null) {
                 if ($body !== ['return', ';'] || isset($seen['extension'])) {
-                    throw new ConfigurationException('deepclone extension guard source structure drifted');
+                    throw new SourceShapeMismatch('deepclone extension guard source structure drifted');
                 }
                 $seen['extension'] = true;
             } elseif ($class !== null && $condition === ['!', 'extension_loaded', '(', "'deepclone'", ')']) {
@@ -412,7 +424,7 @@ PHP;
                     || isset($seen[$class])
                     || $this->closing($bodyTokens, 4, '{', '}') !== count($bodyTokens) - 1
                 ) {
-                    throw new ConfigurationException('deepclone exception source structure drifted');
+                    throw new SourceShapeMismatch('deepclone exception source structure drifted');
                 }
                 $seen[$class] = true;
                 $output[] = substr($source, $tokens[$bodyStart]['end'], $tokens[$bodyEnd]['offset'] - $tokens[$bodyStart]['end']);
@@ -422,14 +434,14 @@ PHP;
             ) {
                 $name = trim($condition[3], "'");
                 if (isset($seen[$name])) {
-                    throw new ConfigurationException('deepclone duplicate fallback declaration source structure drifted');
+                    throw new SourceShapeMismatch('deepclone duplicate fallback declaration source structure drifted');
                 }
                 $seen[$name] = true;
                 if ($condition[1] === 'function_exists') {
                     if (!in_array($name, ['deepclone_to_array', 'deepclone_from_array', 'deepclone_hydrate'], true)
                         || array_slice($body, 0, 3) !== ['function', $name, '(']
                     ) {
-                        throw new ConfigurationException('deepclone function source structure drifted');
+                        throw new SourceShapeMismatch('deepclone function source structure drifted');
                     }
                     $parametersEnd = $this->closing($bodyTokens, 2, '(', ')');
                     $functionBody = $parametersEnd + 1;
@@ -437,18 +449,18 @@ PHP;
                         ++$functionBody;
                     }
                     if ($this->closing($bodyTokens, $functionBody, '{', '}') !== count($bodyTokens) - 1) {
-                        throw new ConfigurationException('deepclone function guard source structure drifted');
+                        throw new SourceShapeMismatch('deepclone function guard source structure drifted');
                     }
                     $output[] = substr($source, $tokens[$bodyStart]['end'], $tokens[$bodyEnd]['offset'] - $tokens[$bodyStart]['end']);
                 } else {
                     $constants = ['DEEPCLONE_HYDRATE_CALL_HOOKS' => '0', 'DEEPCLONE_HYDRATE_NO_LAZY_INIT' => '1', 'DEEPCLONE_HYDRATE_PRESERVE_REFS' => '2'];
                     if (!isset($constants[$name]) || $body !== ['define', '(', "'{$name}'", ',', '1', '<<', $constants[$name], ')', ';']) {
-                        throw new ConfigurationException('deepclone constant source structure drifted');
+                        throw new SourceShapeMismatch('deepclone constant source structure drifted');
                     }
                     $output[] = 'const ' . $name . ' = 1 << ' . $constants[$name] . ';';
                 }
             } else {
-                throw new ConfigurationException('deepclone unsupported fallback source structure drifted');
+                throw new SourceShapeMismatch('deepclone unsupported fallback source structure drifted');
             }
             $index = $bodyEnd + 1;
         }
@@ -456,7 +468,7 @@ PHP;
             ? ['extension', 'deepclone_to_array', 'deepclone_from_array', 'deepclone_hydrate', 'DEEPCLONE_HYDRATE_CALL_HOOKS', 'DEEPCLONE_HYDRATE_NO_LAZY_INIT', 'DEEPCLONE_HYDRATE_PRESERVE_REFS']
             : [$class];
         if (array_diff($required, array_keys($seen)) !== []) {
-            throw new ConfigurationException('deepclone missing fallback source declaration');
+            throw new SourceShapeMismatch('deepclone missing fallback source declaration');
         }
         return implode("\n\n", $output) . "\n";
     }
@@ -467,7 +479,7 @@ PHP;
         try {
             $raw = token_get_all($source, TOKEN_PARSE);
         } catch (\ParseError $exception) {
-            throw new ConfigurationException('deepclone source structure drifted: invalid PHP', previous: $exception);
+            throw new SourceShapeMismatch('deepclone source structure drifted: invalid PHP', previous: $exception);
         }
         $tokens = [];
         $offset = 0;
@@ -500,7 +512,7 @@ PHP;
                 }
             }
         }
-        throw new ConfigurationException('deepclone source structure drifted: unbalanced declaration');
+        throw new SourceShapeMismatch('deepclone source structure drifted: unbalanced declaration');
     }
 
     private function read(string $path): string

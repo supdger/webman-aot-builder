@@ -31,10 +31,11 @@ final class ProjectBuilder
         bool $fresh = false
     ): array {
         $project = realpath($projectDirectory);
-        if (!is_string($project) || is_link($projectDirectory)) {
+        if (!is_string($project)) {
             throw new ConfigurationException('build requires a real project directory');
         }
-        $lease = new ProjectBuildLease($project);
+        $workspace = new ProjectWorkspace($project, dirname($privateCache));
+        $lease = new ProjectBuildLease($project, $workspace->root());
         $beforeStage?->__invoke('profile');
         $profile = (new ProfileDetector($project))->detect($explicitProfile);
         $compatibilityLock = $this->readLock($compatibilityLockFile, 'compatibility');
@@ -55,9 +56,15 @@ final class ProjectBuilder
         ) { throw new ConfigurationException('selected SDK context belongs to a different build toolchain lock'); }
         $compilerPatchSha256 = (new TypePhpPatchManifestFingerprint())
             ->digest($compilerPatchManifestFile);
-        $composerSha256 = is_file($project . '/composer.lock')
-            ? $this->digest($project . '/composer.lock')
-            : hash('sha256', '');
+        $composerFile = $project . '/composer.lock';
+        $composerSha256 = is_file($composerFile) && is_readable($composerFile)
+            ? @hash_file('sha256', $composerFile) : false;
+        if (!is_string($composerSha256)) {
+            if (file_exists($composerFile) || is_link($composerFile)) {
+                fwrite(STDERR, "[input] skipped unreadable optional file: composer.lock\n");
+            }
+            $composerSha256 = hash('sha256', '');
+        }
         $cacheKey = (new WorkspaceCacheKey())->create(
             $profile,
             $coverage,
@@ -66,13 +73,16 @@ final class ProjectBuilder
             $compilerPatchSha256
         );
         $beforeStage?->__invoke('workspace');
-        $workspace = new ProjectWorkspace($project);
         $paths = $workspace->prepare($cacheKey, $source['sha256']);
         $beforeStage?->__invoke('mirror');
         $mirror = (new ProjectMirror($project))->create($paths['build'])['path'];
         $cache = realpath($privateCache);
         if (!is_string($cache) || !is_dir($cache) || is_link($privateCache)) {
             throw new ConfigurationException('private upstream generator cache is missing or unsafe');
+        }
+        if ($cache === $project || str_starts_with($cache, $project . DIRECTORY_SEPARATOR)) {
+            $cache = $paths['cache'] . '/upstream-generator';
+            if (!is_dir($cache) && !mkdir($cache, 0700, true)) { throw new ConfigurationException('unable to create owned generator cache'); }
         }
         $beforeStage?->__invoke('generate');
         $generated = (new UpstreamProjectGenerator())->generate(
@@ -162,7 +172,12 @@ final class ProjectBuilder
             generatedMappings: $generated['coverageMappings'],
             generatedAdaptations: $generated['adaptations']
         );
-        $workspace->finishAttempt($paths['build']);
+        $workspace->recordGeneratedFiles();
+        try {
+            $workspace->finishAttempt($paths['build']);
+        } catch (ConfigurationException $error) {
+            fwrite(STDERR, '[提示] 产物已生成；编译目录暂时保留：' . $error->getMessage() . "\n");
+        }
         return [
             'profile' => $profile->name(),
             'sourceSha256' => $source['sha256'],

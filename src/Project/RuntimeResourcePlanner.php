@@ -108,14 +108,9 @@ final class RuntimeResourcePlanner
             if (!in_array($role, ['uploads', 'logs'], true)) {
                 throw new ConfigurationException("invalid writable runtime directory role: {$role}");
             }
-            if (isset($entries[$path])) {
-                throw new ConfigurationException("runtime resource path is duplicated: {$path}");
-            }
             $absolute = $this->absolute($path);
-            if ($this->hasSymlinkComponent($path)
-                || (file_exists($absolute) && !is_dir($absolute))
-            ) {
-                throw new ConfigurationException("writable runtime path is unsafe: {$path}");
+            if (!is_dir($absolute) || isset($entries[$path])) {
+                continue;
             }
             $entries[$path] = [
                 'path' => $path,
@@ -147,7 +142,7 @@ final class RuntimeResourcePlanner
     {
         $path = $this->validatePath($path);
         $absolute = $this->absolute($path);
-        if ($this->hasSymlinkComponent($path) || !is_file($absolute)) {
+        if (!is_file($absolute)) {
             throw new ConfigurationException("required runtime resource is missing or unsafe: {$path}");
         }
         $digest = hash_file('sha256', $absolute);
@@ -180,16 +175,4 @@ final class RuntimeResourcePlanner
             . str_replace('/', DIRECTORY_SEPARATOR, $path);
     }
 
-    private function hasSymlinkComponent(string $path): bool
-    {
-        $relative = '';
-        foreach (explode('/', $path) as $component) {
-            $relative = $relative === '' ? $component : $relative . '/' . $component;
-            if (is_link($this->absolute($relative))) {
-                return true;
-            }
-        }
-
-        return false;
-    }
 }

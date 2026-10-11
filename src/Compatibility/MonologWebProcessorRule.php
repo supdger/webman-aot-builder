@@ -40,6 +40,10 @@ final class MonologWebProcessorRule
         if (!is_string($source)) {
             throw new ConfigurationException('Monolog WebProcessor source is unreadable');
         }
+        $aliases = (new \WebmanAotBuilder\Project\GeneratedProjectCoveragePlanner())->sourceAliases($mirror);
+        if (isset($aliases[self::SOURCE])) {
+            return null;
+        }
         try {
             token_get_all($source, TOKEN_PARSE);
             $adapted = (new BoundedTextRule(
@@ -55,7 +59,7 @@ final class MonologWebProcessorRule
                 ['__construct']
             ))->transform($source, 'source-verified');
             token_get_all($adapted, TOKEN_PARSE);
-        } catch (\ParseError|ConfigurationException $exception) {
+        } catch (\ParseError|SourceShapeMismatch $exception) {
             fwrite(STDERR, "[adapt] skipped Monolog WebProcessor: {$exception->getMessage()}; original compiler input retained\n");
             return null;
         }
