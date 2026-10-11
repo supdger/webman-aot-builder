@@ -2,7 +2,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Revision,
     [Parameter(Mandatory=$true)][string]$Output,
-    [string]$ExpectedVersion = '0.4.6'
+    [string]$ExpectedVersion = '0.4.7'
 )
 $ErrorActionPreference = 'Stop'
 $repository = Split-Path -Parent $PSScriptRoot

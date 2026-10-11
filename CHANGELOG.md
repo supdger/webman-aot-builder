@@ -2,6 +2,13 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.7](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.7)
+
+- 精简正式 Release 的源码 ZIP 与 tar.gz：不再包含 CI、OpenSpec、开发测试、测试夹具和文档图片，保留自行构包所需源码、入口、工具、组件锁、补丁与许可；仓库中的开发文件仍保留。
+- 修复 Composer 制包未接纳新增中文 README 导致的归档失败；消费者包提供中英文入口，仅包含安装桥接所需文件。
+- 默认 README 使用英文，提供中文切换、环境与工具链徽章及对应语言流程图。普通用户从 setup 或 Composer 安装，自行制作安装包的开发者再下载源码。
+- 重制本版双平台安装包及安装入口；编译器链、SDK 与项目构建行为沿用 0.4.6，不把既有项目编译及 Linux 业务验证记录作为本版新验收。
+
 ## [v0.4.6](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.6)
 
 - 修复产物阶段后临时工作区清理遇到新增目录项时的 `Directory not empty`：文件和目录删除均先重新核安全性并重试，最多尝试六次。持续写入、删除权限不足或不安全目录仍失败并给出恢复说明，不无限重试或忽略清理错误。
