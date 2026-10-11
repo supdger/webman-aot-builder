@@ -59,7 +59,7 @@ final class ProjectDiscovery
                 $sourceDirectories[$parent] = true;
             }
         }
-        $absoluteRoot = $this->projectDirectory;
+        $absoluteRoot = realpath($this->projectDirectory) ?: $this->projectDirectory;
         $directory = new \RecursiveDirectoryIterator(
             $absoluteRoot,
             \FilesystemIterator::SKIP_DOTS
