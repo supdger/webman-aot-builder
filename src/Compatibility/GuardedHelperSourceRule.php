@@ -364,17 +364,18 @@ final class GuardedHelperSourceRule
                 $relative = $this->literal($body[4]);
                 if ($relative === null || preg_match('#^/bootstrap[0-9]+\.php$#D', $relative) !== 1 || $this->mirror === null) { return $source; }
                 $companionPath = dirname($path) . $relative;
-                $file = $this->mirror . '/' . $companionPath;
+                $file = str_replace(DIRECTORY_SEPARATOR, '/', $this->mirror . '/' . $companionPath);
                 $root = realpath($this->mirror);
                 $resolved = realpath($file);
                 if (!is_string($root) || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($root) || is_link($file)) {
                     throw new ConfigurationException('PHP polyfill bootstrap companion path is unsafe');
                 }
-                for ($parent = dirname($file); $parent !== $root; $parent = dirname($parent)) {
+                $root = str_replace(DIRECTORY_SEPARATOR, '/', $root);
+                for ($parent = str_replace(DIRECTORY_SEPARATOR, '/', dirname($file)); $parent !== $root; $parent = str_replace(DIRECTORY_SEPARATOR, '/', dirname($parent))) {
                     if (is_link($parent) || $parent === dirname($parent) || !str_starts_with($parent, $root . '/')) { throw new ConfigurationException('PHP polyfill bootstrap companion ancestor is unsafe'); }
                 }
                 if (!file_exists($file) || !is_file($file)) { throw new SourceShapeMismatch('Optional PHP polyfill bootstrap companion is unavailable'); }
-                if (!is_string($resolved) || !str_starts_with($resolved, $root . '/')) {
+                if (!is_string($resolved) || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', $resolved), $root . '/')) {
                     throw new ConfigurationException('PHP polyfill bootstrap companion path is unsafe');
                 }
                 $companion = file_get_contents($file);

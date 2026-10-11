@@ -169,13 +169,13 @@ final class ConditionalFileLoader
                 $offset += strlen($match[0][0]);
                 $name = str_replace('\\\\', '\\', $match[3][0]);
                 $path = realpath($mirror . '/' . dirname($loader) . '/' . $match[5][0]);
+                $fallback = is_string($path) ? $this->relativePath($mirror, $path) : null;
                 if (!$bindings->builtinCalls($match[1][0] . "('" . $match[3][0] . "')", '', [], false)
-                    || !is_string($path) || !str_starts_with($path, $mirror . '/')
+                    || $fallback === null
                 ) {
                     $guards = [];
                     break;
                 }
-                $fallback = substr($path, strlen($mirror) + 1);
                 $declarations = isset($sources[$fallback]) ? $this->pureDeclarations($sources[$fallback], $selector) : null;
                 $kind = ltrim($match[1][0], '\\') === 'class_exists' ? T_CLASS : T_INTERFACE;
                 if ($declarations !== [strtolower($name) => $kind]) {
@@ -202,8 +202,9 @@ final class ConditionalFileLoader
             foreach (is_array($manifest['autoload']['files'] ?? null) ? $manifest['autoload']['files'] : [] as $path) {
                 if (is_string($path)) {
                     $real = realpath($mirror . '/' . $path);
-                    if (is_string($real) && str_starts_with($real, $mirror . '/')) {
-                        $loaders[substr($real, strlen($mirror) + 1)] = true;
+                    $relative = is_string($real) ? $this->relativePath($mirror, $real) : null;
+                    if ($relative !== null) {
+                        $loaders[$relative] = true;
                     }
                 }
             }
@@ -222,11 +223,21 @@ final class ConditionalFileLoader
         while (preg_match($entries, $array[1], $entry, PREG_OFFSET_CAPTURE, $offset) === 1) {
             $offset += strlen($entry[0][0]);
             $real = realpath(($entry[2][0] === 'vendorDir' ? $mirror . '/vendor' : $mirror) . $entry[4][0]);
-            if (is_string($real) && str_starts_with($real, $mirror . '/')) {
-                $registered[substr($real, strlen($mirror) + 1)] = true;
+            $relative = is_string($real) ? $this->relativePath($mirror, $real) : null;
+            if ($relative !== null) {
+                $registered[$relative] = true;
             }
         }
         return trim(substr($array[1], $offset)) === '' ? $loaders + $registered : $loaders;
+    }
+
+    private function relativePath(string $mirror, string $path): ?string
+    {
+        $root = realpath($mirror);
+        if (!is_string($root)) { return null; }
+        $root = rtrim(str_replace(DIRECTORY_SEPARATOR, '/', $root), '/');
+        $path = str_replace(DIRECTORY_SEPARATOR, '/', $path);
+        return str_starts_with($path, $root . '/') ? substr($path, strlen($root) + 1) : null;
     }
 
     private function pureDeclarations(string $source, ConditionalDeclarationSelector $selector): ?array

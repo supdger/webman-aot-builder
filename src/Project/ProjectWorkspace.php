@@ -352,8 +352,21 @@ final class ProjectWorkspace
                 continue;
             }
             $digest = $record['files'][$relative] ?? null;
-            if (!is_string($digest) || !self::regularPath($entry->getPathname())
-                || @hash_file('sha256', $entry->getPathname()) !== $digest) {
+            if (!is_string($digest)) {
+                throw new ConfigurationException('refusing to clean an unrecorded workspace output');
+            }
+            $file = $entry->getPathname();
+            $actualDigest = false;
+            for ($attempt = 0; $attempt < 6; ++$attempt) {
+                clearstatcache(true, $file);
+                if (is_link($file) || self::directoryPathHasLinks(dirname($file))) {
+                    throw new ConfigurationException('refusing to clean an unrecorded workspace output');
+                }
+                $actualDigest = self::regularPath($file) ? @hash_file('sha256', $file) : false;
+                if ($actualDigest === $digest || is_string($actualDigest) || !file_exists($file)) { break; }
+                if ($attempt < 5) { usleep(50000 * (2 ** $attempt)); }
+            }
+            if ($actualDigest !== $digest) {
                 throw new ConfigurationException('refusing to clean an unrecorded workspace output');
             }
         }
