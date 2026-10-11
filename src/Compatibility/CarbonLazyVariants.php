@@ -245,8 +245,11 @@ final class CarbonLazyVariants
         $truePath = $specification[$specification['test'] === 'php-version' ? 'weak' : 'strong'];
         $falsePath = $specification[$specification['test'] === 'php-version' ? 'strong' : 'weak'];
         $directory = dirname($mirror . '/' . $specification['selector']);
-        return realpath($directory . '/' . $match[2]) === $mirror . '/' . $truePath
-            && realpath($directory . '/' . $match[4]) === $mirror . '/' . $falsePath;
+        $trueTarget = realpath($mirror . '/' . $truePath);
+        $falseTarget = realpath($mirror . '/' . $falsePath);
+        return $trueTarget !== false && $falseTarget !== false
+            && realpath($directory . '/' . $match[2]) === $trueTarget
+            && realpath($directory . '/' . $match[4]) === $falseTarget;
     }
 
     private function reflectionAssignmentPattern(array $specification): ?string
