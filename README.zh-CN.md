@@ -21,6 +21,8 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 
 构建自己的 Webman / SaiAdmin 项目，请使用[原生 setup 安装入口](#方式二原生安装包)或 [Composer 入口](#方式一composer)，无需下载本仓库。GitHub 的 **Code → Download ZIP** 和 **Source code** 压缩包供自行制作工具安装包的开发者使用。
 
+本仓库及源码压缩包保留制作安装包所需文件；开发测试、验收脚本与发布流程另行维护。
+
 只安装工具时可以暂不选择项目。要构建时，先按项目要求执行 `composer install`，准备 `vendor/`，再选择含 `composer.json`、`composer.lock`、`start.php`、`app/` 的后端根目录。
 
 ### 方式一：Composer

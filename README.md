@@ -21,6 +21,8 @@ The current public packages are intended for development validation. Examples be
 
 To build your own Webman / SaiAdmin project, use the [native setup](#option-2-native-installation-packages) or [Composer entry point](#option-1-composer). You do not need to download this repository. GitHub's **Code → Download ZIP** and **Source code** archives are for developers building the tool's installation packages themselves.
 
+This repository and its source archives retain the files needed to build installation packages. Development tests, acceptance scripts, and release automation are maintained separately.
+
 You can install the tool without choosing a project yet. Before building, run `composer install` as required by your project to prepare `vendor/`, then select the backend root containing `composer.json`, `composer.lock`, `start.php`, and `app/`.
 
 ### Option 1: Composer
