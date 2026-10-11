@@ -1,6 +1,6 @@
 # Webman AOT Builder
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Latest release](https://img.shields.io/github/v/release/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder/releases/latest) [![Downloads](https://img.shields.io/github/downloads/supdger/webman-aot-builder/total)](https://github.com/supdger/webman-aot-builder/releases) [![GitHub stars](https://img.shields.io/github/stars/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder)
+[![PHP (Composer): >=8.0](https://img.shields.io/badge/PHP%20%28Composer%29-%3E%3D8.0-8892BF.svg?logo=php)](#方式一composer) [![Compiler: TypePHP](https://img.shields.io/badge/Compiler-TypePHP-2E9E5B.svg)](https://github.com/swoole/typephp) [![Build host: macOS ARM64 / Windows x64](https://img.shields.io/badge/Build%20host-macOS%20ARM64%20%2F%20Windows%20x64-2496ED.svg)](https://github.com/supdger/webman-aot-builder/wiki/Install) [![Target: Linux amd64](https://img.shields.io/badge/Target-Linux%20amd64-FCC624.svg?logo=linux)](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
