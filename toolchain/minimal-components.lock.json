@@ -5,13 +5,13 @@
     "components": {
         "macos-arm64": {
             "archive": "webman-aot-builder-0.4.10-macos-arm64-components.zip",
-            "sha256": "13b4db6a0815107a12eb8446faf0e89deabe0f183ecae200dc15f098b3ad9612",
-            "manifestSha256": "829079a95c7a872a7478581fc69410981239e33188552fbdcd674778e065ca48"
+            "sha256": "f09775fd52b6dfb0a35474ea7179942f8de2dfe3a1584a4dbe4f891f25ff2915",
+            "manifestSha256": "8648e7aec6a92f60256f3bb74cc6bbf67d1b727ae9ea421dab71b3fcb2556339"
         },
         "windows-x86_64": {
             "archive": "webman-aot-builder-0.4.10-windows-x86_64-components.zip",
-            "sha256": "fdb015151b77b0b6a74d147f2af56e5553dc0f9e855553d700e0324350d47573",
-            "manifestSha256": "43942bb8d5c85c09bebe8b8c391cc52b9e3509eb69451095fc87d5dbb4c8037b"
+            "sha256": "0509e8ed3b621a7eb19e3bd3ef3785a7f708fc13112f76ece84500cd72a0be3b",
+            "manifestSha256": "6d2138f8b02d05d9ba36a92e8c3365e08c6defbaa90436f9d1026bc199d48c1d"
         }
     }
 }
