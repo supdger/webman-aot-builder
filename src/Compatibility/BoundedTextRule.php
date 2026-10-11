@@ -67,14 +67,14 @@ final class BoundedTextRule implements CompatibilityRule
         }));
         foreach ($this->requiredBefore as $marker) {
             if ($marker === '' || $this->matches($tokens, $this->tokens('<?php ' . $marker)) === []) {
-                throw new ConfigurationException(
+                throw new SourceShapeMismatch(
                     "compatibility rule {$this->id}: source structure drift in {$this->sourcePath} at {$version}"
                 );
             }
         }
         $actualHits = count($matches) + count($adapted);
         if ($actualHits === 0) {
-            throw new ConfigurationException(
+            throw new SourceShapeMismatch(
                 "compatibility rule {$this->id}: no supported source or adapted operation "
                 . "in {$this->sourcePath} at {$version}; source structure requires review"
             );
@@ -128,7 +128,7 @@ final class BoundedTextRule implements CompatibilityRule
                 $cursor = $end;
             }
         }
-        if ($ranges === []) { throw new ConfigurationException("compatibility rule {$this->id}: source method scope drift in {$this->sourcePath}"); }
+        if ($ranges === []) { throw new SourceShapeMismatch("compatibility rule {$this->id}: source method scope drift in {$this->sourcePath}"); }
         return array_values(array_filter($matches, static function (array $match) use ($ranges): bool {
             foreach ($ranges as [$start, $end]) {
                 if ($match['start'] >= $start && $match['start'] + $match['length'] <= $end) { return true; }
@@ -139,13 +139,13 @@ final class BoundedTextRule implements CompatibilityRule
 
     private function bodyEnd(array $tokens, int $open): int
     {
-        if (($tokens[$open]['id'] ?? null) !== '{') { throw new ConfigurationException("compatibility rule {$this->id}: source body is missing"); }
+        if (($tokens[$open]['id'] ?? null) !== '{') { throw new SourceShapeMismatch("compatibility rule {$this->id}: source body is missing"); }
         $depth = 1;
         for ($index = $open + 1; isset($tokens[$index]); ++$index) {
             if (in_array($tokens[$index]['id'], ['{', T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true)) { ++$depth; }
             elseif ($tokens[$index]['id'] === '}' && --$depth === 0) { return $index; }
         }
-        throw new ConfigurationException("compatibility rule {$this->id}: source body is unbalanced");
+        throw new SourceShapeMismatch("compatibility rule {$this->id}: source body is unbalanced");
     }
 
     /** @return list<array{id:int|string,text:string,offset:int,end:int}> */

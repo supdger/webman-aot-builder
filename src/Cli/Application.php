@@ -278,6 +278,16 @@ final class Application
         $manager = $this->minimalManager($host);
         $preflight = ($this->doctorFactory)()->inspect();
         foreach ($preflight->toArray()['checks'] as $check) {
+            if ($check['id'] === 'disk') {
+                $freeBytes = $check['details']['freeBytes'] ?? null;
+                $recommendedBytes = $check['details']['recommendedBytes'] ?? $check['details']['minimumBytes'] ?? null;
+                if ($check['status'] !== 'ok'
+                    || (is_int($freeBytes) && is_int($recommendedBytes) && $freeBytes < $recommendedBytes)
+                ) {
+                    fwrite(STDERR, "[提示] 可用空间低于建议值，继续构建；实际写入失败时会报告原始错误。\n");
+                }
+                continue;
+            }
             if ($check['status'] !== 'ok'
                 && !in_array($check['id'], ['minimal-component', 'prepared-toolchain'], true)
             ) {

@@ -4,44 +4,47 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Compatibility;
 
-use WebmanAotBuilder\Cli\ConfigurationException;
-
 final class WorkermanGeneratorRule
 {
     public function transform(string $path, string $source): string
     {
-        if ($path === 'vendor/workerman/workerman/src/Timer.php') {
-            $tokens = $this->tokens($source);
-            foreach ($tokens as &$token) {
-                if ($token['id'] === T_VARIABLE && preg_match('/^\$[A-Za-z_][A-Za-z0-9_]*$/', $token['text']) === 1) {
-                    $token['text'] = '$parameter';
+        $original = $source;
+        try {
+            if ($path === 'vendor/workerman/workerman/src/Timer.php') {
+                $tokens = $this->tokens($source);
+                foreach ($tokens as &$token) {
+                    if ($token['id'] === T_VARIABLE && preg_match('/^\$[A-Za-z_][A-Za-z0-9_]*$/', $token['text']) === 1) {
+                        $token['text'] = '$parameter';
+                    }
+                }
+                unset($token);
+                $allowed = false;
+                foreach (['public static function signalHandle(): void', 'public static function signalHandle(...$parameter): void', 'public static function signalHandle(mixed ...$parameter): void'] as $signature) {
+                    $allowed = $allowed || $this->find($tokens, $this->tokens('<?php ' . $signature)) !== [];
+                }
+                if (!$allowed) {
+                    throw new SourceShapeMismatch('Workerman timer signalHandle signature structure drift');
                 }
             }
-            unset($token);
-            $allowed = false;
-            foreach (['public static function signalHandle(): void', 'public static function signalHandle(...$parameter): void', 'public static function signalHandle(mixed ...$parameter): void'] as $signature) {
-                $allowed = $allowed || $this->find($tokens, $this->tokens('<?php ' . $signature)) !== [];
+            foreach (WebmanWorkermanRules::knownRules() as $rule) {
+                if ($rule->sourcePath() === $path
+                    && !in_array($rule->id(), ['workerman-worker-pid-runtime-path', 'workerman-worker-target-loadavg-call'], true)
+                ) {
+                    $source = $rule->transform($source, 'source-validated');
+                }
             }
-            if (!$allowed) {
-                throw new ConfigurationException('Workerman timer signalHandle signature structure drift');
+            if ($path === 'vendor/workerman/workerman/src/Worker.php') {
+                $source = $this->resetStandardStreams($source);
+                $before = <<<'PHP'
+    static::safeEcho("\nPress Ctrl+C to quit.\n\n"); } case 'connections':
+    PHP;
+                $after = <<<'PHP'
+    static::safeEcho("\nPress Ctrl+C to quit.\n\n"); } exit(0); case 'connections':
+    PHP;
+                $source = (new BoundedTextRule('workerman-worker-status-terminal', 'workerman/workerman', $path, new MinimumVersion('5.2.1'), ['class Worker'], $before, $after, 1, [$after], ['parseCommand']))->transform($source, 'source-validated');
             }
-        }
-        foreach (WebmanWorkermanRules::knownRules() as $rule) {
-            if ($rule->sourcePath() === $path
-                && !in_array($rule->id(), ['workerman-worker-pid-runtime-path', 'workerman-worker-target-loadavg-call'], true)
-            ) {
-                $source = $rule->transform($source, 'source-validated');
-            }
-        }
-        if ($path === 'vendor/workerman/workerman/src/Worker.php') {
-            $source = $this->resetStandardStreams($source);
-            $before = <<<'PHP'
-static::safeEcho("\nPress Ctrl+C to quit.\n\n"); } case 'connections':
-PHP;
-            $after = <<<'PHP'
-static::safeEcho("\nPress Ctrl+C to quit.\n\n"); } exit(0); case 'connections':
-PHP;
-            $source = (new BoundedTextRule('workerman-worker-status-terminal', 'workerman/workerman', $path, new MinimumVersion('5.2.1'), ['class Worker'], $before, $after, 1, [$after], ['parseCommand']))->transform($source, 'source-validated');
+        } catch (SourceShapeMismatch) {
+            return $original;
         }
         return $source;
     }
@@ -67,7 +70,7 @@ PHP;
         $tokens = $this->tokens($source);
         $start = $this->find($tokens, $this->tokens('<?php public static function resetStd(): void {'));
         if (count($start) !== 1) {
-            throw new ConfigurationException('Workerman resetStd method source structure drift');
+            throw new SourceShapeMismatch('Workerman resetStd method source structure drift');
         }
         $bodyStart = $start[0] + count($this->tokens('<?php public static function resetStd(): void {'));
         $depth = 1;
@@ -95,7 +98,7 @@ PHP;
         ) {
             return $source;
         }
-        throw new ConfigurationException('Workerman resetStd standard-stream close structure drift');
+        throw new SourceShapeMismatch('Workerman resetStd standard-stream close structure drift');
     }
 
     private function tokens(string $source): array

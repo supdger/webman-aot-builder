@@ -19,18 +19,18 @@ final class ProfileDetector
         ) {
             throw new ConfigurationException("unknown project profile: {$explicitProfile}");
         }
-        if (!is_dir($this->projectDirectory) || is_link($this->projectDirectory)) {
-            throw new ConfigurationException('project profile requires a real project directory');
+        if (!is_dir($this->projectDirectory)) {
+            throw new ConfigurationException('unable to read project source directory');
         }
 
         $packages = [];
         $evidence = [];
         $lockFile = rtrim($this->projectDirectory, '/\\') . '/composer.lock';
-        if (is_link($lockFile)) {
-            throw new ConfigurationException('project profile refuses symlink: composer.lock');
-        }
-        if (is_file($lockFile)) {
-            $contents = file_get_contents($lockFile);
+        if (is_file($lockFile) && is_readable($lockFile)) {
+            $contents = @file_get_contents($lockFile);
+            if (!is_string($contents)) {
+                RuntimeDataPaths::reportUnreadableData($this->projectDirectory, ['composer.lock']);
+            }
             $lock = is_string($contents) ? json_decode($contents, true) : null;
             if (is_array($lock)) {
                 foreach (['packages', 'packages-dev'] as $section) {
@@ -49,13 +49,13 @@ final class ProfileDetector
                 $evidence[] = 'composer.lock';
             }
         }
+        if (is_file($lockFile) && !is_readable($lockFile)) {
+            RuntimeDataPaths::reportUnreadableData($this->projectDirectory, ['composer.lock']);
+        }
         $frameworkRoot = 'vendor/workerman/webman-framework/src/support/';
         $profile = ProjectProfile::PHP;
         foreach ([$frameworkRoot . 'bootstrap.php', $frameworkRoot . 'App.php'] as $capability) {
             $capabilityFile = rtrim($this->projectDirectory, '/\\') . '/' . $capability;
-            if (is_link($capabilityFile)) {
-                throw new ConfigurationException("project profile refuses symlink: {$capability}");
-            }
             if (is_file($capabilityFile)) {
                 $profile = ProjectProfile::WEBMAN;
                 $evidence[] = $capability;

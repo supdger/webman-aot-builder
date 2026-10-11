@@ -11,21 +11,100 @@ final class GuardedHelperSourceRule
 {
     public function __construct(private ?int $phpVersionId = null, private ?string $redisVersion = null, private array $runtimeCapabilities = [], private ?string $mirror = null) {}
 
-    public function prepare(string $path, string $source): ?string
+    public function prepare(string $path, string $source, bool $strict = false): ?string
     {
-        return match (true) {
-            $path === 'vendor/nikic/fast-route/src/functions.php' => $this->routeOptions($source),
-            $path === 'vendor/cakephp/core/functions.php' => $this->cakeConstants($source),
-            $path === 'vendor/illuminate/reflection/helpers.php' => $this->reflectionProxy($source),
-            $path === 'vendor/illuminate/support/helpers.php' => $this->pregReplaceArray($source),
-            $path === 'vendor/symfony/var-dumper/Resources/functions/dump.php' => $this->dumpReturn($source),
-            in_array($path, ['vendor/zoujingli/ip2region/function.php', 'vendor/zoujingli/ip2region/src/common.php'], true) => $this->ipLoader($path, $source),
-            preg_match('#^vendor/symfony/cache/Traits/Redis(?:Cluster)?[0-9]+ProxyTrait\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'redis'),
-            $path === 'vendor/symfony/polyfill-php85/bootstrap.php' => $this->phpBootstrap($source),
-            preg_match('#^vendor/symfony/polyfill-php[0-9]+/bootstrap(?:[0-9]+)?\.php$#D', $path) === 1 => $this->phpBootstrapCutoff($path, $source),
-            preg_match('#^vendor/symfony/polyfill-php[0-9]+/Resources/stubs/.+\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'php', true),
-            default => null,
-        };
+        try {
+            return match (true) {
+                $path === 'vendor/nikic/fast-route/src/functions.php' => $this->routeOptions($source),
+                $path === 'vendor/cakephp/core/functions.php' => $this->cakeConstants($source),
+                $path === 'vendor/illuminate/reflection/helpers.php' => $this->reflectionProxy($source),
+                $path === 'vendor/illuminate/support/helpers.php' => $this->pregReplaceArray($source),
+                $path === 'vendor/symfony/var-dumper/Resources/functions/dump.php' => $this->dumpReturn($source),
+                in_array($path, ['vendor/zoujingli/ip2region/function.php', 'vendor/zoujingli/ip2region/src/common.php'], true) => $this->ipLoader($path, $source),
+                preg_match('#^vendor/symfony/cache/Traits/Redis(?:Cluster)?[0-9]+ProxyTrait\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'redis'),
+                $path === 'vendor/symfony/polyfill-php85/bootstrap.php' => $this->phpBootstrap($source),
+                preg_match('#^vendor/symfony/polyfill-php[0-9]+/bootstrap(?:[0-9]+)?\.php$#D', $path) === 1 => $this->phpBootstrapCutoff($path, $source),
+                preg_match('#^vendor/symfony/polyfill-php[0-9]+/Resources/stubs/.+\.php$#D', $path) === 1 => $this->runtimeBranches($source, 'php', true),
+                default => null,
+            };
+        } catch (\ParseError $error) {
+            if ($strict) { throw new SourceShapeMismatch('Optional helper input cannot be parsed', previous: $error); }
+            return $source;
+        } catch (SourceShapeMismatch $error) {
+            if ($strict) { throw $error; }
+            return $source;
+        }
+    }
+
+    /** Prove the operations that the locked generator deletes or unwraps before flattening. */
+    public function assertFlattenable(string $source, bool $prepared = false): void
+    {
+        // The upstream replacement also matches comments and strings, so no occurrence is safe to rewrite implicitly.
+        if (preg_match("/require_once\\s+base_path\\(\\s*(['\"])\\/support\\/bootstrap\\.php\\1\\s*\\);/", $source) === 1) {
+            throw new SourceShapeMismatch('Bootstrap inclusion has no proven equivalent source replacement');
+        }
+        try { $tokens = $this->tokens($source); }
+        catch (\ParseError $error) { throw new SourceShapeMismatch('Guarded source input cannot be parsed', previous: $error); }
+        foreach ($this->topLevelGuards($tokens, true) as $guard) {
+            $condition = $this->texts($tokens, $guard['conditionStart'], $guard['conditionEnd']);
+            if (count($condition) !== 5 || $condition[0] !== '!' || $condition[2] !== '(' || $condition[4] !== ')') { continue; }
+            $operation = $condition[1];
+            $name = $this->literal($condition[3]);
+            if ($operation === 'defined' && $name === 'BASE_PATH') {
+                $body = array_slice($tokens, $guard['bodyStart'], $guard['bodyEnd'] - $guard['bodyStart']);
+                $texts = array_column($body, 'text');
+                if ($guard['elseStart'] !== null || $guard['elseifs'] !== [] || count($texts) < 7 || $texts[0] !== 'define' || $texts[1] !== '('
+                    || $this->literal($texts[2]) !== 'BASE_PATH' || $texts[3] !== ','
+                    || array_slice($texts, -2) !== [')', ';']
+                ) { throw new SourceShapeMismatch('BASE_PATH guard contains more than its constant definition'); }
+                foreach (array_slice($body, 4, -2) as $token) {
+                    if (!in_array($token['id'], [T_CONSTANT_ENCAPSED_STRING, T_DIR, T_FILE, T_LNUMBER], true) && $token['text'] !== '.') {
+                        throw new SourceShapeMismatch('BASE_PATH definition has unproven executable input');
+                    }
+                }
+            } elseif ($prepared && in_array($operation, ['function_exists', 'class_exists'], true) && $name !== null) {
+                if ($guard['elseStart'] !== null || $guard['elseifs'] !== []) { throw new SourceShapeMismatch('Declaration guard has an alternative branch'); }
+                $body = array_slice($tokens, $guard['bodyStart'], $guard['bodyEnd'] - $guard['bodyStart']);
+                $start = 0;
+                if ($operation === 'class_exists') {
+                    while (in_array($body[$start]['id'] ?? null, [T_FINAL, T_ABSTRACT, T_READONLY], true)) { ++$start; }
+                }
+                $declaration = $operation === 'function_exists' ? T_FUNCTION : T_CLASS;
+                $nameIndex = $start + 1;
+                if (($body[$nameIndex]['text'] ?? '') === '&' && $operation === 'function_exists') { ++$nameIndex; }
+                if (($body[$start]['id'] ?? null) !== $declaration || ($body[$nameIndex]['id'] ?? null) !== T_STRING) {
+                    throw new SourceShapeMismatch('Declaration guard does not contain its declaration');
+                }
+                $namespace = '';
+                foreach (array_slice($tokens, 0, $guard['start']) as $index => $token) {
+                    if ($token['id'] === T_NAMESPACE && ($tokens[$index + 2]['text'] ?? '') === ';') { $namespace = trim($tokens[$index + 1]['text'], '\\'); }
+                }
+                $identity = ($namespace === '' ? '' : $namespace . '\\') . $body[$nameIndex]['text'];
+                if (strtolower(ltrim($name, '\\')) !== strtolower($identity)) {
+                    throw new SourceShapeMismatch('Declaration guard identity differs from its declaration');
+                }
+                $declared = [];
+                $cursor = 0;
+                while ($cursor < count($body)) {
+                    while (in_array($body[$cursor]['id'] ?? null, [T_FINAL, T_ABSTRACT, T_READONLY], true)) { ++$cursor; }
+                    if (($body[$cursor]['id'] ?? null) !== $declaration) {
+                        throw new SourceShapeMismatch('Declaration guard contains additional executable input');
+                    }
+                    $nameIndex = $cursor + 1;
+                    if (($body[$nameIndex]['text'] ?? '') === '&') { ++$nameIndex; }
+                    if (($body[$nameIndex]['id'] ?? null) !== T_STRING) {
+                        throw new SourceShapeMismatch('Declaration guard contains an unnamed declaration');
+                    }
+                    $declared[] = $body[$nameIndex]['text'];
+                    $open = $nameIndex + 1;
+                    while (isset($body[$open]) && $body[$open]['text'] !== '{') { ++$open; }
+                    $cursor = $this->closing($body, $open, '{', '}') + 1;
+                }
+                if (count($declared) !== 1 && !(strtolower($identity) === 'fastroute\\simpledispatcher'
+                    && $declared === ['simpleDispatcher', 'cachedDispatcher']
+                )) { throw new SourceShapeMismatch('Declaration guard contains an unrecognized group of declarations'); }
+            }
+        }
     }
 
     /** Prepare pure self-guarded declarations in Composer file-autoload order. */
@@ -34,10 +113,7 @@ final class GuardedHelperSourceRule
         if (($this->runtimeCapabilities['sdkNamespacedFunctionExportsKnown'] ?? false) !== true) { return null; }
         try { $tokens = $this->tokens($source); $guards = $this->topLevelGuards($tokens); }
         catch (\ParseError) { return null; }
-        catch (ConfigurationException $error) {
-            if (in_array($error->getMessage(), ['Helper source delimiter structure drift', 'Helper source unbalanced declaration', 'Helper target guard has unsupported elseif'], true)) { return null; }
-            throw $error;
-        }
+        catch (SourceShapeMismatch) { return null; }
         if ($guards === []) { return null; }
         $namespace = '';
         $edits = [];
@@ -98,13 +174,13 @@ final class GuardedHelperSourceRule
         if ($this->matches(array_column($this->tokens($source), 'text'), '$options +=') === []) { return $source; }
         $tokens = $this->tokens($source);
         foreach ($this->matches(array_column($tokens, 'text'), '$options += [') as $index) {
-            if (in_array($tokens[$index - 1]['id'] ?? null, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON], true)) { throw new ConfigurationException('FastRoute options union receiver structure drift'); }
+            if (in_array($tokens[$index - 1]['id'] ?? null, [T_OBJECT_OPERATOR, T_NULLSAFE_OBJECT_OPERATOR, T_DOUBLE_COLON], true)) { throw new SourceShapeMismatch('FastRoute options union receiver structure drift'); }
             $end = $this->closing($tokens, $index + 2, '[', ']');
-            if (($tokens[$end + 1]['text'] ?? null) !== ';') { throw new ConfigurationException('FastRoute options union expression structure drift'); }
+            if (($tokens[$end + 1]['text'] ?? null) !== ';') { throw new SourceShapeMismatch('FastRoute options union expression structure drift'); }
         }
         $source = $this->replace($source, '$options += [', '$options = $options + [', 'FastRoute options union');
         if ($this->matches(array_column($this->tokens($source), 'text'), '$options +=') !== []) {
-            throw new ConfigurationException('FastRoute unsupported options union assignment');
+            throw new SourceShapeMismatch('FastRoute unsupported options union assignment');
         }
         return $source;
     }
@@ -115,7 +191,7 @@ final class GuardedHelperSourceRule
         $after = '$proxyInitializer = function () use ($callback, $eager, &$proxy) { $instance = $callback($proxy, $eager); return $instance; }; $proxy = $reflectionClass->newLazyProxy($proxyInitializer, $options);';
         $texts = array_column($this->functionTokens($source, 'proxy'), 'text');
         if ($this->matches($texts, $before) !== [] && in_array('$proxyInitializer', $texts, true)) {
-            throw new ConfigurationException('Illuminate proxy initializer local already exists');
+            throw new SourceShapeMismatch('Illuminate proxy initializer local already exists');
         }
         if (!in_array('newLazyProxy', $texts, true)) { return $source; }
         return $this->replaceFunction($source, 'proxy', $before, $after, 'Illuminate reflection proxy');
@@ -130,10 +206,10 @@ final class GuardedHelperSourceRule
         $parameterEnd = $this->closing($tokens, 2, '(', ')');
         $bindings = array_keys(array_slice($texts, 3, $parameterEnd - 3), '$replacements', true);
         if (count($bindings) !== 1 || ($texts[$bindings[0] + 2] ?? null) === '&') {
-            throw new ConfigurationException('Illuminate replacements must be a parameter passed by value');
+            throw new SourceShapeMismatch('Illuminate replacements must be a parameter passed by value');
         }
         if ($this->matches($texts, $before) !== [] && (in_array('$remaining', $texts, true) || count(array_keys($texts, '$replacements', true)) !== 3)) {
-            throw new ConfigurationException('Illuminate replacement remaining local already exists');
+            throw new SourceShapeMismatch('Illuminate replacement remaining local already exists');
         }
         return $this->replaceFunction($source, 'preg_replace_array', $before, $after, 'Illuminate replacement array');
     }
@@ -144,10 +220,10 @@ final class GuardedHelperSourceRule
         $tokens = $this->functionTokens($source, 'dump');
         $condition = 'if (array_key_exists(0, $vars) && 1 === count($vars))';
         $branches = $this->matches($texts, $condition);
-        if (count($branches) !== 1) { throw new ConfigurationException('Symfony dump single-value branch structure drift'); }
+        if (count($branches) !== 1) { throw new SourceShapeMismatch('Symfony dump single-value branch structure drift'); }
         $bodyStart = $branches[0] + count($this->tokens('<?php ' . $condition, false));
         $bodyEnd = $this->closing($tokens, $bodyStart, '{', '}');
-        if (($texts[$bodyEnd + 1] ?? null) !== 'else') { throw new ConfigurationException('Symfony dump multi-value branch missing'); }
+        if (($texts[$bodyEnd + 1] ?? null) !== 'else') { throw new SourceShapeMismatch('Symfony dump multi-value branch missing'); }
         $elseStart = $bodyEnd + 2;
         $elseEnd = $this->closing($tokens, $elseStart, '{', '}');
         foreach (array_keys($texts, '$k', true) as $index) {
@@ -155,14 +231,14 @@ final class GuardedHelperSourceRule
             $returnKey = array_slice($texts, $index - 3, 3) === ['return', '$vars', '['] && array_slice($texts, $index + 1, 2) === [']', ';'];
             $initialKey = $index > $bodyStart && $index < $bodyEnd && array_slice($texts, $index + 1, 3) === ['=', '0', ';'];
             if (!$unchangedBranch && !$returnKey && !$initialKey) {
-                throw new ConfigurationException('Symfony dump key local escapes conversion');
+                throw new SourceShapeMismatch('Symfony dump key local escapes conversion');
             }
         }
         $original = $this->matches($texts, 'return $vars[$k];') !== [];
         $assignments = $this->matches($texts, '$k =');
         if (($original && ($this->matches($texts, 'VarDumper::dump($vars[0]); $k = 0;') === [] || count($assignments) !== 1))
             || (!$original && $assignments !== [])
-        ) { throw new ConfigurationException('Symfony dump key local structure drift'); }
+        ) { throw new SourceShapeMismatch('Symfony dump key local structure drift'); }
         $source = $this->replaceFunction($source, 'dump', 'VarDumper::dump($vars[0]); $k = 0;', 'VarDumper::dump($vars[0]);', 'Symfony dump key assignment');
         return $this->replaceFunction($source, 'dump', 'return $vars[$k];', 'return array_values($vars)[0];', 'Symfony dump return key');
     }
@@ -180,12 +256,12 @@ final class GuardedHelperSourceRule
             $body = $this->texts($tokens, $guard['bodyStart'], $guard['bodyEnd']);
             if (count($body) !== 5 || $body[0] !== 'require_once' || $body[1] !== '__DIR__' || $body[2] !== '.'
                 || $this->literal($body[3]) !== $expected || $body[4] !== ';' || $guard['elseStart'] !== null
-            ) { throw new ConfigurationException('IP2Region loader source structure drift'); }
+            ) { throw new SourceShapeMismatch('IP2Region loader source structure drift'); }
             $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], ''];
         }
         $source = $this->edits($source, $edits);
         if (in_array('require_once', array_column($this->tokens($source), 'text'), true)) {
-            throw new ConfigurationException('IP2Region unsupported runtime loader');
+            throw new SourceShapeMismatch('IP2Region unsupported runtime loader');
         }
         return $source;
     }
@@ -208,7 +284,7 @@ final class GuardedHelperSourceRule
                     || $this->literal($body[2]) !== $name || $body[3] !== ',' || $body[5] !== ')' || $body[6] !== ';'
                     || ($name === 'DS' ? $value !== $expected : $this->literal($value) !== $expected) || $guard['elseStart'] !== null
                     || isset($constants[$name])
-                ) { throw new ConfigurationException('Cake global constant declaration structure drift'); }
+                ) { throw new SourceShapeMismatch('Cake global constant declaration structure drift'); }
                 $constants[$name] = $value;
                 $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], ''];
             } elseif (count($condition) === 5 && $condition[0] === '!' && ltrim($condition[1], '\\') === 'function_exists'
@@ -218,13 +294,13 @@ final class GuardedHelperSourceRule
                 $name = $this->literal($condition[3]) ?? '';
                 if (str_starts_with($name, 'Cake\\Core\\')) { $name = substr($name, strlen('Cake\\Core\\')); }
                 if (!$this->isFunction($body, $name) || $guard['elseStart'] !== null) {
-                    throw new ConfigurationException('Cake helper declaration guard structure drift');
+                    throw new SourceShapeMismatch('Cake helper declaration guard structure drift');
                 }
                 $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], $this->body($source, $tokens, $guard)];
-            } else { throw new ConfigurationException('Cake helper unsupported runtime guard'); }
+            } else { throw new SourceShapeMismatch('Cake helper unsupported runtime guard'); }
         }
         if ($constants === [] && $this->matches(array_column($tokens, 'text'), 'namespace Cake\\Core {') !== []) { return $source; }
-        if (!isset($constants['DS'], $constants['CAKE_DATE_RFC7231'])) { throw new ConfigurationException('Cake required global constants missing'); }
+        if (!isset($constants['DS'], $constants['CAKE_DATE_RFC7231'])) { throw new SourceShapeMismatch('Cake required global constants missing'); }
         $source = $this->edits($source, $edits);
         $namespace = 'namespace { const DS = ' . $constants['DS'] . '; const CAKE_DATE_RFC7231 = ' . $constants['CAKE_DATE_RFC7231'] . '; } namespace Cake\\Core {';
         $source = $this->replace($source, 'namespace Cake\\Core;', $namespace, 'Cake helper namespace');
@@ -243,7 +319,7 @@ final class GuardedHelperSourceRule
             $selected = $this->runtimeCondition($condition, $runtime);
             if ($selected === null) {
                 if ($preserveUnknown) { return $original; }
-                throw new ConfigurationException('Unsupported ' . $runtime . ' target declaration guard');
+                throw new SourceShapeMismatch('Unsupported ' . $runtime . ' target declaration guard');
             }
             $body = $selected ? $this->body($source, $tokens, $guard) : '';
             if (!$selected) {
@@ -262,7 +338,7 @@ final class GuardedHelperSourceRule
                 || ($runtime === 'redis' && ltrim($token['text'], '\\') === 'phpversion')
             ) {
                 if ($preserveUnknown) { return $original; }
-                throw new ConfigurationException('Unselected target runtime branch remains');
+                throw new SourceShapeMismatch('Unselected target runtime branch remains');
             }
         }
         return $source;
@@ -288,14 +364,19 @@ final class GuardedHelperSourceRule
                 $relative = $this->literal($body[4]);
                 if ($relative === null || preg_match('#^/bootstrap[0-9]+\.php$#D', $relative) !== 1 || $this->mirror === null) { return $source; }
                 $companionPath = dirname($path) . $relative;
-                $file = $this->mirror . '/' . $companionPath;
+                $file = str_replace(DIRECTORY_SEPARATOR, '/', $this->mirror . '/' . $companionPath);
                 $root = realpath($this->mirror);
                 $resolved = realpath($file);
-                if (!is_string($root) || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($root) || !is_string($resolved)
-                    || !str_starts_with($resolved, $root . '/') || is_link($file) || !is_file($file)
-                ) { throw new ConfigurationException('PHP polyfill bootstrap companion is missing or unsafe'); }
-                for ($parent = dirname($file); $parent !== $root; $parent = dirname($parent)) {
+                if (!is_string($root) || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($root) || is_link($file)) {
+                    throw new ConfigurationException('PHP polyfill bootstrap companion path is unsafe');
+                }
+                $root = str_replace(DIRECTORY_SEPARATOR, '/', $root);
+                for ($parent = str_replace(DIRECTORY_SEPARATOR, '/', dirname($file)); $parent !== $root; $parent = str_replace(DIRECTORY_SEPARATOR, '/', dirname($parent))) {
                     if (is_link($parent) || $parent === dirname($parent) || !str_starts_with($parent, $root . '/')) { throw new ConfigurationException('PHP polyfill bootstrap companion ancestor is unsafe'); }
+                }
+                if (!file_exists($file) || !is_file($file)) { throw new SourceShapeMismatch('Optional PHP polyfill bootstrap companion is unavailable'); }
+                if (!is_string($resolved) || !str_starts_with(str_replace(DIRECTORY_SEPARATOR, '/', $resolved), $root . '/')) {
+                    throw new ConfigurationException('PHP polyfill bootstrap companion path is unsafe');
                 }
                 $companion = file_get_contents($file);
                 if (!is_string($companion)) { throw new ConfigurationException('Unable to read PHP polyfill bootstrap companion'); }
@@ -322,10 +403,7 @@ final class GuardedHelperSourceRule
     private function optionalPhpGuards(array $tokens): ?array
     {
         try { return $this->topLevelGuards($tokens, true); }
-        catch (ConfigurationException $error) {
-            if (in_array($error->getMessage(), ['Helper source delimiter structure drift', 'Helper source unbalanced declaration', 'Helper target guard has unsupported elseif'], true)) { return null; }
-            throw $error;
-        }
+        catch (SourceShapeMismatch) { return null; }
     }
 
     private function phpBootstrap(string $source): string
@@ -358,14 +436,14 @@ final class GuardedHelperSourceRule
                         break;
                     }
                     $replacement = '';
-                } else { throw new ConfigurationException('PHP polyfill target branch has unsupported executable statements'); }
+                } else { throw new SourceShapeMismatch('PHP polyfill target branch has unsupported executable statements'); }
             } elseif (count($condition) === 10 && ltrim($condition[0], '\\') === 'extension_loaded' && $condition[1] === '('
                 && $this->literal($condition[2]) === 'intl' && $condition[3] === ')' && $condition[4] === '&&' && $condition[5] === '!'
                 && ltrim($condition[6], '\\') === 'function_exists' && $condition[7] === '(' && $condition[9] === ')'
             ) {
                 $name = $this->literal($condition[8]);
                 if (!in_array($name, ['locale_is_right_to_left', 'grapheme_levenshtein'], true) || !$this->isFunction($body, $name ?? '')) {
-                    throw new ConfigurationException('PHP polyfill unsupported intl fallback declaration');
+                    throw new SourceShapeMismatch('PHP polyfill unsupported intl fallback declaration');
                 }
                 $native = $name === 'locale_is_right_to_left' ? 'nativeLocaleIsRightToLeft' : 'nativeGraphemeLevenshtein';
                 $replacement = $this->intlCapability('intlEnabled') && !$this->intlCapability($native)
@@ -373,8 +451,8 @@ final class GuardedHelperSourceRule
             } elseif (count($condition) === 5 && $condition[0] === '!' && ltrim($condition[1], '\\') === 'function_exists'
                 && $condition[2] === '(' && $condition[4] === ')' && $this->isFunction($body, $this->literal($condition[3]) ?? '')
             ) { continue; }
-            else { throw new ConfigurationException('PHP polyfill unsupported bootstrap guard'); }
-            if ($guard['elseStart'] !== null) { throw new ConfigurationException('PHP polyfill target guard has unsupported alternative'); }
+            else { throw new SourceShapeMismatch('PHP polyfill unsupported bootstrap guard'); }
+            if ($guard['elseStart'] !== null) { throw new SourceShapeMismatch('PHP polyfill target guard has unsupported alternative'); }
             $edits[] = [$tokens[$guard['start']]['offset'], $tokens[$guard['end']]['end'], $replacement];
         }
         return $this->edits($source, $edits);
@@ -434,7 +512,7 @@ final class GuardedHelperSourceRule
             $end = $this->closing($tokens, $body, '{', '}');
             $functions[] = array_slice($tokens, $index, $end - $index + 1);
         }
-        if (count($functions) !== 1) { throw new ConfigurationException('Helper function declaration structure drift: ' . $name); }
+        if (count($functions) !== 1) { throw new SourceShapeMismatch('Helper function declaration structure drift: ' . $name); }
         return $functions[0];
     }
 
@@ -464,7 +542,7 @@ final class GuardedHelperSourceRule
         $original = $this->matches($texts, $before);
         $adapted = $after === '' ? [] : $this->matches($texts, $after);
         if ($original === [] && $adapted !== []) { return $source; }
-        if ($original === []) { throw new ConfigurationException($label . ' source structure drift'); }
+        if ($original === []) { throw new SourceShapeMismatch($label . ' source structure drift'); }
         $width = count($this->tokens('<?php ' . $before, false));
         $adapted = array_filter($adapted, static function (int $index) use ($original, $width): bool {
             foreach ($original as $start) { if ($index >= $start && $index < $start + $width) { return false; } }
@@ -511,13 +589,13 @@ final class GuardedHelperSourceRule
 
     private function closing(array $tokens, int $start, string $open, string $close): int
     {
-        if (($tokens[$start]['text'] ?? null) !== $open) { throw new ConfigurationException('Helper source delimiter structure drift'); }
+        if (($tokens[$start]['text'] ?? null) !== $open) { throw new SourceShapeMismatch('Helper source delimiter structure drift'); }
         $depth = 1;
         for ($index = $start + 1; $index < count($tokens); ++$index) {
             if ($tokens[$index]['text'] === $open) { ++$depth; }
             if ($tokens[$index]['text'] === $close && --$depth === 0) { return $index; }
         }
-        throw new ConfigurationException('Helper source unbalanced declaration');
+        throw new SourceShapeMismatch('Helper source unbalanced declaration');
     }
 
     private function topLevelGuards(array $tokens, bool $allowElseif = false): array
@@ -543,7 +621,7 @@ final class GuardedHelperSourceRule
                     $elseEnd = $this->closing($tokens, $end + 2, '{', '}');
                     $end = $elseEnd;
                 } elseif (($tokens[$end + 1]['id'] ?? null) === T_ELSEIF) {
-                    throw new ConfigurationException('Helper target guard has unsupported elseif');
+                    throw new SourceShapeMismatch('Helper target guard has unsupported elseif');
                 }
                 $guards[] = ['start' => $index, 'conditionStart' => $index + 2, 'conditionEnd' => $conditionEnd, 'bodyStart' => $conditionEnd + 2, 'bodyEnd' => $bodyEnd, 'elseStart' => $elseStart, 'elseEnd' => $elseEnd, 'end' => $end, 'elseifs' => $elseifs];
                 $index = $end;

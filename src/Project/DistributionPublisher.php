@@ -32,22 +32,17 @@ final class DistributionPublisher
     {
         $project = realpath($this->projectDirectory);
         $candidate = realpath($candidateDirectory);
-        $build = is_string($project)
-            ? realpath($project . '/.webman-aot-builder/build')
-            : false;
-        if (!is_string($project)
-            || !is_string($candidate)
-            || !is_string($build)
-            || is_link($project . '/.webman-aot-builder')
+        $build = is_string($candidate) ? dirname($candidate) : false;
+        $workspace = is_string($build) ? ProjectWorkspace::rootFromBuild($build, $project) : null;
+        if (!is_string($project) || !is_string($candidate) || !is_string($workspace)
             || is_link($candidateDirectory)
-            || dirname($candidate) !== $build
             || preg_match('/^dist-candidate-[a-f0-9]{16}$/D', basename($candidate)) !== 1
-            || !$this->ownedWorkspace($project)
-        ) {
-            throw new ConfigurationException('distribution candidate is outside the owned build workspace');
-        }
+        ) { throw new ConfigurationException('distribution candidate is outside the owned build workspace'); }
         $this->assertMarked($candidate);
-        $destination = $project . '/dist-aot';
+        $destination = dirname($workspace) === $project && is_writable($project) ? $project . '/dist-aot' : $workspace . '/dist-aot';
+        if ((file_exists($destination) || is_link($destination)) && !$this->marked($destination)) {
+            $destination = $workspace . '/dist-aot-' . bin2hex(random_bytes(8));
+        }
         if (is_link($destination) || (file_exists($destination) && !is_dir($destination))) {
             throw new ConfigurationException('existing distribution path is unsafe');
         }
@@ -64,7 +59,7 @@ final class DistributionPublisher
             return ['path' => $destination, 'previous' => null];
         }
 
-        $releases = $project . '/.webman-aot-builder/releases';
+        $releases = $workspace . '/releases';
         if (is_link($releases)
             || (!is_dir($releases) && !mkdir($releases, 0700))
         ) {
@@ -91,22 +86,25 @@ final class DistributionPublisher
         return ['path' => $destination, 'previous' => $previous];
     }
 
-    private function ownedWorkspace(string $project): bool
+    private function marked(string $directory): bool
     {
-        $metadata = $project . '/.webman-aot-builder/workspace.json';
-        $contents = is_file($metadata) && !is_link($metadata)
-            ? file_get_contents($metadata)
-            : false;
-        if (!is_string($contents)) {
-            return false;
+        if (is_link($directory) || !is_dir($directory)) { return false; }
+        try { $this->assertMarked($directory); }
+        catch (ConfigurationException) { return false; }
+        $manifest = json_decode((string) file_get_contents($directory . '/manifest.json'), true);
+        $files = $manifest['files'] ?? null;
+        if (!is_array($files)) { return false; }
+        foreach (['server', 'start.sh', 'stop.sh', 'coverage.json', 'resources.json'] as $required) {
+            if (!isset($files[$required]) || !is_file($directory . '/' . $required) || is_link($directory . '/' . $required)) { return false; }
         }
-        try {
-            $decoded = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
-        } catch (\JsonException) {
-            return false;
+        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($directory, \FilesystemIterator::SKIP_DOTS)) as $file) {
+            $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($directory) + 1));
+            if ($file->isLink()) { return false; }
+            if (!$file->isFile() || $relative === 'manifest.json') { continue; }
+            $digest = $files[$relative]['sha256'] ?? null;
+            if (!is_string($digest) || hash_file('sha256', $file->getPathname()) !== $digest) { return false; }
         }
-        return is_array($decoded)
-            && ($decoded['schema'] ?? null) === 'webman-aot-builder-project-workspace-v1';
+        return true;
     }
 
     private function assertMarked(string $directory): void

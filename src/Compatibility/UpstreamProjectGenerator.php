@@ -79,6 +79,7 @@ final class UpstreamProjectGenerator
         );
         $generatorFile = $generatorOverlay['path'];
         $generatorSha256 = $generatorOverlay['sha256'];
+        $generatorClass = $generatorOverlay['class'];
         require_once $generatorFile;
         $generated = null;
         $manifest = (new UpstreamGeneratorBoundary())->run(
@@ -87,7 +88,7 @@ final class UpstreamProjectGenerator
             $generatorSha256,
             [],
             [],
-            static function () use ($mirror, $generatorRoot, $lock, $outputName, $targetCapabilities, &$generated): array {
+            static function () use ($mirror, $generatorRoot, $lock, $outputName, $targetCapabilities, $generatorClass, &$generated): array {
                 $generated = (new GenericProjectGenerator())->generate(
                     $mirror,
                     $generatorRoot . '/src/Stubs/main.php.stub',
@@ -95,7 +96,8 @@ final class UpstreamProjectGenerator
                     $outputName,
                     $lock['dynamicPhp'] ?? [],
                     $targetCapabilities['phpVersion'] ?? null,
-                    $targetCapabilities
+                    $targetCapabilities,
+                    $generatorClass
                 );
                 return $generated['mappings'];
             }
@@ -109,38 +111,48 @@ final class UpstreamProjectGenerator
         }
         unset($mapping);
         $completion = new PluginSourceCompletion();
-        $intlActive = true;
+        $intlShadows = [];
+        foreach ($manifest as $mapping) {
+            foreach (['grapheme', 'idn', 'normalizer'] as $name) {
+                if ($mapping['path'] === "vendor/symfony/polyfill-intl-{$name}/bootstrap80.php") {
+                    $intlShadows[$name] = $mapping['shadow'];
+                }
+            }
+        }
+        $intlActive = count($intlShadows) === 3;
         foreach (['grapheme', 'idn', 'normalizer'] as $name) {
-            $intlActive = $intlActive && $completion->includes($mirror, ".typephp/build/symfony-{$name}-functions.php");
+            $intlActive = $intlActive && $completion->includes($mirror, $intlShadows[$name] ?? '');
         }
         if ($intlActive && $this->supportsNativeIntlSources($mirror, $targetCapabilities, $manifest)) {
             $intl = (new NativeIntlPolyfillRule())->apply($mirror, $lock['optionalAdaptations']['symfony/native-intl-polyfill'] ?? [], $targetCapabilities, $manifest);
-            $adaptations['nativeIntlShadowSha256'] = $intl['shadowSha256'];
-            $adaptations['nativeIntlProjectSha256'] = $intl['projectSha256'];
-            $adaptations['nativeIntlProviderSha256'] = hash('sha256', json_encode($intl['providerShadows'], JSON_THROW_ON_ERROR));
-            foreach ($manifest as &$mapping) {
-                if (isset($intl['providerShadows'][$mapping['shadow']])) { $mapping['shadowSha256'] = $intl['providerShadows'][$mapping['shadow']]; }
-                if ($mapping['shadow'] === '.typephp/build/symfony-grapheme-functions.php') {
-                    $mapping['shadowSha256'] = $intl['shadowSha256'];
-                }
-            }
-            unset($mapping);
-            // NativeIntl proved these declarations are supplied by the selected SDK.
-            foreach (['idn', 'normalizer'] as $name) {
-                $shadow = ".typephp/build/symfony-{$name}-functions.php";
-                $path = $mirror . '/' . $shadow;
-                if (!is_file($path) || is_link($path) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($path) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $path)
-                    || file_put_contents($path, "<?php\n", LOCK_EX) !== 6
-                ) {
-                    throw new ConfigurationException('unable to preserve native Intl compiler coverage: ' . $shadow);
-                }
+            if ($intl !== null) {
+                $adaptations['nativeIntlShadowSha256'] = $intl['shadowSha256'];
+                $adaptations['nativeIntlProjectSha256'] = $intl['projectSha256'];
+                $adaptations['nativeIntlProviderSha256'] = hash('sha256', json_encode($intl['providerShadows'], JSON_THROW_ON_ERROR));
                 foreach ($manifest as &$mapping) {
-                    if ($mapping['shadow'] === $shadow) {
-                        $mapping['shadowSha256'] = hash('sha256', "<?php\n");
+                    if (isset($intl['providerShadows'][$mapping['shadow']])) { $mapping['shadowSha256'] = $intl['providerShadows'][$mapping['shadow']]; }
+                    if ($mapping['shadow'] === $intlShadows['grapheme']) {
+                        $mapping['shadowSha256'] = $intl['shadowSha256'];
                     }
                 }
                 unset($mapping);
-                $adaptations["nativeIntl{$name}ShadowSha256"] = hash('sha256', "<?php\n");
+                // NativeIntl proved these declarations are supplied by the selected SDK.
+                foreach (['idn', 'normalizer'] as $name) {
+                    $shadow = $intlShadows[$name];
+                    $path = $mirror . '/' . $shadow;
+                    if (!is_file($path) || is_link($path) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($path) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $path)
+                        || file_put_contents($path, "<?php\n", LOCK_EX) !== 6
+                    ) {
+                        throw new ConfigurationException('unable to preserve native Intl compiler coverage: ' . $shadow);
+                    }
+                    foreach ($manifest as &$mapping) {
+                        if ($mapping['shadow'] === $shadow) {
+                            $mapping['shadowSha256'] = hash('sha256', "<?php\n");
+                        }
+                    }
+                    unset($mapping);
+                    $adaptations["nativeIntl{$name}ShadowSha256"] = hash('sha256', "<?php\n");
+                }
             }
         }
         if ($completion->includes($mirror, 'vendor/symfony/polyfill-deepclone/DeepClone.php')) {
@@ -163,7 +175,6 @@ final class UpstreamProjectGenerator
             $monologDigest = (new MonologWebProcessorRule())->apply($mirror, $lock['optionalAdaptations']['monolog/monolog'] ?? []);
             if ($monologDigest !== null) { $adaptations['monologWebProcessorSha256'] = $monologDigest; }
         }
-        $this->assertIntlFunctionProviders($mirror, $targetCapabilities, $manifest);
         $projectFile = $mirror . '/project.linux.yml';
         $mainFile = $mirror . '/' . $generated['mainFile'];
         $projectSha256 = hash_file('sha256', $projectFile);
@@ -230,16 +241,16 @@ final class UpstreamProjectGenerator
         }
         foreach (['grapheme', 'idn', 'normalizer'] as $name) {
             $source = "vendor/symfony/polyfill-intl-{$name}/bootstrap80.php";
-            $shadow = ".typephp/build/symfony-{$name}-functions.php";
             $mapping = null;
             foreach ($manifest as $entry) {
-                if ($entry['path'] === $source && $entry['shadow'] === $shadow) {
+                if ($entry['path'] === $source) {
                     $mapping = $entry;
                 }
             }
             if ($mapping === null) {
                 return false;
             }
+            $shadow = $mapping['shadow'];
             $contents = [];
             foreach ([$source => 'sourceSha256', $shadow => 'shadowSha256'] as $relative => $digestKey) {
                 $path = $mirror . '/' . $relative;
@@ -266,7 +277,7 @@ final class UpstreamProjectGenerator
                         return false;
                     }
                 }
-            } catch (ConfigurationException $exception) {
+            } catch (SourceShapeMismatch | \ParseError $exception) {
                 fwrite(STDERR, "[adapt] skipped native Intl: {$exception->getMessage()}; original compiler inputs retained\n");
                 return false;
             }
@@ -309,152 +320,4 @@ final class UpstreamProjectGenerator
         }
     }
 
-    /** Validate the two PHP85 Intl fallbacks against the selected SDK and final compiler input. */
-    private function assertIntlFunctionProviders(string $mirror, array $capabilities, array $manifest): void
-    {
-        $active = false;
-        foreach ($manifest as $mapping) {
-            if (($mapping['path'] ?? null) === 'vendor/symfony/polyfill-php85/bootstrap.php') { $active = true; }
-        }
-        if (!$active) { return; }
-        $resolvedMirror = !is_link($mirror) ? realpath($mirror) : false;
-        if (!is_string($resolvedMirror) || !is_dir($resolvedMirror)) {
-            throw new ConfigurationException('PHP85 Intl provider mirror is missing or unsafe');
-        }
-        $mirror = str_replace(DIRECTORY_SEPARATOR, '/', $resolvedMirror);
-        foreach (['intlEnabled', 'nativeLocaleIsRightToLeft', 'nativeGraphemeLevenshtein', 'nativeGraphemeStrrev'] as $key) {
-            if (!is_bool($capabilities[$key] ?? null)) {
-                throw new ConfigurationException("PHP85 Intl provider target capability is missing: {$key}");
-            }
-        }
-        $project = file_get_contents($mirror . '/project.linux.yml');
-        if (!is_string($project) || preg_match('/\nsources:\n(.*?)\nignore:\n(.*?)\noutput:/s', $project, $sections) !== 1) {
-            throw new ConfigurationException('PHP85 Intl provider compiler selection is invalid');
-        }
-        $selection = [];
-        foreach ([1, 2] as $section) {
-            $paths = [];
-            foreach (explode("\n", $sections[$section]) as $line) {
-                if (trim($line) === '' || str_starts_with(trim($line), '#')) { continue; }
-                if (preg_match('/^  - ([A-Za-z0-9_.\/-]+)$/D', $line, $matches) !== 1
-                    || str_starts_with($matches[1], '/') || in_array('..', explode('/', $matches[1]), true)
-                ) { throw new ConfigurationException('PHP85 Intl provider compiler path is invalid'); }
-                $paths[] = rtrim($matches[1], '/');
-            }
-            $selection[$section] = $paths;
-        }
-        $covered = static function (string $path, array $paths): bool {
-            foreach ($paths as $candidate) {
-                if ($path === $candidate || str_starts_with($path, $candidate . '/')) { return true; }
-            }
-            return false;
-        };
-        $files = [];
-        foreach ($selection[1] as $source) {
-            if ($covered($source, $selection[2])) { continue; }
-            $absolute = $mirror . '/' . $source;
-            $resolved = realpath($absolute);
-            $resolved = is_string($resolved) ? str_replace(DIRECTORY_SEPARATOR, '/', $resolved) : $resolved;
-            if (!is_string($resolved) || !str_starts_with($resolved, $mirror . '/')) { throw new ConfigurationException('PHP85 Intl provider source escapes the mirror'); }
-            if (is_link($absolute)) { throw new ConfigurationException('PHP85 Intl provider input is a symlink'); }
-            if (is_file($absolute)) { $files[$source] = $absolute; continue; }
-            if (!is_dir($absolute)) { throw new ConfigurationException("PHP85 Intl provider source is missing: {$source}"); }
-            $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($absolute, \FilesystemIterator::SKIP_DOTS));
-            foreach ($iterator as $file) {
-                $path = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
-                if ($covered($path, $selection[2])) { continue; }
-                if ($file->isLink()) { throw new ConfigurationException('PHP85 Intl provider input is a symlink'); }
-                if ($file->isFile() && str_ends_with($path, '.php')) { $files[$path] = $file->getPathname(); }
-            }
-        }
-        $digests = [];
-        foreach ($manifest as $mapping) {
-            foreach (['path' => 'sourceSha256', 'shadow' => 'shadowSha256'] as $pathKey => $digestKey) {
-                $digests[$mapping[$pathKey]] = $mapping[$digestKey];
-            }
-        }
-        $providers = ['locale_is_right_to_left' => [], 'grapheme_levenshtein' => [], 'grapheme_strrev' => []];
-        foreach ($files as $path => $absolute) {
-            if (!str_ends_with($path, '.php')) { continue; }
-            $source = file_get_contents($absolute);
-            if (!is_string($source) || (isset($digests[$path]) && hash('sha256', $source) !== $digests[$path])) {
-                throw new ConfigurationException("PHP85 Intl provider current mapping evidence drifted: {$path}");
-            }
-            foreach ($this->intlGlobalDeclarations($source) as $name) { $providers[$name][] = $path; }
-        }
-        foreach (['locale_is_right_to_left' => 'nativeLocaleIsRightToLeft', 'grapheme_levenshtein' => 'nativeGraphemeLevenshtein', 'grapheme_strrev' => 'nativeGraphemeStrrev'] as $name => $key) {
-            $expected = !$capabilities['intlEnabled'] || $capabilities[$key] ? 0 : 1;
-            if (count($providers[$name]) !== $expected) {
-                throw new ConfigurationException("PHP85 Intl provider {$name} expected {$expected} global PHP declarations, got " . count($providers[$name]));
-            }
-        }
-    }
-
-    /** @return list<string> */
-    private function intlGlobalDeclarations(string $source): array
-    {
-        try { $raw = token_get_all($source, TOKEN_PARSE); }
-        catch (\ParseError $error) { throw new ConfigurationException('PHP85 Intl provider PHP syntax is invalid', previous: $error); }
-        $tokens = [];
-        foreach ($raw as $token) {
-            if (is_array($token) && in_array($token[0], [T_OPEN_TAG, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) { continue; }
-            $tokens[] = is_array($token) ? ['id' => $token[0], 'text' => $token[1]] : ['id' => null, 'text' => $token];
-        }
-        $namespace = '';
-        $pending = null;
-        $stack = [];
-        $classDepth = 0;
-        $functionDepth = 0;
-        $declarations = [];
-        $conditionalBodies = [];
-        foreach ($tokens as $index => $token) {
-            if (in_array($token['id'], [T_IF, T_ELSEIF, T_FOR, T_FOREACH, T_WHILE, T_SWITCH], true)) {
-                $depth = 0;
-                for ($next = $index + 1; isset($tokens[$next]); ++$next) {
-                    if ($tokens[$next]['text'] === '(') { ++$depth; }
-                    elseif ($tokens[$next]['text'] === ')' && --$depth === 0) { $conditionalBodies[$next + 1] = true; break; }
-                }
-            }
-            if (isset($conditionalBodies[$index]) && $token['text'] === ':') { $stack[] = ['conditional', null]; }
-            if (in_array($token['id'], [T_ENDIF, T_ENDFOR, T_ENDFOREACH, T_ENDWHILE, T_ENDSWITCH], true)
-                && ($stack[count($stack) - 1][0] ?? null) === 'conditional'
-            ) { array_pop($stack); }
-            if ($token['id'] === T_NAMESPACE) {
-                $name = '';
-                for ($next = $index + 1; isset($tokens[$next]) && !in_array($tokens[$next]['text'], [';', '{'], true); ++$next) { $name .= $tokens[$next]['text']; }
-                if (($tokens[$next]['text'] ?? null) === '{') { $pending = ['namespace', $namespace]; }
-                $namespace = trim($name, '\\');
-            } elseif (in_array($token['id'], [T_CLASS, T_TRAIT, T_INTERFACE, T_ENUM], true)
-                && ($tokens[$index - 1]['id'] ?? null) !== T_DOUBLE_COLON
-            ) { $pending = ['class', null]; }
-            elseif ($token['id'] === T_FUNCTION) {
-                $next = $index + 1;
-                if (($tokens[$next]['text'] ?? null) === '&') { ++$next; }
-                if ($classDepth === 0 && $functionDepth === 0 && $namespace === '' && ($tokens[$next]['id'] ?? null) === T_STRING) {
-                    $name = strtolower($tokens[$next]['text']);
-                    if (in_array($name, ['locale_is_right_to_left', 'grapheme_levenshtein', 'grapheme_strrev'], true)) {
-                        foreach ($stack as $scope) {
-                            if ($scope[0] !== 'namespace') { throw new ConfigurationException("PHP85 Intl provider {$name} declaration is conditional"); }
-                        }
-                        if (isset($conditionalBodies[$index])) { throw new ConfigurationException("PHP85 Intl provider {$name} declaration is conditional"); }
-                        $declarations[] = $name;
-                    }
-                }
-                $pending = ['function', null];
-            }
-            if ($token['text'] === '{') {
-                $scope = $pending ?? ['block', null];
-                $stack[] = $scope;
-                if ($scope[0] === 'class') { ++$classDepth; }
-                if ($scope[0] === 'function') { ++$functionDepth; }
-                $pending = null;
-            } elseif ($token['text'] === '}') {
-                $scope = array_pop($stack);
-                if (($scope[0] ?? null) === 'class') { --$classDepth; }
-                if (($scope[0] ?? null) === 'function') { --$functionDepth; }
-                if (($scope[0] ?? null) === 'namespace') { $namespace = $scope[1]; }
-            } elseif ($token['text'] === ';') { $pending = null; }
-        }
-        return $declarations;
-    }
 }

@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Compatibility;
 
-use WebmanAotBuilder\Cli\ConfigurationException;
-
 final class WorkermanCallbackRule implements CompatibilityRule
 {
     public function __construct(private readonly string $kind) {}
@@ -29,11 +27,11 @@ final class WorkermanCallbackRule implements CompatibilityRule
             ] as [$before, $after]) {
                 try {
                     return $this->rule('set_error_handler(' . $before . ');', 'set_error_handler(' . $after . ');', ['class AsyncTcpConnection', 'STATUS_CONNECTING'])->transform($source, $version);
-                } catch (ConfigurationException) {
+                } catch (SourceShapeMismatch) {
                     // The other confirmed signature is checked next.
                 }
             }
-            throw new ConfigurationException('Workerman async error handler source structure drift: ' . $this->sourcePath());
+            throw new SourceShapeMismatch('Workerman async error handler source structure drift: ' . $this->sourcePath());
         }
         if ($this->hasReasonCapture($source)) {
             $before = <<<'PHP'
@@ -85,7 +83,7 @@ PHP;
         foreach ($tokens as $index => $token) {
             if ($token['id'] === T_FUNCTION && ($tokens[$index + 1]['text'] ?? null) === 'doSslHandshake') { $methods[] = $index; }
         }
-        if (count($methods) !== 1) { throw new ConfigurationException('Workerman SSL handshake method structure drift'); }
+        if (count($methods) !== 1) { throw new SourceShapeMismatch('Workerman SSL handshake method structure drift'); }
         $start = $methods[0];
         $body = $start;
         while ($body < count($tokens) && $tokens[$body]['text'] !== '{') { ++$body; }
@@ -108,11 +106,11 @@ PHP;
                 if ($token['id'] === T_VARIABLE && $token['text'] === '$reason') { $reasonUses[] = $offset; }
                 if ($token['text'] === '$' || in_array($token['id'], [T_EVAL, T_INCLUDE, T_INCLUDE_ONCE, T_REQUIRE, T_REQUIRE_ONCE], true)
                     || ($token['id'] === T_STRING && strtolower($token['text']) === 'extract')
-                ) { throw new ConfigurationException('Workerman SSL reason has unsupported prior local state'); }
+                ) { throw new SourceShapeMismatch('Workerman SSL reason has unsupported prior local state'); }
             }
             if ($reasonUses !== [] && (count($reasonUses) !== 1
                 || array_column(array_slice($prefix, $reasonUses[0], 4), 'text') !== ['$reason', '=', "''", ';'])
-            ) { throw new ConfigurationException('Workerman SSL reason has unsupported prior local state'); }
+            ) { throw new SourceShapeMismatch('Workerman SSL reason has unsupported prior local state'); }
             return true;
         }
         return false;

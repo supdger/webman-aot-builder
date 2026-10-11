@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Project\ProjectMirror;
 use WebmanAotBuilder\Project\ProjectDiscovery;
 
 final class ConditionalDeclarationSelector
@@ -19,6 +20,9 @@ final class ConditionalDeclarationSelector
      */
     public function apply(string $mirror, array $files, array $existing, array $targetCapabilities = []): array
     {
+        $directory = ProjectMirror::generationSourceDirectory($mirror);
+        if ($directory === null) { return []; }
+        $relative = substr($directory, strlen($mirror) + 1);
         $sources = [];
         $types = [];
         $replaced = array_column($existing, 'shadow', 'path');
@@ -41,12 +45,16 @@ final class ConditionalDeclarationSelector
                     && !str_contains($source, 'extension_loaded'))) {
                 continue;
             }
-            $selected = $this->select($source, $path, $types, $targetCapabilities, $bindings);
-            if ($selected === $source) {
-                continue;
+            foreach (token_get_all($source) as $token) {
+                if (is_array($token) && in_array($token[0], [T_DIR, T_FILE, T_LINE, T_INCLUDE, T_INCLUDE_ONCE, T_REQUIRE, T_REQUIRE_ONCE], true)) { continue 2; }
             }
-            token_get_all($selected, TOKEN_PARSE);
-            $shadow = '.typephp/build/conditional-' . hash('sha256', $path) . '.php';
+            try {
+                token_get_all($source, TOKEN_PARSE);
+                $selected = $this->select($source, $path, $types, $targetCapabilities, $bindings);
+                if ($selected === $source) { continue; }
+                token_get_all($selected, TOKEN_PARSE);
+            } catch (\ParseError) { continue; }
+            $shadow = $relative . '/conditional-' . hash('sha256', $path) . '.php';
             if (is_link($mirror . '/' . $shadow)
                 || file_put_contents($mirror . '/' . $shadow, $selected, LOCK_EX) !== strlen($selected)
             ) {

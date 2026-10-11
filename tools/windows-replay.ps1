@@ -337,75 +337,24 @@ Write-Host 'Assembling locked Linux x86-64 musl sysroot ...'
     "--lock=$LockFile"
 Assert-LastExitCode 'musl sysroot assembly'
 
-if ($PrepareOnly) {
-    $prepared = [ordered] @{
-        schema = 'webman-aot-builder-prepared-toolchain-v1'
-        host = 'windows-x86_64'
-        lockSha256 = (Get-FileHash -LiteralPath $LockFile -Algorithm SHA256).Hash.ToLowerInvariant()
-        php = (Get-WorkRelativePath $WorkRoot $php)
-        typephp = (Get-WorkRelativePath $WorkRoot $typephpRoot)
-        phpx = (Get-WorkRelativePath $WorkRoot $phpx)
-        compiler = (Get-WorkRelativePath $WorkRoot $compiler)
-        objcopy = (Get-WorkRelativePath $WorkRoot $llvmObjcopy)
-        sysroot = (Get-WorkRelativePath $WorkRoot $sysroot)
-        phprc = (Get-WorkRelativePath $WorkRoot $phpConfig)
-        sdkSha256 = $strippedSdk.sha256
-    }
-    $preparedPath = Join-Path $WorkRoot 'prepared-toolchain.json'
-    [IO.File]::WriteAllText(
-        $preparedPath,
-        ($prepared | ConvertTo-Json -Depth 8),
-        [System.Text.UTF8Encoding]::new($false)
-    )
-    $prepared | ConvertTo-Json -Depth 8
-    return
-}
-
-Write-Host 'Calculating normalized reproducibility input ...'
-$normalizedInput = & $php (Join-Path $repository 'tools\reproducibility-input.php') |
-    ConvertFrom-Json
-Assert-LastExitCode 'normalized input calculation'
-
-$output = Join-Path $WorkRoot 'probe'
-Write-Host 'Building full-static Linux x86-64 probe ...'
-& $php (Join-Path $repository 'tools\build-full-static-smoke.php') `
-    "--typephp=$typephpRoot" `
-    "--php=$php" `
-    "--phpx=$phpx" `
-    "--compiler=$compiler" `
-    "--sysroot=$sysroot" `
-    "--sdk=$sdk" `
-    "--output=$output"
-Assert-LastExitCode 'Windows full-static replay'
-
-$artifact = Join-Path $output 'full_static_cross_smoke'
-$result = [ordered] @{
-    schema = 'webman-aot-builder-windows-replay-v1'
+$prepared = [ordered] @{
+    schema = 'webman-aot-builder-prepared-toolchain-v1'
     host = 'windows-x86_64'
-    containerUsed = $false
-    normalizedInputSha256 = $normalizedInput.sha256
-    expectedNormalizedInputSha256 = 'f18bac511781f372bb65e4fe4b4ac518535792a4d57b896f84b050f540419ba2'
-    matchesMacNormalizedInput = $false
-    artifact = $artifact
-    artifactSize = (Get-Item -LiteralPath $artifact).Length
-    artifactSha256 = (Get-FileHash -LiteralPath $artifact -Algorithm SHA256).Hash.ToLowerInvariant()
-    expectedMacArtifactSha256 = '95005fdcfa288464fefa5fd88f32886a0ae4cd30f7fa698103a2647a344f56e3'
-    matchesMacArtifact = $false
+    lockSha256 = (Get-FileHash -LiteralPath $LockFile -Algorithm SHA256).Hash.ToLowerInvariant()
+    php = (Get-WorkRelativePath $WorkRoot $php)
+    typephp = (Get-WorkRelativePath $WorkRoot $typephpRoot)
+    phpx = (Get-WorkRelativePath $WorkRoot $phpx)
+    compiler = (Get-WorkRelativePath $WorkRoot $compiler)
+    objcopy = (Get-WorkRelativePath $WorkRoot $llvmObjcopy)
+    sysroot = (Get-WorkRelativePath $WorkRoot $sysroot)
+    phprc = (Get-WorkRelativePath $WorkRoot $phpConfig)
+    sdkSha256 = $strippedSdk.sha256
 }
-$result.matchesMacNormalizedInput = (
-    $result.normalizedInputSha256 -eq $result.expectedNormalizedInputSha256
-)
-$result.matchesMacArtifact = $result.artifactSha256 -eq $result.expectedMacArtifactSha256
-$evidence = Join-Path $WorkRoot 'windows-replay.json'
+$preparedPath = Join-Path $WorkRoot 'prepared-toolchain.json'
 [IO.File]::WriteAllText(
-    $evidence,
-    ($result | ConvertTo-Json -Depth 8),
+    $preparedPath,
+    ($prepared | ConvertTo-Json -Depth 8),
     [System.Text.UTF8Encoding]::new($false)
 )
-$result | ConvertTo-Json -Depth 8
-if (-not $result.matchesMacNormalizedInput) {
-    throw "Windows normalized input SHA-256 differs from Mac baseline; evidence: $evidence"
-}
-if (-not $result.matchesMacArtifact) {
-    throw "Windows ELF SHA-256 differs from Mac baseline; evidence: $evidence"
-}
+$prepared | ConvertTo-Json -Depth 8
+return

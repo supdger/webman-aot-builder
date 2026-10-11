@@ -52,7 +52,6 @@ final class DistributionAssembler
         if (!is_string($project)
             || !is_string($mirror)
             || !is_string($elf)
-            || is_link($projectDirectory)
             || is_link($mirrorDirectory)
             || is_link($elfFile)
             || !ProjectMirror::isOwnedPath($mirror, $project)
@@ -64,16 +63,19 @@ final class DistributionAssembler
                 'distribution assembly requires an owned mirror and compiled ELF'
             );
         }
-        $workspace = $project . '/.webman-aot-builder/workspace.json';
+        $workspaceRoot = ProjectWorkspace::rootFromBuild(dirname($mirror), $project);
+        $workspace = $workspaceRoot . '/workspace.json';
         $metadata = $this->readJson($workspace);
         $source = (new SourceTreeSnapshot($project))->capture();
+        $composerFile = $project . '/composer.lock';
+        $composerSha256 = is_file($composerFile) && is_readable($composerFile)
+            ? @hash_file('sha256', $composerFile) : false;
+        if (!is_string($composerSha256)) { $composerSha256 = hash('sha256', ''); }
         if (($metadata['schema'] ?? null) !== 'webman-aot-builder-project-workspace-v1'
             || ($metadata['sourceSha256'] ?? null) !== $source['sha256']
             || ($inputs['sourceTreeSha256'] ?? null) !== $source['sha256']
             || ($inputs['composerLockSha256'] ?? null)
-                !== (is_file($project . '/composer.lock')
-                    ? $this->digest($project . '/composer.lock')
-                    : hash('sha256', ''))
+                !== $composerSha256
             || ($inputs['compatibilityLockSha256'] ?? null)
                 !== $this->digest($compatibilityLockFile)
             || ($inputs['toolchainLockSha256'] ?? null)
@@ -117,7 +119,7 @@ final class DistributionAssembler
             }
         }
 
-        $build = $project . '/.webman-aot-builder/build';
+        $build = $workspaceRoot . '/build';
         $candidate = $build . '/dist-candidate-' . bin2hex(random_bytes(8));
         $beforeStage?->__invoke('candidate');
         if (!mkdir($candidate, 0700)) {

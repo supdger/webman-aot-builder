@@ -73,18 +73,14 @@ final class PluginSourceCompletion
             if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) !== 'php') {
                 continue;
             }
-            if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
-                if (isset($replacements[$path])) {
-                    continue;
-                }
-                if ($this->covered($path, $ignore)) {
-                    throw new ConfigurationException("business PHP is excluded from TypePHP compilation: {$path}");
-                }
-                if (!$this->covered($path, $sources)) {
-                    $sources[] = $path;
-                }
-            } elseif (!$this->covered($path, $ignore)) {
-                $ignore[] = $path;
+            if (isset($replacements[$path])) {
+                continue;
+            }
+            if ($this->covered($path, $ignore)) {
+                throw new ConfigurationException("PHP input is excluded from TypePHP compilation: {$path}");
+            }
+            if (!$this->covered($path, $sources)) {
+                $sources[] = $path;
             }
         }
         $sources = array_merge($sources, $this->replacementSources($mirror, $mappings, $sources, $ignore));
@@ -148,7 +144,8 @@ final class PluginSourceCompletion
                 || !is_string($record['install-path'] ?? null)
             ) { return []; }
             if (isset($dev[$name])) { continue; }
-            $record['root'] = $this->sourceDirectory($mirror, $mirror . '/vendor/composer/' . $record['install-path']);
+            $record['root'] = $this->hintDirectory($mirror, $mirror . '/vendor/composer/' . $record['install-path']);
+            if ($record['root'] === null) { return []; }
             $packages[$name] = $record;
         }
         $queue = array_keys($packages);
@@ -190,12 +187,13 @@ final class PluginSourceCompletion
             }
             foreach (['psr-4', 'psr-0'] as $kind) {
                 $autoload = $package['autoload'][$kind] ?? [];
-                if (!is_array($autoload)) { throw new ConfigurationException('production dependency namespace declaration is invalid: ' . $name); }
+                if (!is_array($autoload)) { return []; }
                 foreach ($autoload as $prefix => $paths) {
-                    if (!is_string($prefix)) { throw new ConfigurationException('production dependency namespace is invalid: ' . $name); }
+                    if (!is_string($prefix)) { return []; }
                     foreach (is_array($paths) ? $paths : [$paths] as $path) {
-                        if (!is_string($path)) { throw new ConfigurationException('production dependency source path is invalid: ' . $name); }
-                        $absolute = $this->sourceDirectory($package['root'], $package['root'] . '/' . $path);
+                        if (!is_string($path)) { return []; }
+                        $absolute = $this->hintDirectory($package['root'], $package['root'] . '/' . $path);
+                        if ($absolute === null) { return []; }
                         $iterator = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($absolute, \FilesystemIterator::SKIP_DOTS));
                         foreach ($iterator as $file) {
                             if ($file->isLink()) { throw new ConfigurationException('production dependency namespace contains a link'); }
@@ -221,23 +219,26 @@ final class PluginSourceCompletion
                     }
                 }
             }
+            $exclusions = $package['autoload']['exclude-from-classmap'] ?? [];
+            if (!is_array($exclusions) || !array_is_list($exclusions)) { return []; }
             foreach (['classmap', 'files'] as $kind) {
                 $paths = $package['autoload'][$kind] ?? [];
-                if (!is_array($paths) || !array_is_list($paths)) { throw new ConfigurationException('production dependency autoload paths are invalid: ' . $name); }
+                if (!is_array($paths) || !array_is_list($paths)) { return []; }
                 foreach ($paths as $path) {
-                    if (!is_string($path)) { throw new ConfigurationException('production dependency source path is invalid: ' . $name); }
+                    if (!is_string($path)) { return []; }
                     if ($kind === 'classmap' && strpbrk($path, '*?[') !== false) {
                         if (str_starts_with($path, '/') || str_contains('/' . $path . '/', '/../')) {
-                            throw new ConfigurationException('production dependency classmap pattern escapes its declared scope');
+                            return [];
                         }
                         $pathsToScan = glob($package['root'] . '/' . $path, GLOB_NOSORT);
-                        if ($pathsToScan === false) { throw new ConfigurationException('production dependency classmap pattern is invalid'); }
+                        if ($pathsToScan === false) { return []; }
                     } else { $pathsToScan = [$package['root'] . '/' . $path]; }
                     foreach ($pathsToScan as $absolute) {
                     $absolute = rtrim($absolute, '/');
-                    $parent = $this->sourceDirectory($package['root'], dirname($absolute));
+                    $parent = $this->hintDirectory($package['root'], dirname($absolute));
+                    if ($parent === null) { return []; }
                     $absolute = $parent . '/' . basename($absolute);
-                    if (is_link($absolute) || (!is_file($absolute) && !is_dir($absolute))) { throw new ConfigurationException('production dependency autoload path is missing or unsafe: ' . $name); }
+                    if (is_link($absolute) || (!is_file($absolute) && !is_dir($absolute))) { return []; }
                     $files = is_file($absolute) ? [$absolute] : new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($this->sourceDirectory($package['root'], $absolute), \FilesystemIterator::SKIP_DOTS));
                     foreach ($files as $file) {
                         if ($file instanceof \SplFileInfo) {
@@ -250,8 +251,8 @@ final class PluginSourceCompletion
                         $relative = substr($file, strlen($mirror) + 1);
                         $excluded = false;
                         if ($kind === 'classmap') {
-                            foreach ($package['autoload']['exclude-from-classmap'] ?? [] as $pattern) {
-                                if (!is_string($pattern)) { throw new ConfigurationException('production dependency classmap exclusion is invalid'); }
+                            foreach ($exclusions as $pattern) {
+                                if (!is_string($pattern)) { return []; }
                                 $pattern = str_replace(['\*\*', '\*'], ['.*', '[^/]*'], preg_quote(trim($pattern, '/'), '#'));
                                 if (preg_match('#^' . $pattern . '(?:/|$)#', substr($file, strlen($package['root']) + 1)) === 1) { $excluded = true; break; }
                             }
@@ -317,6 +318,27 @@ final class PluginSourceCompletion
         return array_values(array_unique($declarations));
     }
 
+    private function hintDirectory(string $scope, string $path): ?string
+    {
+        $scope = str_replace(DIRECTORY_SEPARATOR, '/', $scope);
+        $path = str_replace(DIRECTORY_SEPARATOR, '/', $path);
+        $resolved = realpath($path);
+        $resolved = is_string($resolved) ? str_replace(DIRECTORY_SEPARATOR, '/', $resolved) : $resolved;
+        if (!is_string($resolved) || !is_dir($resolved)
+            || ($resolved !== $scope && !str_starts_with($resolved, $scope . '/'))
+            || ($path !== $scope && !str_starts_with($path, $scope . '/'))
+        ) { return null; }
+        $cursor = $scope;
+        foreach (explode('/', substr($path, strlen($scope) + 1)) as $part) {
+            if ($part === '' || $part === '.') { continue; }
+            $cursor = $part === '..' ? str_replace(DIRECTORY_SEPARATOR, '/', dirname($cursor)) : $cursor . '/' . $part;
+            if (($cursor !== $scope && !str_starts_with($cursor, $scope . '/')) || is_link($cursor)) {
+                return null;
+            }
+        }
+        return $resolved;
+    }
+
     private function sourceDirectory(string $scope, string $path): string
     {
         $scope = str_replace(DIRECTORY_SEPARATOR, '/', $scope);
@@ -341,10 +363,12 @@ final class PluginSourceCompletion
     /** @return list<string> */
     private function section(string $project, string $name): array
     {
-        if (preg_match('/^' . $name . ':[ \t]*([^\n]*)\n((?:[ \t]+[^\n]*\n|\n)*)/m', $project, $match) !== 1) {
+        $section = $this->sectionRange($project, $name);
+        if ($section === null) {
             return [];
         }
-        $inline = trim($match[1]);
+        $inline = trim($section['inline']);
+        $body = $section['body'];
         if ($inline !== '' && !str_starts_with($inline, '#')) {
             if (!str_starts_with($inline, '[') || !str_ends_with($inline, ']')) {
                 throw new ConfigurationException("TypePHP project {$name} must be a YAML list");
@@ -379,10 +403,10 @@ final class PluginSourceCompletion
             if (trim($current) !== '') {
                 $items[] = $current;
             }
-            $match[2] = implode("\n", array_map(static fn(string $item): string => '  - ' . trim($item), $items));
+            $body = implode("\n", array_map(static fn(string $item): string => '  - ' . trim($item), $items));
         }
         $entries = [];
-        foreach (explode("\n", $match[2]) as $line) {
+        foreach (explode("\n", $body) as $line) {
             if (trim($line) === '' || str_starts_with(ltrim($line), '#')) {
                 continue;
             }
@@ -416,11 +440,41 @@ final class PluginSourceCompletion
             $block .= "  - {$encoded}\n";
         }
         $block .= "\n";
-        $pattern = '/^' . $name . ':[ \t]*[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m';
-        if (preg_match($pattern, $project) !== 1) {
+        $section = $this->sectionRange($project, $name);
+        if ($section === null) {
             return rtrim($project) . "\n\n" . $block;
         }
-        return (string) preg_replace_callback($pattern, static fn(): string => $block, $project, 1);
+        return substr_replace($project, $block, $section['start'], $section['end'] - $section['start']);
+    }
+
+    /** @return array{start:int,end:int,inline:string,body:string}|null */
+    private function sectionRange(string $project, string $name): ?array
+    {
+        $lines = explode("\n", $project);
+        $offset = 0;
+        $length = strlen($project);
+        foreach ($lines as $index => $line) {
+            $next = min($length, $offset + strlen($line) + 1);
+            if (!str_starts_with($line, $name . ':')) {
+                $offset = $next;
+                continue;
+            }
+            $end = $next;
+            for ($cursor = $index + 1; $cursor < count($lines); ++$cursor) {
+                $continuation = $lines[$cursor];
+                if ($continuation !== '' && $continuation[0] !== ' ' && $continuation[0] !== "\t") {
+                    break;
+                }
+                $end = min($length, $end + strlen($continuation) + 1);
+            }
+            return [
+                'start' => $offset,
+                'end' => $end,
+                'inline' => substr($line, strlen($name) + 1),
+                'body' => substr($project, $next, $end - $next),
+            ];
+        }
+        return null;
     }
 
     /** @param list<string> $entries */

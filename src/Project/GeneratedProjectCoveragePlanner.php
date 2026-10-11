@@ -61,16 +61,17 @@ final class GeneratedProjectCoveragePlanner
             ->discover($profile);
         $businessPaths = [];
         foreach ($discovery->files() as $file) {
-            if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
+            if (strtolower(pathinfo($file['path'], PATHINFO_EXTENSION)) === 'php') {
                 $businessPaths[$file['path']] = true;
             }
         }
 
-        $entrypointFile = $mirror . '/.typephp/build/entrypoint-mapping.json';
+        $metadata = ProjectMirror::generationMetadataDirectory($mirror);
+        $entrypointFile = $metadata !== null ? $metadata . '/entrypoint-mapping.json' : '';
         $hasGeneratedEntrypoint = is_file($entrypointFile);
         if (is_link($entrypointFile)
             || ($hasGeneratedEntrypoint
-                && $this->digest($mirror, '.typephp/build/entrypoint-mapping.json') === null)
+                && (!is_readable($entrypointFile) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($entrypointFile) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $entrypointFile)))
         ) {
             throw new ConfigurationException('generated entrypoint mapping is unsafe');
         }
@@ -87,6 +88,9 @@ final class GeneratedProjectCoveragePlanner
             }
         }
         $mappings = $hasGeneratedEntrypoint ? [] : $lock['mappings'];
+        $generatedDirectory = ProjectMirror::generationSourceDirectory($mirror);
+        $generatedPrefix = $generatedDirectory !== null ? str_replace(DIRECTORY_SEPARATOR, '/', substr($generatedDirectory, strlen($mirror) + 1)) . '/' : null;
+        $aliases = $this->sourceAliases($mirror);
         $seenSources = [];
         $seenShadows = [];
         foreach ($generatedMappings as $generated) {
@@ -102,8 +106,10 @@ final class GeneratedProjectCoveragePlanner
             $shadow = $generated['shadow'];
             if (isset($seenSources[$source]) || (isset($seenShadows[$shadow])
                     && $seenShadows[$shadow] !== $generated['shadowSha256'])
-                || !str_starts_with($shadow, '.typephp/build/')
-                || !str_ends_with($source, '.php') || !str_ends_with($shadow, '.php')
+                || (($generatedPrefix === null || !str_starts_with($shadow, $generatedPrefix)) && !self::isSourceAlias($aliases, $source, $shadow)
+                    && !(new \WebmanAotBuilder\Compatibility\ConditionalFileLoader())->validateSourceAlias($mirror, $generated))
+                || strtolower(pathinfo($source, PATHINFO_EXTENSION)) !== 'php'
+                || strtolower(pathinfo($shadow, PATHINFO_EXTENSION)) !== 'php'
             ) {
                 throw new ConfigurationException("generated coverage mapping evidence drifted: {$source}");
             }
@@ -116,6 +122,17 @@ final class GeneratedProjectCoveragePlanner
             $seenSources[$source] = true;
             $seenShadows[$shadow] = $generated['shadowSha256'];
             $mappings[$source] = $generated;
+        }
+
+        $aliasShadows = [];
+        foreach ($aliases as $path => $alias) {
+            if (!isset($mappings[$path])) { continue; }
+            $identity = $alias['canonicalSha256'];
+            $shadow = $mappings[$path]['shadow'];
+            if (isset($aliasShadows[$identity]) && $aliasShadows[$identity] !== $shadow) {
+                throw new ConfigurationException('canonical source aliases have inconsistent compiler replacements');
+            }
+            $aliasShadows[$identity] = $shadow;
         }
 
         $decisions = [];
@@ -146,7 +163,9 @@ final class GeneratedProjectCoveragePlanner
             }
             $decisions[$source] = [
                 'status' => CoverageLedger::COMPILED_SHADOW,
-                'policy' => 'upstream.typephp-generated-shadow.v1',
+                'policy' => self::isSourceAlias($aliases, $source, $mapping['shadow'])
+                    ? 'php.canonical-source-alias.v1'
+                    : (isset($mapping['sourceAlias']) ? 'php.conditional-declaration-loader.v1' : 'upstream.typephp-generated-shadow.v1'),
                 'reason' => 'locked upstream AOT replacement is compiled instead of the original',
                 'replacement' => $mapping['shadow'],
             ];
@@ -202,7 +221,7 @@ final class GeneratedProjectCoveragePlanner
         }
 
         $coverage = (new CoveragePlanner($mirror))->plan($discovery, $decisions);
-        $compiled = (new CompilerCoverageAudit($entrypoint))->audit(
+        $compiled = (new CompilerCoverageAudit($entrypoint, $generatedMappings))->audit(
             $mirror,
             $coverage
         );
@@ -216,6 +235,38 @@ final class GeneratedProjectCoveragePlanner
             'resources' => $resources,
             'compiled' => $compiled,
         ];
+    }
+
+    /** @return array<string,array{canonicalSha256:string,sourceSha256:string,representative:string}> */
+    public function sourceAliases(string $mirror): array
+    {
+        $file = ProjectMirror::sourceAliasManifestPath($mirror);
+        if ($file === null || (!file_exists($file) && !is_link($file))) { return []; }
+        if (!is_file($file) || !is_readable($file) || is_link($file) || str_replace(DIRECTORY_SEPARATOR, '/', realpath($file) ?: '') !== str_replace(DIRECTORY_SEPARATOR, '/', $file)) { throw new ConfigurationException('mirrored source alias evidence is unsafe'); }
+        try { $aliases = json_decode((string) file_get_contents($file), true, flags: JSON_THROW_ON_ERROR); }
+        catch (\JsonException $error) { throw new ConfigurationException('mirrored source alias evidence is invalid', previous: $error); }
+        if (!is_array($aliases) || ($aliases['schema'] ?? null) !== 'webman-aot-builder-source-aliases-v1'
+            || !is_array($aliases['sources'] ?? null) || !is_array($aliases['links'] ?? null) || !is_array($aliases['cycles'] ?? null)
+        ) { throw new ConfigurationException('mirrored source alias evidence shape drifted'); }
+        $sources = $aliases['sources'];
+        foreach ($sources as $path => $source) {
+            if (!is_string($path) || !is_array($source) || !is_string($source['canonicalSha256'] ?? null)
+                || preg_match('/^[a-f0-9]{64}$/D', $source['canonicalSha256']) !== 1
+                || !is_string($source['sourceSha256'] ?? null) || $this->digest($mirror, $path) !== $source['sourceSha256']
+                || !is_string($source['representative'] ?? null) || !isset($sources[$source['representative']])
+                || ($sources[$source['representative']]['canonicalSha256'] ?? null) !== $source['canonicalSha256']
+                || ($sources[$source['representative']]['sourceSha256'] ?? null) !== $source['sourceSha256']
+                || ($sources[$source['representative']]['representative'] ?? null) !== $source['representative']
+            ) { throw new ConfigurationException('mirrored source alias identity drifted: ' . $path); }
+        }
+        return $sources;
+    }
+
+    public static function isSourceAlias(array $aliases, string $source, string $replacement): bool
+    {
+        return $source !== $replacement && isset($aliases[$source], $aliases[$replacement])
+            && $aliases[$source]['canonicalSha256'] === $aliases[$replacement]['canonicalSha256']
+            && $aliases[$source]['sourceSha256'] === $aliases[$replacement]['sourceSha256'];
     }
 
     private function digest(string $mirror, string $relative): ?string

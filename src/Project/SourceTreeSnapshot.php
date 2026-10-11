@@ -8,11 +8,15 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 
 final class SourceTreeSnapshot
 {
-    private const EXCLUDED_ROOTS = [
+    private const EXCLUDED_PATHS = [
         '.git',
-        '.webman-aot-builder',
-        '.webman-aot',
-        'dist-aot',
+        '.typephp/build',
+        '.webman-aot-builder/build',
+        '.webman-aot-builder/cache',
+        '.webman-aot-builder/runs',
+        '.webman-aot-builder/releases',
+        '.webman-aot-builder/build.lock',
+        '.webman-aot-builder/workspace.json',
     ];
 
     public function __construct(private readonly string $projectDirectory)
@@ -30,79 +34,48 @@ final class SourceTreeSnapshot
     }
 
     /**
-     * @return array{sha256:string,files:int,digests:array<string,string>}
+     * @return array{sha256:string,files:int,digests:array<string,string>,identities:array<string,string>,links:array<string,string>,cycles:array<string,string>}
      */
     public function captureWithFiles(): array
     {
-        RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
+        $inputs = RuntimeDataPaths::sourceFiles($this->projectDirectory, self::EXCLUDED_PATHS);
         $files = [];
-        $directory = new \RecursiveDirectoryIterator(
-            realpath($this->projectDirectory) ?: $this->projectDirectory,
-            \FilesystemIterator::SKIP_DOTS
-        );
-        $filter = new \RecursiveCallbackFilterIterator(
-            $directory,
-            function (\SplFileInfo $entry): bool {
-                $relative = $this->relative($entry->getPathname());
-                $root = explode('/', $relative, 2)[0];
-                if (in_array($root, self::EXCLUDED_ROOTS, true)
-                    || (RuntimeDataPaths::isWritableDataPath($relative)
-                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
-                    || $entry->getFilename() === '.DS_Store'
-                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
-                        && strtolower($entry->getExtension()) !== 'php')
-                    || (in_array($root, ['runtime', 'node_modules'], true)
-                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
-                ) {
-                    return false;
+        $identities = [];
+        $unreadable = [];
+        foreach ($inputs['files'] as $relative => $input) {
+            $digest = @hash_file('sha256', $input['absolute']);
+            if (!is_string($digest)) {
+                if (strtolower(pathinfo($relative, PATHINFO_EXTENSION)) === 'php') {
+                    throw new ConfigurationException("unable to hash project PHP source: {$relative}");
                 }
-                if ($entry->isLink()) {
-                    throw new ConfigurationException(
-                        "source snapshot refuses symlink: {$relative}"
-                    );
-                }
-
-                if ($entry->isFile()) {
-                    RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $relative);
-                }
-                return true;
-            }
-        );
-        $iterator = new \RecursiveIteratorIterator($filter);
-        foreach ($iterator as $entry) {
-            if (!$entry->isFile()) {
+                $unreadable[] = $relative;
                 continue;
             }
-            $relative = $this->relative($entry->getPathname());
-            $digest = hash_file('sha256', $entry->getPathname());
-            if (!is_string($digest)) {
-                throw new ConfigurationException("unable to hash project source: {$relative}");
-            }
             $files[$relative] = $digest;
+            $identities[$relative] = $input['identity'];
         }
+        RuntimeDataPaths::reportUnreadableData($this->projectDirectory, $unreadable);
         ksort($files, SORT_STRING);
         $context = hash_init('sha256');
         foreach ($files as $path => $digest) {
             hash_update($context, $path . "\0" . $digest . "\n");
         }
 
+        foreach ($inputs['links'] as $path => $identity) {
+            hash_update($context, "link\0" . $path . "\0" . $identity . "\n");
+        }
+        foreach ($inputs['cycles'] as $path => $ancestor) {
+            hash_update($context, "cycle\0" . $path . "\0" . $ancestor . "\n");
+        }
+
         return [
             'sha256' => hash_final($context),
             'files' => count($files),
             'digests' => $files,
+            'identities' => $identities,
+            'links' => $inputs['links'],
+            'cycles' => $inputs['cycles'],
         ];
     }
 
-    private function relative(string $path): string
-    {
-        $root = rtrim(realpath($this->projectDirectory) ?: $this->projectDirectory, '/\\');
-        $normalizedRoot = str_replace('\\', '/', $root);
-        $normalizedPath = str_replace('\\', '/', $path);
-        $prefix = $normalizedRoot . '/';
-        if (!str_starts_with($normalizedPath, $prefix)) {
-            throw new ConfigurationException("source snapshot escaped project root: {$path}");
-        }
-
-        return substr($normalizedPath, strlen($prefix));
-    }
 }

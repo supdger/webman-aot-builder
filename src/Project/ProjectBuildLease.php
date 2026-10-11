@@ -11,9 +11,10 @@ final class ProjectBuildLease
 {
     private mixed $handle = null;
 
-    public function __construct(string $project)
+    public function __construct(string $project, ?string $workspaceRoot = null)
     {
-        $root = $project . '/.webman-aot-builder';
+        $root = $workspaceRoot ?? (new ProjectWorkspace($project))->root();
+        if (!ProjectWorkspace::isOwnedRoot($root, $project)) { throw new ConfigurationException('project build lease requires an owned workspace'); }
         if (is_link($root) || (file_exists($root) && !is_dir($root))) {
             throw new ConfigurationException('project workspace is unsafe');
         }

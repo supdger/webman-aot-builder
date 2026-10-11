@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Project\ProjectMirror;
 
 final class NativeIntlPolyfillRule
 {
@@ -12,7 +13,16 @@ final class NativeIntlPolyfillRule
      * @param array<string,mixed> $policy
      * @return array{shadowSha256:string,projectSha256:string}
      */
-    public function apply(string $mirrorDirectory, array $policy, array $runtimeCapabilities, array $mappings = []): array
+    public function apply(string $mirrorDirectory, array $policy, array $runtimeCapabilities, array $mappings = []): ?array
+    {
+        try {
+            return $this->applyKnown($mirrorDirectory, $policy, $runtimeCapabilities, $mappings);
+        } catch (SourceShapeMismatch | \ParseError) {
+            return null;
+        }
+    }
+
+    private function applyKnown(string $mirrorDirectory, array $policy, array $runtimeCapabilities, array $mappings): array
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror) || is_link($mirrorDirectory)
@@ -27,19 +37,27 @@ final class NativeIntlPolyfillRule
         if (($runtimeCapabilities['intlEnabled'] ?? null) !== true
             || !is_bool($runtimeCapabilities['nativeGraphemeLevenshtein'] ?? null)
         ) { throw new ConfigurationException('native intl adaptation requires proven selected SDK Intl/function capabilities'); }
+        $directory = ProjectMirror::generationSourceDirectory($mirror);
+        if ($directory === null) { throw new SourceShapeMismatch('native Intl generation directory is unavailable'); }
+        $relative = substr($directory, strlen($mirror) + 1) . '/';
+        foreach ($mappings as $mapping) {
+            if (preg_match('#^vendor/symfony/polyfill-(?:php[0-9]+|intl-(?:grapheme|idn|normalizer))/bootstrap[0-9]+\.php$#D', $mapping['path'] ?? '') === 1
+                && !str_starts_with($mapping['shadow'] ?? '', $relative)
+            ) { throw new SourceShapeMismatch('native Intl provider retains its original file scope'); }
+        }
         $providers = $this->selectGraphemeProvider($mirror, $runtimeCapabilities, $mappings);
         $retained = ($runtimeCapabilities['nativeGraphemeStrrev'] ?? false) || $providers['earlier'] ? [] : ['grapheme_strrev'];
         if (!$runtimeCapabilities['nativeGraphemeLevenshtein']) { array_unshift($retained, 'grapheme_levenshtein'); }
 
         $lock = json_decode($this->read($mirror . '/composer.lock', 'Composer lock'), true);
-        if (!is_array($lock)) {
-            throw new ConfigurationException('native intl polyfill Composer lock is invalid');
+        if (!is_array($lock) || !is_array($lock['packages'] ?? []) || !is_array($lock['packages-dev'] ?? [])) {
+            throw new SourceShapeMismatch('native intl polyfill Composer lock is invalid');
         }
         $installed = [];
         foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $package) {
             if (is_array($package) && is_string($package['name'] ?? null)) {
                 if (isset($installed[$package['name']])) {
-                    throw new ConfigurationException('native intl polyfill Composer lock contains duplicate package: ' . $package['name']);
+                    throw new SourceShapeMismatch('native intl polyfill Composer lock contains duplicate package: ' . $package['name']);
                 }
                 $installed[$package['name']] = $package;
             }
@@ -51,6 +69,13 @@ final class NativeIntlPolyfillRule
         if (count($sections) !== 2) {
             throw new ConfigurationException('native intl TypePHP project structure drifted');
         }
+        $shadows = [];
+        foreach ($mappings as $mapping) {
+            foreach (['grapheme', 'idn', 'normalizer'] as $name) {
+                if ($mapping['path'] === "vendor/symfony/polyfill-intl-{$name}/bootstrap80.php") { $shadows[$name] = $mapping['shadow']; }
+            }
+        }
+        if (count($shadows) !== 3) { throw new SourceShapeMismatch('native Intl source mappings are not applicable'); }
         $declarations = [];
         $layout = null;
         foreach (['grapheme', 'idn', 'normalizer'] as $name) {
@@ -59,26 +84,28 @@ final class NativeIntlPolyfillRule
             $shadowPolicy = $policy['shadows'][$name] ?? null;
             $package = $installed[$packageName] ?? null;
             $bootstrap = "vendor/symfony/polyfill-intl-{$name}/bootstrap80.php";
-            $shadow = ".typephp/build/symfony-{$name}-functions.php";
-            if (!is_array($packagePolicy) || !is_array($shadowPolicy)
-                || !is_array($package)
+            $shadow = $shadows[$name];
+            if (!is_array($packagePolicy) || !is_array($shadowPolicy)) {
+                throw new ConfigurationException("native intl polyfill package policy is invalid: {$name}");
+            }
+            if (!is_array($package)
                 || !is_string($package['version'] ?? null)
                 || $package['version'] === ''
             ) {
-                throw new ConfigurationException("native intl polyfill package drifted: {$name}");
+                throw new SourceShapeMismatch("native intl polyfill package drifted: {$name}");
             }
             $bootstrapDeclarations = $this->declarations($this->read($mirror . '/' . $bootstrap, $bootstrap), $name, true);
             $declarations[$name] = $this->declarations($this->read($mirror . '/' . $shadow, $shadow), $name, false);
             $adaptedShadow = $name === 'grapheme' && array_diff(array_keys($declarations[$name]), $retained) === [];
             $expected = $adaptedShadow ? array_intersect_key($bootstrapDeclarations, array_flip($retained)) : $bootstrapDeclarations;
             if (array_diff_key($expected, $declarations[$name]) !== [] || array_diff_key($declarations[$name], $expected) !== []) {
-                throw new ConfigurationException("native intl polyfill source declaration set drifted: {$name}");
+                throw new SourceShapeMismatch("native intl polyfill source declaration set drifted: {$name}");
             }
             foreach ($expected as $function => $declaration) {
                 if (array_column($this->tokens('<?php ' . $declaration), 'text')
                     !== array_column($this->tokens('<?php ' . $declarations[$name][$function]), 'text')
                 ) {
-                    throw new ConfigurationException("native intl polyfill shadow source declaration drifted: {$function}");
+                    throw new SourceShapeMismatch("native intl polyfill shadow source declaration drifted: {$function}");
                 }
             }
             $shadowCount = substr_count($sections[0] . "\n", "\n  - {$shadow}\n");
@@ -95,7 +122,7 @@ final class NativeIntlPolyfillRule
             }
         }
 
-        $shadowPath = $mirror . '/.typephp/build/symfony-grapheme-functions.php';
+        $shadowPath = $mirror . '/' . $shadows['grapheme'];
         $functions = $retained;
         $retained = [];
         foreach ($functions as $function) {
@@ -107,10 +134,13 @@ final class NativeIntlPolyfillRule
             . implode("\n\n", $retained) . "\n";
         $this->declarations($adapted, 'grapheme', false);
         foreach (['idn', 'normalizer'] as $name) {
-            $line = "  - .typephp/build/symfony-{$name}-functions.php\n";
+            $line = "  - {$shadows[$name]}\n";
             if ($layout === 'original') {
                 $project = str_replace($line, '', $project);
             }
+        }
+        foreach ($providers['writes'] as $path => $bytes) {
+            if (file_put_contents($mirror . '/' . $path, $bytes, LOCK_EX) !== strlen($bytes)) { throw new ConfigurationException('Unable to write PHP polyfill provider selection'); }
         }
         if (file_put_contents($shadowPath, $adapted, LOCK_EX) === false
             || file_put_contents($projectFile, $project, LOCK_EX) === false
@@ -128,7 +158,7 @@ final class NativeIntlPolyfillRule
     {
         $autoload = $this->read($mirror . '/vendor/composer/autoload_files.php', 'Composer file autoload order');
         $intl = strpos($autoload, "'/symfony/polyfill-intl-grapheme/bootstrap.php'");
-        if ($intl === false) { return ['earlier' => false, 'shadows' => []]; }
+        if ($intl === false) { return ['earlier' => false, 'shadows' => [], 'writes' => []]; }
         $winner = null;
         $position = $intl;
         $candidates = [];
@@ -148,25 +178,26 @@ final class NativeIntlPolyfillRule
             $actual = $this->graphemeDeclaration($shadow);
             $expectedShadow = $actual === null ? str_replace($expected, '', $prepared) : $prepared;
             if (array_column($this->tokens($shadow), 'text') !== array_column($this->tokens($expectedShadow), 'text')) {
-                throw new ConfigurationException('Selected PHP polyfill provider declaration drifted');
+                throw new SourceShapeMismatch('Selected PHP polyfill provider declaration drifted');
             }
             $candidates[$mapping['shadow']] = ['source' => $shadow, 'declaration' => $actual];
             if ($entry < $position) { $position = $entry; $winner = $mapping['shadow']; }
         }
         $digests = [];
+        $writes = [];
         foreach ($candidates as $path => $candidate) {
             if ($path === $winner && !($capabilities['nativeGraphemeStrrev'] ?? false)) {
-                if ($candidate['declaration'] === null) { throw new ConfigurationException('Selected first PHP polyfill provider is missing'); }
+                if ($candidate['declaration'] === null) { throw new SourceShapeMismatch('Selected first PHP polyfill provider is missing'); }
                 continue;
             }
             if ($candidate['declaration'] === null) { continue; }
             $adapted = str_replace($candidate['declaration'], '', $candidate['source'], $count);
-            if ($count !== 1) { throw new ConfigurationException('PHP polyfill provider removal is ambiguous'); }
+            if ($count !== 1) { throw new SourceShapeMismatch('PHP polyfill provider removal is ambiguous'); }
             token_get_all($adapted, TOKEN_PARSE);
-            if (file_put_contents($mirror . '/' . $path, $adapted, LOCK_EX) === false) { throw new ConfigurationException('Unable to write PHP polyfill provider selection'); }
+            $writes[$path] = $adapted;
             $digests[$path] = hash('sha256', $adapted);
         }
-        return ['earlier' => $winner !== null, 'shadows' => $digests];
+        return ['earlier' => $winner !== null, 'shadows' => $digests, 'writes' => $writes];
     }
 
     private function graphemeDeclaration(string $source): ?string
@@ -175,7 +206,7 @@ final class NativeIntlPolyfillRule
         $declaration = null;
         foreach ($tokens as $index => $token) {
             if ($token['text'] !== 'function' || ($tokens[$index + 1]['text'] ?? null) !== 'grapheme_strrev') { continue; }
-            if ($declaration !== null) { throw new ConfigurationException('PHP polyfill grapheme declaration is repeated'); }
+            if ($declaration !== null) { throw new SourceShapeMismatch('PHP polyfill grapheme declaration is repeated'); }
             $parametersEnd = $this->closing($tokens, $index + 2, '(', ')');
             $body = $parametersEnd + 1;
             while (isset($tokens[$body]) && $tokens[$body]['text'] !== '{') { ++$body; }
@@ -193,7 +224,7 @@ final class NativeIntlPolyfillRule
         $header = 'use Symfony\\Polyfill\\Intl\\' . $class . ' as p;';
         $headerTokens = array_column($this->tokens('<?php ' . $header), 'text');
         if (array_slice(array_column($tokens, 'text'), 0, count($headerTokens)) !== $headerTokens) {
-            throw new ConfigurationException("native intl polyfill source alias drifted: {$name}");
+            throw new SourceShapeMismatch("native intl polyfill source alias drifted: {$name}");
         }
         $native = match ($name) {
             'grapheme' => ['grapheme_str_split', 'grapheme_extract', 'grapheme_stripos', 'grapheme_stristr', 'grapheme_strlen', 'grapheme_strpos', 'grapheme_strripos', 'grapheme_strrpos', 'grapheme_strstr', 'grapheme_substr', 'grapheme_levenshtein', 'grapheme_strrev'],
@@ -222,7 +253,7 @@ final class NativeIntlPolyfillRule
                     || !in_array($condition[1], ['function_exists', 'defined'], true)
                     || $condition[2] !== '(' || $condition[4] !== ')'
                 ) {
-                    throw new ConfigurationException("native intl polyfill unsupported source guard: {$name}");
+                    throw new SourceShapeMismatch("native intl polyfill unsupported source guard: {$name}");
                 }
                 $guardName = trim($condition[3], "'");
                 $guardKind = $condition[1];
@@ -234,7 +265,7 @@ final class NativeIntlPolyfillRule
                     || ($guarded && $guardKind !== 'function_exists')
                     || ($guardName !== null && $guardName !== $function)
                 ) {
-                    throw new ConfigurationException("native intl polyfill function source drifted: {$function}");
+                    throw new SourceShapeMismatch("native intl polyfill function source drifted: {$function}");
                 }
                 $parametersEnd = $this->closing($tokens, $index + 2, '(', ')');
                 $bodyStart = $parametersEnd + 1;
@@ -243,7 +274,7 @@ final class NativeIntlPolyfillRule
                 }
                 $functionEnd = $this->closing($tokens, $bodyStart, '{', '}');
                 if ($end !== null && $functionEnd !== $end - 1) {
-                    throw new ConfigurationException("native intl polyfill source guard contains extra statements: {$function}");
+                    throw new SourceShapeMismatch("native intl polyfill source guard contains extra statements: {$function}");
                 }
                 $functions[$function] = substr($source, $tokens[$index]['offset'], $tokens[$functionEnd]['end'] - $tokens[$index]['offset']);
                 $index = $end === null ? $functionEnd + 1 : $end + 1;
@@ -252,7 +283,7 @@ final class NativeIntlPolyfillRule
                 if (isset($constants[$constant]) || ($guarded && $guardKind !== 'defined') || ($guardName !== null && $guardName !== $constant)
                     || !in_array($constant, $this->nativeConstants($name), true)
                 ) {
-                    throw new ConfigurationException("native intl polyfill constant source drifted: {$constant}");
+                    throw new SourceShapeMismatch("native intl polyfill constant source drifted: {$constant}");
                 }
                 $constants[$constant] = true;
                 $constantEnd = $index;
@@ -264,11 +295,11 @@ final class NativeIntlPolyfillRule
                     ? count($definition) === 7 && array_slice($definition, 0, 4) === ['define', '(', "'{$constant}'", ','] && preg_match('/\A[0-9]+\z/D', $definition[4]) === 1 && array_slice($definition, -2) === [')', ';']
                     : count($definition) === 5 && $definition[2] === '=' && preg_match('/\A[0-9]+\z/D', $definition[3]) === 1;
                 if (!$valid || ($end !== null && $constantEnd !== $end - 1)) {
-                    throw new ConfigurationException("native intl polyfill constant definition source drifted: {$constant}");
+                    throw new SourceShapeMismatch("native intl polyfill constant definition source drifted: {$constant}");
                 }
                 $index = $end === null ? $constantEnd + 1 : $end + 1;
             } else {
-                throw new ConfigurationException("native intl polyfill unsupported source statement: {$name}");
+                throw new SourceShapeMismatch("native intl polyfill unsupported source statement: {$name}");
             }
         }
         return $functions;
@@ -290,7 +321,7 @@ final class NativeIntlPolyfillRule
         try {
             $raw = token_get_all($source, TOKEN_PARSE);
         } catch (\ParseError $exception) {
-            throw new ConfigurationException('native intl polyfill source structure drifted: invalid PHP', previous: $exception);
+            throw new SourceShapeMismatch('native intl polyfill source structure drifted: invalid PHP', previous: $exception);
         }
         $tokens = [];
         $offset = 0;
@@ -323,7 +354,7 @@ final class NativeIntlPolyfillRule
                 }
             }
         }
-        throw new ConfigurationException('native intl polyfill source structure drifted: unbalanced declaration');
+        throw new SourceShapeMismatch('native intl polyfill source structure drifted: unbalanced declaration');
     }
 
     private function read(string $path, string $label): string

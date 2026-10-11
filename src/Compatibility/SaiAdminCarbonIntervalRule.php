@@ -4,11 +4,21 @@ declare(strict_types=1);
 
 namespace WebmanAotBuilder\Compatibility;
 
-use WebmanAotBuilder\Cli\ConfigurationException;
-
 final class SaiAdminCarbonIntervalRule
 {
-    public function transform(string $source): string
+    public function transform(string $source, ?bool &$applicable = null, bool $strict = false): string
+    {
+        $applicable = true;
+        try {
+            return $this->transformKnownSource($source);
+        } catch (SourceShapeMismatch $error) {
+            if ($strict) { throw $error; }
+            $applicable = false;
+            return $source;
+        }
+    }
+
+    private function transformKnownSource(string $source): string
     {
         $tokens = $this->tokens($source);
         $methods = $this->methods($tokens);
@@ -164,6 +174,6 @@ final class SaiAdminCarbonIntervalRule
 
     private function fail(string $reason): never
     {
-        throw new ConfigurationException('vendor/nesbot/carbon/src/Carbon/CarbonInterval.php: ' . $reason);
+        throw new SourceShapeMismatch('vendor/nesbot/carbon/src/Carbon/CarbonInterval.php: ' . $reason);
     }
 }

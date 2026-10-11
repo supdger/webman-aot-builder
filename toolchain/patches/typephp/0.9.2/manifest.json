@@ -25,7 +25,8 @@
         {
             "path": "src/Build/FileScanner.php",
             "beforeSha256": "8a0a6f09620813d9a195158fa1aa3dd8494e6c760c750e3d7d3adc986df861c7",
-            "afterSha256": "94fda6bf465ceeba7ad61bda8acf1411b8c0ff7a368ed7071e801b89810d3c1f"
+            "afterSha256": "3db6f89d76bfb82d1991aff5bb5fb2695d5237a26d19451e4bc481420fe3d4d1",
+            "preparedBeforeSha256": "94fda6bf465ceeba7ad61bda8acf1411b8c0ff7a368ed7071e801b89810d3c1f"
         },
         {
             "path": "src/Build/NativeBuildConfigurationTrait.php",
@@ -51,8 +52,8 @@
         {
             "path": "src/Build/SourcePipelineTrait.php",
             "beforeSha256": "41d51d474b4c127ec2c8ad8b8f0189f5ee7af8a00ac56cd8f61e50fdbfffa8ac",
-            "afterSha256": "61f3734eb69dda8463aba69efdee9458d5b2be0ef697f0fc29980930885d7a30",
-            "preparedBeforeSha256": "315b4e751e190d7a96136eceaa0273f47ded412d14aaa043b1f13251e56b0cd6"
+            "afterSha256": "cd17078a41fb4ccc4e4d698f10db305eb245c80f08e8fffda0b045f9398fc793",
+            "preparedBeforeSha256": "61f3734eb69dda8463aba69efdee9458d5b2be0ef697f0fc29980930885d7a30"
         },
         {
             "path": "src/Build/TargetFunctionReturnMetadata.php",

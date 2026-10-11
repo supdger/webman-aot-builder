@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
+use WebmanAotBuilder\Project\ProjectMirror;
 
 final class CarbonLazyVariants
 {
@@ -16,6 +17,9 @@ final class CarbonLazyVariants
      */
     public function apply(string $mirror, object $generator, ?string $targetPhpVersion): array
     {
+        $directory = ProjectMirror::generationSourceDirectory($mirror);
+        if ($directory === null) { return []; }
+        $relative = substr($directory, strlen($mirror) + 1);
         $root = 'vendor/nesbot/carbon/';
         $specifications = [
             [
@@ -26,7 +30,7 @@ final class CarbonLazyVariants
                 'signature' => 'vendor/symfony/translation/Formatter/MessageFormatterInterface.php',
                 'method' => 'format',
                 'test' => 'parameter',
-                'shadow' => '.typephp/build/carbon-message-formatter-variant.php',
+                'shadow' => $relative . '/carbon-message-formatter-variant.php',
             ],
             [
                 'selector' => $root . 'src/Carbon/Translator.php',
@@ -38,7 +42,7 @@ final class CarbonLazyVariants
                     : 'vendor/symfony/translation/Translator.php',
                 'method' => 'trans',
                 'test' => 'return',
-                'shadow' => '.typephp/build/carbon-translator-variant.php',
+                'shadow' => $relative . '/carbon-translator-variant.php',
             ],
             [
                 'selector' => $root . 'src/Carbon/CarbonPeriod.php',
@@ -46,7 +50,7 @@ final class CarbonLazyVariants
                 'weak' => $root . 'lazy/Carbon/ProtectedDatePeriod.php',
                 'class' => 'DatePeriodBase',
                 'test' => 'php-version',
-                'shadow' => '.typephp/build/carbon-date-period-variant.php',
+                'shadow' => $relative . '/carbon-date-period-variant.php',
             ],
         ];
         $mappings = [];
@@ -123,11 +127,23 @@ final class CarbonLazyVariants
                     $staticSelector = $adaptedSelector;
                 }
             } catch (\RuntimeException $exception) {
+                if ($exception instanceof ConfigurationException) { throw $exception; }
                 fwrite(STDERR, "[adapt] skipped optional Carbon selector transform {$specification['selector']}: {$exception->getMessage()}\n");
+                continue;
             }
-            token_get_all($staticSelector, TOKEN_PARSE);
-            token_get_all($active, TOKEN_PARSE);
-            $selectorShadow = '.typephp/build/carbon-loader-' . basename($specification['selector']);
+            try {
+                token_get_all($selector, TOKEN_PARSE);
+                token_get_all($strong, TOKEN_PARSE);
+                token_get_all($weak, TOKEN_PARSE);
+                token_get_all($staticSelector, TOKEN_PARSE);
+                token_get_all($active, TOKEN_PARSE);
+            } catch (\ParseError) { continue; }
+            foreach ([$staticSelector, $active] as $candidate) {
+                foreach (token_get_all($candidate) as $token) {
+                    if (is_array($token) && in_array($token[0], [T_DIR, T_FILE, T_LINE, T_INCLUDE, T_INCLUDE_ONCE, T_REQUIRE, T_REQUIRE_ONCE], true)) { continue 3; }
+                }
+            }
+            $selectorShadow = $relative . '/carbon-loader-' . basename($specification['selector']);
             $this->write($mirror . '/' . $selectorShadow, $staticSelector);
             $this->write($mirror . '/' . $specification['shadow'], $active);
             foreach ([$specification['selector'] => [$selector, $selectorShadow, $staticSelector],

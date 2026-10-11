@@ -9,23 +9,15 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class UpstreamSourceRule
 {
     /** @param array<string,string> $replacements */
-    public function applyIfPresent(string $path, string $source, array $replacements, ?bool &$applicable = null): string
+    public function applyIfPresent(string $path, string $source, array $replacements, ?bool &$applicable = null, bool $strict = false): string
     {
         $applicable = true;
         try {
             return $this->replace($path, $source, $replacements);
-        } catch (ConfigurationException $error) {
-            foreach ([
-                'upstream source conversion structure drift: ',
-                'upstream local conversion method declaration is unsupported: ',
-                'upstream conversion switch binding is unsupported: ',
-            ] as $notApplicable) {
-                if (str_starts_with($error->getMessage(), $notApplicable)) {
-                    $applicable = false;
-                    return $source;
-                }
-            }
-            throw $error;
+        } catch (SourceShapeMismatch $error) {
+            if ($strict) { throw $error; }
+            $applicable = false;
+            return $source;
         }
     }
 
@@ -70,7 +62,7 @@ final class UpstreamSourceRule
             $original = $this->unadapted($match($tokens, $needle), count($needle), $adapted, count($replacement));
             if ($original === [] && $adapted === []) {
                 if ($replacement === [] && $this->deletedSourceIsAbsent($tokens, $needle)) { continue; }
-                throw new ConfigurationException('upstream source conversion structure drift: ' . $path . ' at ' . trim($before));
+                throw new SourceShapeMismatch('upstream source conversion structure drift: ' . $path . ' at ' . trim($before));
             }
             foreach (array_reverse($original) as $index) {
                 $matched = array_slice($tokens, $index, count($needle));
@@ -143,7 +135,7 @@ final class UpstreamSourceRule
         $tokens = $this->tokens($method);
         $prefix = $this->tokens('<?php foreach ($ownInterfaces as $interface) {');
         $loops = $this->scopedMatches($tokens, $prefix, true);
-        if (count($loops) !== 1) { throw new ConfigurationException('ErrorListener interface reflection loop binding is unsupported'); }
+        if (count($loops) !== 1) { throw new SourceShapeMismatch('ErrorListener interface reflection loop binding is unsupported'); }
         $open = $loops[0] + count($prefix) - 1;
         $close = $this->closingScope($tokens, $open, '{', '}');
         $at = $tokens[$open]['end'];
@@ -156,15 +148,15 @@ final class UpstreamSourceRule
         $method = substr_replace($method, substr($body, 6), $at, $length);
         $tokens = $this->tokens($method);
         $doLoops = $this->scopedMatches($tokens, $this->tokens('<?php do {'), true);
-        if (count($doLoops) !== 1) { throw new ConfigurationException('ErrorListener class lineage loop binding is unsupported'); }
+        if (count($doLoops) !== 1) { throw new SourceShapeMismatch('ErrorListener class lineage loop binding is unsupported'); }
         $open = $doLoops[0] + 1;
         $close = $this->closingScope($tokens, $open, '{', '}');
         $while = $close + 1;
         if (($tokens[$while]['id'] ?? null) !== T_WHILE || ($tokens[$while + 1]['id'] ?? null) !== '(') {
-            throw new ConfigurationException('ErrorListener class lineage continuation is unsupported');
+            throw new SourceShapeMismatch('ErrorListener class lineage continuation is unsupported');
         }
         $conditionEnd = $this->closingScope($tokens, $while + 1, '(', ')');
-        if (($tokens[$conditionEnd + 1]['id'] ?? null) !== ';') { throw new ConfigurationException('ErrorListener class lineage continuation is unsupported'); }
+        if (($tokens[$conditionEnd + 1]['id'] ?? null) !== ';') { throw new SourceShapeMismatch('ErrorListener class lineage continuation is unsupported'); }
         $initializer = [];
         foreach ($reflectionRules as $before => $after) {
             if (str_contains(implode('', array_column($this->tokens('<?php ' . $before), 'text')), 'new\ReflectionClass')) {
@@ -195,14 +187,14 @@ final class UpstreamSourceRule
         $tokens = $this->tokens($method);
         $parameters = array_column(array_slice($tokens, 0, array_search('{', array_column($tokens, 'id'), true)), 'text');
         foreach (['$year', '$month', '$day', '$hour', '$minute', '$second'] as $parameter) {
-            if (!in_array($parameter, $parameters, true)) { throw new ConfigurationException('Carbon safe creator field parameter binding is unsupported'); }
+            if (!in_array($parameter, $parameters, true)) { throw new SourceShapeMismatch('Carbon safe creator field parameter binding is unsupported'); }
         }
         $method = $this->replace('carbon-creator#field-values', $method, $initializers, true);
         foreach (['foreach ($fields as $field => $range) {', 'foreach (array_reverse($fields) as $field => $range) {'] as $prefix) {
             $tokens = $this->tokens($method);
             $needle = $this->tokens('<?php ' . $prefix);
             $loops = $this->scopedMatches($tokens, $needle, true);
-            if ($loops === []) { throw new ConfigurationException('Carbon safe creator field range binding is unsupported'); }
+            if ($loops === []) { throw new SourceShapeMismatch('Carbon safe creator field range binding is unsupported'); }
             foreach (array_reverse($loops) as $loop) {
                 $open = $loop + count($needle) - 1;
                 $close = $this->closingScope($tokens, $open, '{', '}');
@@ -242,7 +234,7 @@ final class UpstreamSourceRule
             $parameters = array_column(array_slice($tokens, 0, array_search('{', array_column($tokens, 'id'), true)), 'text');
             if (!in_array('$autoIncrement', $parameters, true) || !in_array('$unsigned', $parameters, true)) {
                 if (in_array($name, ['integer', 'tinyInteger', 'smallInteger', 'mediumInteger', 'bigInteger'], true)) {
-                    throw new ConfigurationException('Blueprint integer column parameter binding is unsupported: ' . $name);
+                    throw new SourceShapeMismatch('Blueprint integer column parameter binding is unsupported: ' . $name);
                 }
                 continue;
             }
@@ -259,7 +251,7 @@ final class UpstreamSourceRule
             $tokens = $this->tokens($body);
             $prefix = $this->tokens('<?php return static::bindMacroContext(null, function () use (&$macro, &$parameters) {');
             $callbacks = $this->matches($tokens, $prefix);
-            if (count($callbacks) !== 1) { throw new ConfigurationException('Carbon static macro context callback binding is unsupported'); }
+            if (count($callbacks) !== 1) { throw new SourceShapeMismatch('Carbon static macro context callback binding is unsupported'); }
             $open = $callbacks[0] + count($prefix) - 1;
             $close = $this->closingScope($tokens, $open, '{', '}');
             $at = $tokens[$open]['end'];
@@ -287,7 +279,7 @@ final class UpstreamSourceRule
             elseif ($token['id'] === '}') { --$depth; }
         }
         $switches = array_values(array_filter($switches, static fn (int $index): bool => $depths[$index] === 1));
-        if (count($switches) !== 1) { throw new ConfigurationException('upstream conversion switch binding is unsupported: ' . $path . '#' . $method); }
+        if (count($switches) !== 1) { throw new SourceShapeMismatch('upstream conversion switch binding is unsupported: ' . $path . '#' . $method); }
         $open = $switches[0] + count($needle) - 1;
         $close = $this->closingScope($tokens, $open, '{', '}');
         $start = $tokens[$switches[0]]['offset'];
@@ -316,7 +308,7 @@ final class UpstreamSourceRule
                     $terminal = [$switchTokens[$at]['offset'], $switchTokens[$at + count($shape) - 1]['end']];
                     break;
                 }
-                if ($terminal === null) { throw new ConfigurationException('Carbon setter default terminal assignment is unsupported'); }
+                if ($terminal === null) { throw new SourceShapeMismatch('Carbon setter default terminal assignment is unsupported'); }
                 $switchBody = substr_replace($switchBody, $after, $terminal[0], $terminal[1] - $terminal[0]);
                 unset($rules[$before]);
                 continue;
@@ -326,7 +318,7 @@ final class UpstreamSourceRule
                 $switchTokens = $this->tokens($switchBody);
                 $tail = array_slice($switchTokens, -count($pattern));
                 if ($this->tokenTexts($tail) !== $this->tokenTexts($pattern)) {
-                    throw new ConfigurationException('upstream conversion switch terminal is unsupported: ' . $path);
+                    throw new SourceShapeMismatch('upstream conversion switch terminal is unsupported: ' . $path);
                 }
                 $at = $tail[0]['offset'];
                 $switchBody = substr_replace($switchBody, $after, $at, strlen($switchBody) - $at);
@@ -344,17 +336,17 @@ final class UpstreamSourceRule
         $tokens = $this->tokens($source);
         $prefix = $this->tokens('<?php if (!class_exists(' . $class . '::class, false)) {');
         $guards = $this->matches($tokens, $prefix);
-        if (count($guards) !== 1) { throw new ConfigurationException('Carbon lazy class guard is unsupported: ' . $class); }
+        if (count($guards) !== 1) { throw new SourceShapeMismatch('Carbon lazy class guard is unsupported: ' . $class); }
         $open = $guards[0] + count($prefix) - 1;
         $close = $this->closingScope($tokens, $open, '{', '}');
         $body = array_slice($tokens, $open + 1, $close - $open - 1);
         $declaration = ($body[0]['id'] ?? null) === T_ABSTRACT ? 1 : 0;
         if (($body[$declaration]['id'] ?? null) !== T_CLASS || ($body[$declaration + 1]['text'] ?? null) !== $class) {
-            throw new ConfigurationException('Carbon lazy guarded class declaration is missing');
+            throw new SourceShapeMismatch('Carbon lazy guarded class declaration is missing');
         }
         for ($classOpen = $declaration + 2; isset($body[$classOpen]) && $body[$classOpen]['id'] !== '{'; ++$classOpen) {}
         if ($this->closingScope($body, $classOpen, '{', '}') !== count($body) - 1) {
-            throw new ConfigurationException('Carbon lazy guard contains unsupported execution');
+            throw new SourceShapeMismatch('Carbon lazy guard contains unsupported execution');
         }
         $source = substr_replace($source, '', $tokens[$close]['offset'], $tokens[$close]['end'] - $tokens[$close]['offset']);
         return substr_replace($source, '', $tokens[$guards[0]]['offset'], $tokens[$open]['end'] - $tokens[$guards[0]]['offset']);
@@ -410,13 +402,13 @@ final class UpstreamSourceRule
 
     private function closingScope(array $tokens, int $start, string $open, string $close): int
     {
-        if (($tokens[$start]['id'] ?? null) !== $open) { throw new ConfigurationException('upstream scoped conversion opening token is missing'); }
+        if (($tokens[$start]['id'] ?? null) !== $open) { throw new SourceShapeMismatch('upstream scoped conversion opening token is missing'); }
         $depth = 1;
         for ($index = $start + 1; isset($tokens[$index]); ++$index) {
             if ($tokens[$index]['id'] === $open) { ++$depth; }
             elseif ($tokens[$index]['id'] === $close && --$depth === 0) { return $index; }
         }
-        throw new ConfigurationException('upstream scoped conversion body is unbalanced');
+        throw new SourceShapeMismatch('upstream scoped conversion body is unbalanced');
     }
 
     private function carbonLocalization(string $source, array $rules): string
@@ -431,22 +423,22 @@ final class UpstreamSourceRule
         $tokens = $this->tokens($method);
         $prefix = $this->tokens("<?php foreach (['from', 'to'] as \$key) {");
         $loops = $this->scopedMatches($tokens, $prefix, true);
-        if (count($loops) !== 1) { throw new ConfigurationException('Carbon translation source and destination loop is unsupported'); }
+        if (count($loops) !== 1) { throw new SourceShapeMismatch('Carbon translation source and destination loop is unsupported'); }
         $open = $loops[0] + count($prefix) - 1;
         $close = $this->closingScope($tokens, $open, '{', '}');
         $loop = array_slice($tokens, $open + 1, $close - $open - 1);
         $bindings = $this->scopedMatches($loop, $this->tokens("<?php \$translationKey = \$key.'Translations';"), true);
         if (count($bindings) !== 1 || count($this->scopedMatches($loop, $this->tokens('<?php $translationKey'), true)) !== 2) {
-            throw new ConfigurationException('Carbon translation result variable binding is unsupported');
+            throw new SourceShapeMismatch('Carbon translation result variable binding is unsupported');
         }
         $original = $this->scopedMatches($loop, $this->tokens('<?php $$translationKey = array_merge('), true);
         if (count($original) !== 1 || $this->scopedMatches($tokens, $this->tokens('<?php $translatedWords'), true) !== []) {
-            throw new ConfigurationException('Carbon translation merge result scope is unsupported');
+            throw new SourceShapeMismatch('Carbon translation merge result scope is unsupported');
         }
         foreach ($this->scopedMatches($loop, $this->tokens('<?php $key'), true) as $index) {
             if (in_array($loop[$index + 1]['text'] ?? null, ['=', '+=', '-=', '.=', '++', '--'], true)
                 || in_array($loop[$index - 1]['text'] ?? null, ['&', '++', '--'], true)) {
-                throw new ConfigurationException('Carbon translation language key is mutated');
+                throw new SourceShapeMismatch('Carbon translation language key is mutated');
             }
         }
         $call = $open + 1 + $original[0];
@@ -456,18 +448,18 @@ final class UpstreamSourceRule
             elseif ($tokens[$index]['id'] === '}') { --$depth; }
         }
         if ($depth !== 0 || $original[0] <= $bindings[0]) {
-            throw new ConfigurationException('Carbon translation merge is outside its direct binding scope');
+            throw new SourceShapeMismatch('Carbon translation merge is outside its direct binding scope');
         }
         $callEnd = $this->closingScope($tokens, $call + 4, '(', ')');
         if (($tokens[$callEnd + 1]['text'] ?? null) !== ';' || $callEnd >= $close) {
-            throw new ConfigurationException('Carbon translation merge statement is unsupported');
+            throw new SourceShapeMismatch('Carbon translation merge statement is unsupported');
         }
         $at = $tokens[$callEnd + 1]['end'];
         $method = substr_replace($method, "\n            if (\$key === 'from') {\n                \$fromTranslations = \$translatedWords;\n            } else {\n                \$toTranslations = \$translatedWords;\n            }", $at, 0);
         $method = substr_replace($method, '$translatedWords', $tokens[$call]['offset'], $tokens[$call + 1]['end'] - $tokens[$call]['offset']);
         $method = $this->replace('carbon-localization#translateTimeString', $method, $other, true);
         if ($this->scopedMatches($this->tokens($method), $this->tokens('<?php $$translationKey ='), true) !== []) {
-            throw new ConfigurationException('Carbon translation dynamic result remains');
+            throw new SourceShapeMismatch('Carbon translation dynamic result remains');
         }
         return substr_replace($source, substr($method, 6), $start, $end - $start);
     }
@@ -482,17 +474,17 @@ final class UpstreamSourceRule
             $depth = 1;
             $end = $body + 1;
             while (isset($tokens[$end]) && $depth > 0) {
-                if (!$allowCallbacks && in_array($tokens[$end]['id'], [T_FUNCTION, T_FN], true)) { throw new ConfigurationException('upstream local conversion escapes into a callback: ' . $method); }
+                if (!$allowCallbacks && in_array($tokens[$end]['id'], [T_FUNCTION, T_FN], true)) { throw new SourceShapeMismatch('upstream local conversion escapes into a callback: ' . $method); }
                 if ($tokens[$end]['text'] === '{') { ++$depth; }
                 elseif ($tokens[$end]['text'] === '}') { --$depth; }
                 ++$end;
             }
-            if ($depth !== 0) { throw new ConfigurationException('upstream method conversion scope is unbalanced'); }
+            if ($depth !== 0) { throw new SourceShapeMismatch('upstream method conversion scope is unbalanced'); }
             $start = $index;
             while ($start > 0 && in_array($tokens[$start - 1]['id'], [T_PUBLIC, T_PROTECTED, T_PRIVATE, T_STATIC, T_ABSTRACT, T_FINAL], true)) { --$start; }
             $spans[] = [$tokens[$start]['offset'], $tokens[$end - 1]['end']];
         }
-        if (count($spans) !== 1) { throw new ConfigurationException('upstream local conversion method declaration is unsupported: ' . $method); }
+        if (count($spans) !== 1) { throw new SourceShapeMismatch('upstream local conversion method declaration is unsupported: ' . $method); }
         return $spans[0];
     }
 
@@ -582,7 +574,7 @@ final class UpstreamSourceRule
         if ($this->matches($tokens, $method) !== []) { return $source; }
         $anchors = $this->matches($tokens, $this->tokens('<?php public function setFormat('));
         if (count($anchors) !== 1 || $this->matches($tokens, $this->tokens('<?php static function resetFormatsForAot(')) !== []) {
-            throw new ConfigurationException('Symfony Request format reset declaration is unsupported');
+            throw new SourceShapeMismatch('Symfony Request format reset declaration is unsupported');
         }
         return substr_replace($source, "public static function resetFormatsForAot(): void { self::\$formats = null; }\n\n    ", $tokens[$anchors[0]]['offset'], 0);
     }
@@ -615,7 +607,7 @@ final class UpstreamSourceRule
                     $assignment = null;
                 } else { $combined[$before] = $after; }
             }
-            if ($assignment !== null) { throw new ConfigurationException('ControllerResolver local binding contract is incomplete'); }
+            if ($assignment !== null) { throw new SourceShapeMismatch('ControllerResolver local binding contract is incomplete'); }
             return $combined;
         }
         return $rules;
@@ -634,7 +626,7 @@ final class UpstreamSourceRule
                 && ($tokens[$start + count($prefix) + 2]['text'] ?? null) === '{'
             ) { $loops[] = [$start, $start + count($prefix) + 3, $variable['text']]; }
         }
-        if (count($loops) !== 1) { throw new ConfigurationException('Websocket response header loop source structure drift'); }
+        if (count($loops) !== 1) { throw new SourceShapeMismatch('Websocket response header loop source structure drift'); }
         [$start, $body, $name] = $loops[0];
         $depth = 1;
         $end = $body;
@@ -642,13 +634,13 @@ final class UpstreamSourceRule
             if ($tokens[$end]['text'] === '{') { ++$depth; }
             if ($tokens[$end]['text'] === '}') { --$depth; }
             if (in_array($tokens[$end]['id'], [T_FUNCTION, T_FN], true)) {
-                throw new ConfigurationException('Websocket response header escapes into an unsupported callback');
+                throw new SourceShapeMismatch('Websocket response header escapes into an unsupported callback');
             }
             ++$end;
         }
-        if ($depth !== 0) { throw new ConfigurationException('Websocket response header loop is unbalanced'); }
+        if ($depth !== 0) { throw new SourceShapeMismatch('Websocket response header loop is unbalanced'); }
         for ($function = $start; $function >= 0 && $tokens[$function]['id'] !== T_FUNCTION; --$function) {}
-        if ($function < 0) { throw new ConfigurationException('Websocket response header loop is outside a method'); }
+        if ($function < 0) { throw new SourceShapeMismatch('Websocket response header loop is outside a method'); }
         for ($methodBody = $function; $methodBody < $start && $tokens[$methodBody]['text'] !== '{'; ++$methodBody) {}
         $methodDepth = 1;
         $methodEnd = $methodBody + 1;
@@ -659,7 +651,7 @@ final class UpstreamSourceRule
         }
         for ($index = $end; $index < $methodEnd; ++$index) {
             if ($tokens[$index]['id'] === T_VARIABLE && $tokens[$index]['text'] === $name) {
-                throw new ConfigurationException('Websocket response header is used after its loop');
+                throw new SourceShapeMismatch('Websocket response header is used after its loop');
             }
         }
         if ($name !== '$header') { return $source; }
@@ -678,7 +670,19 @@ final class UpstreamSourceRule
         return $source;
     }
 
-    public function compactCalls(string $source): string
+    public function compactCalls(string $source, ?bool &$applicable = null, bool $strict = false): string
+    {
+        $applicable = true;
+        try {
+            return $this->replaceCompactCalls($source);
+        } catch (SourceShapeMismatch $error) {
+            if ($strict) { throw $error; }
+            $applicable = false;
+            return $source;
+        }
+    }
+
+    private function replaceCompactCalls(string $source): string
     {
         $tokens = $this->tokens($source);
         $edits = [];
@@ -694,13 +698,13 @@ final class UpstreamSourceRule
                 if (!is_array($key) || $key['id'] !== T_CONSTANT_ENCAPSED_STRING
                     || preg_match('/^([\'"])([A-Za-z_][A-Za-z0-9_]*)\1$/D', $key['text'], $match) !== 1
                 ) {
-                    throw new ConfigurationException('Illuminate compact call has unsupported arguments');
+                    throw new SourceShapeMismatch('Illuminate compact call has unsupported arguments');
                 }
                 $keys[] = $match[2];
                 ++$cursor;
                 if (($tokens[$cursor]['text'] ?? null) === ')') { break; }
                 if (($tokens[$cursor]['text'] ?? null) !== ',') {
-                    throw new ConfigurationException('Illuminate compact call argument structure drift');
+                    throw new SourceShapeMismatch('Illuminate compact call argument structure drift');
                 }
                 ++$cursor;
                 if (($tokens[$cursor]['text'] ?? null) === ')') { break; }
@@ -708,7 +712,7 @@ final class UpstreamSourceRule
             $defined = $this->definedVariables($tokens, $index);
             foreach ($keys as $key) {
                 if (!isset($defined['$' . $key])) {
-                    throw new ConfigurationException('Illuminate compact variable is not proven defined: $' . $key);
+                    throw new SourceShapeMismatch('Illuminate compact variable is not proven defined: $' . $key);
                 }
             }
             $pairs = array_map(static fn (string $key): string => "'{$key}' => \${$key}", $keys);
@@ -861,7 +865,7 @@ final class UpstreamSourceRule
             $token = $tokens[$index];
             if ($depth === 0 && $token['id'] === T_IF) {
                 $open = $index + 1;
-                if (($tokens[$open]['text'] ?? null) !== '(') { throw new ConfigurationException('Intl bootstrap condition structure drift'); }
+                if (($tokens[$open]['text'] ?? null) !== '(') { throw new SourceShapeMismatch('Intl bootstrap condition structure drift'); }
                 $cursor = $open + 1;
                 $parentheses = 1;
                 while ($cursor < count($tokens) && $parentheses > 0) {
@@ -870,7 +874,7 @@ final class UpstreamSourceRule
                     ++$cursor;
                 }
                 $condition = array_slice($tokens, $open + 1, $cursor - $open - 2);
-                if (($tokens[$cursor]['text'] ?? null) !== '{') { throw new ConfigurationException('Intl bootstrap guarded body structure drift'); }
+                if (($tokens[$cursor]['text'] ?? null) !== '{') { throw new SourceShapeMismatch('Intl bootstrap guarded body structure drift'); }
                 $bodyStart = ++$cursor;
                 $braces = 1;
                 while ($cursor < count($tokens) && $braces > 0) {
@@ -885,18 +889,18 @@ final class UpstreamSourceRule
                     $name = $match[1];
                     $bodyText = str_replace('\\define', 'define', implode('', array_column($body, 'text')));
                     if (preg_match('/^define\(\'' . preg_quote($name, '/') . '\',([0-9]+)\);$/D', $bodyText, $value) !== 1) {
-                        throw new ConfigurationException('Intl bootstrap constant declaration structure drift');
+                        throw new SourceShapeMismatch('Intl bootstrap constant declaration structure drift');
                     }
                     $replacement = 'const ' . $name . ' = ' . $value[1] . ';';
                 } elseif ($path === 'vendor/symfony/polyfill-intl-grapheme/bootstrap80.php'
                     && $conditionText === "extension_loaded('intl')"
                 ) {
-                    if (implode('', array_column($body, 'text')) !== 'return;') { throw new ConfigurationException('Intl extension guard body structure drift'); }
+                    if (implode('', array_column($body, 'text')) !== 'return;') { throw new SourceShapeMismatch('Intl extension guard body structure drift'); }
                     $replacement = '';
                 } elseif ($path === 'vendor/symfony/polyfill-intl-grapheme/bootstrap80.php'
                     && in_array($conditionText, ['\\PHP_VERSION_ID>=80500', 'PHP_VERSION_ID>=80500'], true)
                 ) {
-                    if (implode('', array_column($body, 'text')) !== "returnrequire__DIR__.'/bootstrap85.php';") { throw new ConfigurationException('Intl PHP85 guard body structure drift'); }
+                    if (implode('', array_column($body, 'text')) !== "returnrequire__DIR__.'/bootstrap85.php';") { throw new SourceShapeMismatch('Intl PHP85 guard body structure drift'); }
                     $replacement = '';
                 }
                 if ($replacement !== null) {
