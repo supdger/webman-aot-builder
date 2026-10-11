@@ -212,12 +212,21 @@ final class CoveragePlanner
             || str_starts_with($relativePath, '/')
             || preg_match('/^[A-Za-z]:/', $relativePath) === 1
             || in_array('..', explode('/', str_replace('\\', '/', $relativePath)), true)
+            || in_array('.', explode('/', str_replace('\\', '/', $relativePath)), true)
+            || in_array('', explode('/', str_replace('\\', '/', $relativePath)), true)
         ) {
             throw new ConfigurationException("coverage path is unsafe: {$relativePath}");
         }
         $path = rtrim($this->projectDirectory, '/\\')
             . DIRECTORY_SEPARATOR
             . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        $componentPath = rtrim($this->projectDirectory, '/\\');
+        foreach (explode('/', str_replace('\\', '/', $relativePath)) as $component) {
+            $componentPath .= DIRECTORY_SEPARATOR . $component;
+            if (is_link($componentPath)) {
+                throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
+            }
+        }
         if (!is_file($path) || is_link($path)) {
             throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
         }

@@ -13,8 +13,6 @@ final class ProjectMirror
         '.webman-aot-builder',
         '.webman-aot',
         'dist-aot',
-        'runtime',
-        'node_modules',
     ];
 
     /** @var \Closure(string,string):bool */
@@ -164,14 +162,21 @@ final class ProjectMirror
                 );
                 $root = explode('/', $relative, 2)[0];
                 if (in_array($root, self::EXCLUDED_ROOTS, true)
-                    || RuntimeDataPaths::isSourceExcluded($relative)
+                    || (RuntimeDataPaths::isWritableDataPath($relative)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
                     || $entry->getFilename() === '.DS_Store'
-                    || preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                        && strtolower($entry->getExtension()) !== 'php')
+                    || (in_array($root, ['runtime', 'node_modules'], true)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
                 ) {
                     return false;
                 }
                 if ($entry->isLink()) {
                     throw new ConfigurationException("project mirror refuses symlink: {$relative}");
+                }
+                if ($entry->isFile()) {
+                    RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $relative);
                 }
                 return true;
             }

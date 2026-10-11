@@ -230,7 +230,7 @@ final class Application
             'User data:',
             '  ' . $this->layout->root(),
             '',
-            'The target Webman project does not need an AOT Composer plugin.',
+            'The target PHP project does not need an AOT Composer plugin.',
         ];
 
         fwrite(STDOUT, implode(PHP_EOL, $lines) . PHP_EOL);
@@ -257,7 +257,7 @@ final class Application
             throw new UsageException("Unknown build option: {$option}");
         }
         if ($explicitProfile === '') {
-            throw new UsageException('build --profile requires webman or saiadmin');
+            throw new UsageException('build --profile requires php, webman or saiadmin');
         }
         $project = getcwd();
         if (!is_string($project) || $project === '') {
@@ -269,7 +269,7 @@ final class Application
             (new ProfileDetector($project))->detect();
         } catch (ConfigurationException $exception) {
             throw new ConfigurationException(
-                'build requires a Webman project root; current directory: ' . $project
+                'build requires a PHP project directory; current directory: ' . $project
                     . '; ' . $exception->getMessage()
                     . '; change to the project root and run webman-aot build'
             );

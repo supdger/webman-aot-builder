@@ -13,8 +13,6 @@ final class SourceTreeSnapshot
         '.webman-aot-builder',
         '.webman-aot',
         'dist-aot',
-        'runtime',
-        'node_modules',
     ];
 
     public function __construct(private readonly string $projectDirectory)
@@ -36,7 +34,7 @@ final class SourceTreeSnapshot
      */
     public function captureWithFiles(): array
     {
-        RuntimeDataPaths::assertNoExcludedPhp($this->projectDirectory);
+        RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
         $files = [];
         $directory = new \RecursiveDirectoryIterator(
             realpath($this->projectDirectory) ?: $this->projectDirectory,
@@ -48,9 +46,13 @@ final class SourceTreeSnapshot
                 $relative = $this->relative($entry->getPathname());
                 $root = explode('/', $relative, 2)[0];
                 if (in_array($root, self::EXCLUDED_ROOTS, true)
-                    || RuntimeDataPaths::isSourceExcluded($relative)
+                    || (RuntimeDataPaths::isWritableDataPath($relative)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
                     || $entry->getFilename() === '.DS_Store'
-                    || preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                        && strtolower($entry->getExtension()) !== 'php')
+                    || (in_array($root, ['runtime', 'node_modules'], true)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
                 ) {
                     return false;
                 }
@@ -60,6 +62,9 @@ final class SourceTreeSnapshot
                     );
                 }
 
+                if ($entry->isFile()) {
+                    RuntimeDataPaths::assertEnvironmentPhpSource($entry->getPathname(), $relative);
+                }
                 return true;
             }
         );

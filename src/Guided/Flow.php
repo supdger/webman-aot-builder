@@ -229,7 +229,7 @@ final class Flow
                     fwrite(STDOUT, "流程已结束。\n");
                     return $lastCode;
                 }
-                $project = $this->read('输入 Webman/SaiAdmin 项目目录（直接回车取消）');
+                $project = $this->read('输入 PHP 项目目录（Webman/SaiAdmin 也适用，直接回车取消）');
                 if ($project === null || $project === '') {
                     return $lastCode;
                 }

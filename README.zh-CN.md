@@ -4,7 +4,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态程序。
+Webman AOT Builder 将 PHP 项目（包括 Webman / SaiAdmin）编译成 Linux amd64 全静态程序。
 在 macOS Apple Silicon 或 Windows x64 开发机上构建，再把生成的整个 `dist-aot/` 部署到 Linux；目标机无需安装 PHP。
 
 构建器在项目副本中做兼容适配，通过 TypePHP、Clang 和 PHPx 静态 SDK 生成可执行程序。
@@ -19,11 +19,11 @@ Webman AOT Builder 将 Webman / SaiAdmin 项目编译成 Linux amd64 全静态�
 
 ## 安装与开始使用
 
-构建自己的 Webman / SaiAdmin 项目，请使用[原生 setup 安装入口](#方式二原生安装包)或 [Composer 入口](#方式一composer)，无需下载本仓库。GitHub 的 **Code → Download ZIP** 和 **Source code** 压缩包供自行制作工具安装包的开发者使用。
+构建自己的 PHP 项目，请使用[原生 setup 安装入口](#方式二原生安装包)或 [Composer 入口](#方式一composer)，无需下载本仓库。GitHub 的 **Code → Download ZIP** 和 **Source code** 压缩包供自行制作工具安装包的开发者使用。
 
 本仓库及源码压缩包保留制作安装包所需文件；开发测试、验收脚本与发布流程另行维护。
 
-只安装工具时可以暂不选择项目。要构建时，先按项目要求执行 `composer install`，准备 `vendor/`，再选择含 `composer.json`、`composer.lock`、`start.php`、`app/` 的后端根目录。
+只安装工具时可以暂不选择项目。要构建时，先按项目需要准备依赖，再选择源码根目录。普通 PHP 项目需要全局 `main(): void` 入口；Composer、Webman/SaiAdmin、`app/` 和 `start.php` 均非必要条件。已有 TypePHP `project.yml` 的源码与构建选项可以沿用；识别到的 Webman 启动源码自动适配，其他输入交由 TypePHP 判断能否编译。
 
 ### 方式一：Composer
 
@@ -111,11 +111,23 @@ webman-aot build
 webman-aot verify
 ```
 
-SaiAdmin 项目使用 `webman-aot build --profile=saiadmin`。适用源码形态、依赖能力和编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)及[SaiAdmin 指南](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin)。
+旧 `--profile=webman` 与 `--profile=saiadmin` 选项继续接受；框架身份与依赖版本不作为编译资格。适用源码形态、依赖能力和编译器限制见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)及[SaiAdmin 指南](https://github.com/supdger/webman-aot-builder/wiki/Build-SaiAdmin)。
 
 构建会显示当前阶段和真实编译计数；没有新输出时显示进程状态和已等待时间。失败保留原始原因、本机日志位置及恢复建议。重试默认复用输入与完整性校验通过的已完成单元，其余单元重新编译；每次仍重新链接并校验产物。`webman-aot build --fresh` 全量重编，不清空旧缓存。详细规则见[构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
 升级和清理使用[升级与卸载指南](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。当前入口能查询旧安装，确认归属的项目可逐项删除；未知归属残留会保留，不能承诺所有旧版都清干净。项目源码、产物和 PATH 保留。独立安装根的共享工具链、日志保留；Composer 私有运行时内部的工具链、日志和缓存随该运行时删除。
+
+普通 PHP 项目可以使用以下最小 `main.php`：
+
+```php
+<?php
+function main(): void
+{
+    echo "Hello from PHP\n";
+}
+```
+
+在该目录运行上面的构建命令。成功后生成 `dist-aot/server`；TypePHP 报错时保留原始诊断并构建失败。源码安全、编译器与 SDK 完整性、全部业务 PHP 的编译覆盖继续校验，环境正文与上传数据不进入分发。
 
 ## 构建结果与部署
 

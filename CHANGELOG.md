@@ -2,6 +2,13 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.4.9](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.9)
+
+- 支持普通 PHP 项目与已有 TypePHP 入口，Composer、Webman/SaiAdmin 身份及固定 app/start.php 布局不再作为编译条件；旧 profile 选项继续接受，已识别的框架源码按实际能力适配。
+- 编译覆盖从实际源码及本轮替换映射建立；配置、模板、缓存、上传/导出目录中的声明或显式 PHP 输入也进入编译，环境正文和运行数据保持排除，未知源码结构保留给 TypePHP 判断。
+- 根据真实目标 SDK 和实际源码选择已证明的互斥声明、Carbon 惰性声明及函数绑定，取消用户依赖版本/安装副本哈希门禁；工具材料完整性、SDK 选择、镜像安全、源码稳定、续编缓存和静态产物校验保持。
+- 普通 PHP 候选完成原生编译、静态链接、打包和校验；海诺只读副本遇到两个 `think\facade\Db` 直接声明重复，保留真实 TypePHP 错误，未生成海诺产物。版本发布与双平台消费者结果在本版 Release 中分别记录；Linux 运行及业务验收未执行。
+
 ## [v0.4.8](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.8)
 
 - 公开仓库最新工作树及新版源码 ZIP/tar.gz 只保留安装和自行构包所需文件；开发测试、验收脚本、需求记录及发布流程迁入私有维护仓库。历史提交与旧标签保持不变。
