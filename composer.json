@@ -1,0 +1,58 @@
+{
+  "name": "supdger/webman-aot-builder",
+  "description": "Composer entry point for Webman AOT Builder; platform runtime is prepared separately",
+  "type": "composer-plugin",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.0",
+    "composer-plugin-api": "*",
+    "composer": "*"
+  },
+  "extra": {
+    "class": "Supdger\\WebmanAotInstaller\\Plugin",
+    "plugin-optional": true
+  },
+  "bin": [
+    "packages/composer-installer/bin/webman-aot"
+  ],
+  "autoload": {
+    "psr-4": {
+      "Supdger\\WebmanAotInstaller\\": "packages/composer-installer/src/"
+    }
+  },
+  "archive": {
+    "exclude": [
+      "/.git",
+      "/.gitattributes",
+      "/.github/",
+      "/.gitignore",
+      "/CHANGELOG.md",
+      "/NOTICE.md",
+      "/bin/",
+      "/build.cmd",
+      "/build.command",
+      "/compatibility/",
+      "/docs/",
+      "/installer/",
+      "/openspec/",
+      "/scripts/",
+      "/src/",
+      "/tests/",
+      "/toolchain/",
+      "/toolchain.lock.json",
+      "/tools/",
+      "/packages/composer-installer/tests/",
+      "/packages/composer-installer/README.md",
+      "/packages/composer-installer/LICENSE"
+    ]
+  },
+  "homepage": "https://github.com/supdger/webman-aot-builder",
+  "support": {
+    "issues": "https://github.com/supdger/webman-aot-builder/issues",
+    "docs": "https://github.com/supdger/webman-aot-builder/wiki/Install"
+  },
+  "dist": {
+    "type": "zip",
+    "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.4.10/webman-aot-builder-0.4.10-composer.zip"
+  }
+}

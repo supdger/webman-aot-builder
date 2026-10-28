@@ -1,0 +1,25 @@
+{
+  "launchers": {
+    "e29640baf7fda621962a03e5d5bd1df597cd949d4d8cce33fba008765317905b": "legacy",
+    "87b54acd565c270cbdd8eefa25490450eb5cbaa14c92f3590369d95488f0d023": "legacy",
+    "f8c420bbf7f011620fd533c4db83c2f095de7884d8a5fb9bed83108a662e69a8": "builder",
+    "2a0cec2bd46bc6d24c4fc4944d998ad06b39ff1bac2598d6b81d48a9c09cd15e": "builder",
+    "77ebc99c2e15604e353e51a0354af7f101bf7f222f0b46c9aa67adea5534c6de": "builder",
+    "efb9282cd97d8609265f132a895ebd3d2a0ac511c30a9224681ef5217c9848b5": "builder",
+    "3b69734228dafd1a891bc2c2d6f8699fda6ca8bb16450d1c3c2dd1f9b5b65792": "builder",
+    "fe85ed53251c040cdaf98a8daa8e952cc16fd8dbc61cabd6cb8b837752857aef": "builder",
+    "8667deb82d174f49d71bcdd07d216a6900b9f7e78526c3ade45e7ef71c88f416": "builder",
+    "728c5ba5ced34cb6a66b9f618a572f7339943c446648a20f82d0fa52cadf19e6": "builder",
+    "93f7686bfad860e864b094100e7f8956a66c2127b59b9c6e4173dbe4b81d3a45": "builder"
+  },
+  "entries": {
+    "6abf9c2ca7f59ce1577f35eea27570256f37775adc4274b8a1f1d2e9a26a1c31": "legacy",
+    "d8c833ce0fd3593137e783c322d866bb7d9e37dcc18880edc5d7b3a7fb8dff9c": "builder",
+    "7b9af7040fc420c5fafad4c0523f04906adbbc5b898eb08383941bba6cc950d2": "builder",
+    "ec7a6f1eeffc31351888c3748c0fe6b4b44429468a4d10bb8ca8183002fe79e2": "builder"
+  },
+  "runtimes": {
+    "macos-arm64": "5aebf5e4f036b4182b4959c06c9f88ed8b67e4118b30d3cad8ef556d9324c102",
+    "windows-x86_64": "d89c8eeeb3d1f76a9dfe2a0263312ced2e3e38b0f65cb15fa19374d372191264"
+  }
+}

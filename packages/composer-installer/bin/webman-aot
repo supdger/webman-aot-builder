@@ -1,0 +1,9 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+// This entry also runs before Composer's autoloader is available.
+require dirname(__DIR__) . '/src/Process.php';
+require dirname(__DIR__) . '/src/Archive.php';
+require dirname(__DIR__) . '/src/Installer.php';
+exit((new Supdger\WebmanAotInstaller\Installer())->run($argv));
