@@ -22,7 +22,7 @@ final class CompilerCoverageAudit
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror)
-            || !str_contains(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/')
+            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
             || is_link($mirrorDirectory)
         ) {
             throw new ConfigurationException('compiler coverage requires an isolated build mirror');

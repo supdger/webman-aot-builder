@@ -1,6 +1,135 @@
 # 更新日志
 
-本文按 GitHub 正式 Release 整理；日期采用 Release 的 UTC 发布日期。候选版草稿不列为正式版本。
+本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
+
+## v0.4.10
+
+- 可读 PHP 源码按 TypePHP 的编译要求原样交给编译器；不再识别框架，不审查业务代码，不设置项目、框架、插件或依赖版本门槛，也不自动改写 PHP 源码。
+- 保留编译所需的前置条件及工具材料、目标 SDK、安全隔离和完整性检查；编译成功返回产物，编译失败保留 TypePHP 的原始错误，由编译器判断源码能否编译。
+- 沿用 0.4.9 的安装、升级、下载恢复与组件校验行为。Windows 实际编译、链接与正式发行状态以本版 Release 中的验证记录为准；不宣称用户项目或业务运行已通过。
+
+## [v0.4.9](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.9)
+
+- 支持普通 PHP 项目与已有 TypePHP 入口，Composer、Webman/SaiAdmin 身份及固定 app/start.php 布局不再作为编译条件；旧 profile 选项继续接受，已识别的框架源码按实际能力适配。
+- 编译覆盖从实际源码及本轮替换映射建立；配置、模板、缓存、上传/导出目录中的声明或显式 PHP 输入也进入编译，环境正文和运行数据保持排除，未知源码结构保留给 TypePHP 判断。
+- 根据真实目标 SDK 和实际源码选择已证明的互斥声明、Carbon 惰性声明及函数绑定，取消用户依赖版本/安装副本哈希门禁；工具材料完整性、SDK 选择、镜像安全、源码稳定、续编缓存和静态产物校验保持。
+- 普通 PHP 候选完成原生编译、静态链接、打包和校验；海诺只读副本遇到两个 `think\facade\Db` 直接声明重复，保留真实 TypePHP 错误，未生成海诺产物。版本发布与双平台消费者结果在本版 Release 中分别记录；Linux 运行及业务验收未执行。
+
+## [v0.4.8](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.8)
+
+- 公开仓库最新工作树及新版源码 ZIP/tar.gz 只保留安装和自行构包所需文件；开发测试、验收脚本、需求记录及发布流程迁入私有维护仓库。历史提交与旧标签保持不变。
+- README 图片移至已有 Wiki，继续提供中英文入口；Composer 包移除仅维护者可用的测试命令。
+- 双平台安装包与安装入口按精简后的源码重新构包，维护流程通过隔离的公开源码检出运行原有回归与消费者验收；编译器、SDK 与项目构建行为保持不变。
+
+## [v0.4.7](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.7)
+
+- 精简正式 Release 的源码 ZIP 与 tar.gz：不再包含 CI、OpenSpec、开发测试、测试夹具和文档图片，保留自行构包所需源码、入口、工具、组件锁、补丁与许可；仓库中的开发文件仍保留。
+- 修复 Composer 制包未接纳新增中文 README 导致的归档失败；消费者包提供中英文入口，仅包含安装桥接所需文件。
+- 默认 README 使用英文，提供中文切换、环境与工具链徽章及对应语言流程图。普通用户从 setup 或 Composer 安装，自行制作安装包的开发者再下载源码。
+- 重制本版双平台安装包及安装入口；编译器链、SDK 与项目构建行为沿用 0.4.6，不把既有项目编译及 Linux 业务验证记录作为本版新验收。
+
+## [v0.4.6](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.6)
+
+- 修复产物阶段后临时工作区清理遇到新增目录项时的 `Directory not empty`：文件和目录删除均先重新核安全性并重试，最多尝试六次。持续写入、删除权限不足或不安全目录仍失败并给出恢复说明，不无限重试或忽略清理错误。
+- 构建命令监督仅负责本次创建的进程。成功父进程退出后子进程仍未结束时，先有界收尾并明确失败；原失败退出码或取消异常保留，不强杀外部程序。macOS 随包原生监督组件不要求用户另装运行时，Windows 使用系统原生 Job。
+- 不修改编译器链、组件 ABI 或项目源码。0.4.5 用户日志中的编译与链接已成功，失败位于后续清理；这不表示当前用户目录已有可用产物。升级后通过原构建入口重试，按实际完成结果验收。
+- 原有组件校验复用、正常续编和原项目保护保持；验证范围继续见 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。Linux 应用运行及已知嵌套 finally return 边界不因本次清理修复改变。
+
+## [v0.4.5](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.5)
+
+- 修复 Windows Composer 插件源码补齐的文件系统路径边界：PSR-4/PSR-0 扫描及匹配路径统一分隔符，避免同一文件形成混合斜杠入口而被覆盖检查拒绝；生产范围和输出覆盖校验继续保留。
+- 包含下方 0.4.4 源码候选的编译兼容、组件复用、升级恢复与 Composer 父超时修复。0.4.4 标签不移动，草稿 Release 不作为正式消费入口。
+- 编译器原生产锁静态 ELF 构建及宿主完整性证据沿用原记录；0.4.5 公开包的实际消费结果以本版 Release 与 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification) 为准，不将旧源码构建改写为本版实测。Linux 原生应用、业务及已知嵌套 finally return 缺口边界保留。
+
+## v0.4.4 — 标签已保留，Release 草稿
+
+本版未正式公开发行；原构建验证记录保留，最终测试包转到 0.4.5。
+
+- 升级先校验完整包及已下载完成的 `.part`；发行包支持轻量升级且旧组件校验通过时，复用相同组件，只下载程序和必要替换文件。准备或切换失败保留恢复信息，不自动重建项目产物。
+- 已启用插件的 `composer global exec -- webman-aot ...` 在父 Composer 中关闭本次进程超时；其他命令保持原限制。修复终端读取错误和父进程结束后的处理，正常等待、半行与 EOF 保持交互语义。
+- 普通 PHP 方法保留原签名及动态值，移除旧的无声明 `toArray()` 强制 array 规则；按目标 SDK 核原生类、函数和 ABI，修复可选 Composer 声明、命名空间函数、相关类局部值、foreach-list、switch/Goto/finally 及 catch 的已验证转换。
+- macOS Apple Silicon 上以原生产锁完成 2,036 个前端转换、1,890 个 Linux 目标编译单元、静态链接及隔离产物完整性验证。Linux x64 ELF 无动态加载器及依赖；Linux 原生应用、跨请求和业务运行未验。
+- 已知嵌套 finally return 仍有旧控制流缺口，不宣称所有项目或全部 PHP 写法均兼容。详细范围见 [验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
+
+## [v0.4.3](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.3)
+
+- 依赖兼容性按本次源码、API 与目标 ABI 校验；取消消费项目的版本上限、精确标签及历史源码命中总数拒绝。
+- 修复 Workerman、Carbon、Symfony 与数据库等兼容转换的作用域，保留无关方法、回调及分支。
+- TypePHP 编译运行时按实际扩展、API 与语法能力检查；保留批准材料摘要、补丁链和目标 ABI 校验。
+- macOS、Windows 和 Composer 完整运行时统一更新至 0.4.3，并保留 Composer 下载断点续传。
+
+## [v0.4.2](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.2) — 2026-10-09
+
+- 完整包下载失败或取消后保留进度，自动重试及下次启动从已有字节继续；取消固定 30 分钟总时长限制，保留连接与无数据超时。
+- 服务器拒绝续传时明确提示并重新下载；完整包仍须通过大小与 SHA-256 校验，损坏内容不会用于安装。
+- Composer 入口更新至 0.4.2，继续锁定公开 0.4.1 完整运行时，无需重新安装已准备好的运行时。旧入口已删除的部分下载无法恢复。
+
+## [v0.4.1](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.1)
+
+- Illuminate 时间间隔适配兼容 Laravel 12 的单位调用与 Laravel 13 的 `make()` 写法，以及已确认的等价语法；保留宏、浮点 setter 和分数行为，不改原 vendor。
+- Webman、Workerman、Carbon 按源码结构与转换结果判断兼容，移除业务依赖版本上限与精确版本白名单。SaiAdmin profile 使用 Carbon 3.13.2、ThinkORM 3.0.34 的下限；Monolog 与相关 polyfill 继续核源码及输出摘要。
+- 修复已确认 CarbonInterval 内部负小数符号切换的 AOT 差异；Laravel 12、13 各 75 个实际 ELF 输出与普通 PHP 基准一致。公开用户代码直接零参 `invert()` 的编译器限制仍保留，完整应用业务未因此宣称通过。
+- Windows 构建镜像激活增加有界重试及系统原因，保留目标冲突和源码变化保护；原生 Windows CI 已验证真实文件占用后的恢复、永久占用失败清理及短路径别名快照。
+- 修复 DeepClone 适配将整份工具链锁摘要当作 SDK 身份的问题，改为核实际 SDK、派生证据和头文件；保留材料完整性校验。
+- 修复编译器对含空格工具路径的错误引用，新增第 26 号补丁并纳入补丁清单。
+
+## [v0.4.0](https://github.com/supdger/webman-aot-builder/releases/tag/v0.4.0)
+
+- 原构建入口默认复用经过输入、大小和 SHA-256 校验的成功编译单元；未完成单元重新编译，每次重新链接并校验产物。
+- 增加 `build --fresh` 与引导中的全量重建选择；正常重试保留有效进度。
+- 各次构建写入独立目录，拒绝同项目并发构建和清理，防止残留编译进程污染下一次尝试。
+- 修复工具链补丁应用器未纳入已有第 24 号补丁的问题，并增加第 25 号完整对象 checkpoint 补丁。
+- Composer 入口、双平台编译组件、轻量/完整安装包和 setup 同版升级为0.4.0；Composer 完整运行时绑定来自实际新归档摘要。
+- 组件由锁定0.3.2前驱逐文件校验派生，保留ABI不变的已配套032目标SDK；补丁与组件清单完整核验，不修改旧版本资产。
+- Windows 原生 CI 通过实际安装、109 单元五轮恢复回归及整树强制中断后的14/109复用、95单元重编，并发安全拒绝与任务进程清理；用户Windows实机续编、PHP8.1原生链及目标Linux业务流程仍未验证，详细范围见Wiki。
+
+## [v0.3.7](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.7)
+
+- 普通 `composer global require supdger/webman-aot-builder` 首次接受 Composer 插件信任后，包安装与自动加载完成即进入组件和项目引导；升级、无变更重复安装均适用，不再需要组合启动命令。
+- 只有交互终端中单独全局 require 本包自动启动；其他命令、局部项目、非交互、CI 和禁用插件/脚本不自动引导。Composer 2.5.3+ 的可选插件保持无人安装和普通 bin 使用，信任配置由 Composer 管理。
+- 项目流程结果与包安装分别显示，后续安全审计照常执行。完整运行时仍为 0.3.2；本版只提供非 latest 轻量 Composer 包。
+
+## [v0.3.6](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.6)
+
+- Composer 入口无参数即可进入引导，选择自动准备或导入完整包，随后选项目、构建并自动校验；失败可重试或重选。
+- 安装说明提供一次复制的安装与启动命令，自动找到 Composer 代理；帮助和交互版本查询显示下一步。
+- 非交互无参仅显示启动方式，不隐式下载、安装或构建。完整运行时继续使用 0.3.2。
+
+## [v0.3.5](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.5)
+
+- 将 Composer 包归属更正为 `supdger/webman-aot-builder`，入口命名空间与状态所有权同步为 Supdger。SaiAdmin 是业务兼容生态，不代表该工具的包归属。
+- 新入口可逐项清理已识别的旧 `saiadmin/webman-aot-builder` 状态和全局包；只卸载选中的精确包，不自动接管旧运行时。两包同用命令名，迁移先移除旧全局包再安装新包。
+- 只提供 Composer 轻量 ZIP 和校验清单，运行时与 native latest 仍为 0.3.2，旧标签和资产保留。Windows 实机、PHP 8.1 验证仍未完成。
+
+## [v0.3.4](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.4)
+
+- Composer 入口新增 `uninstall` 与只读 `uninstall --list`，有限发现原生当前/历史版本、备份命令、PATH 入口、Composer 私有状态和全局包，显示类型、静态版本与路径，逐项默认保留确认；不运行旧命令探版本。
+- 卸载当前或活动版本时撤销归属明确的公开命令，不恢复旧备份；保留项目源码、产物、共享组件与 PATH，结束重新列出残留。Composer 只移除精确的本全局包，禁用 scripts/plugins 并保留其他全局工具；状态锁保留原 inode，避免并发准备换锁。
+- 修复 POSIX 路径反斜杠、末尾空格和引号被归一化后误选另一目录的风险；官方入口使用完整模板摘要识别，无证据对象保留。
+- 本版仅提供 Composer 轻量 ZIP 与校验清单，继续使用固定的 0.3.2 完整运行时，不设为 latest，也不替换原生完整资产。源码中的新版原生卸载包装器未进入既有 0.3.2 完整包；Windows 原生脚本、PHP 8.1 验证仍待完成。
+- 质量证据包括30项长期回归、独立路径/锁9项检查、真实Mac原生与Composer全局自卸载；这些不代表Linux业务运行或完整跨平台原生发行验收。
+
+## [v0.3.2](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.2)
+
+- 支持锁定的 Carbon 3.14.1，修复 SaiAdmin 项目因 Carbon 版本拒绝、生成配置选择或生成代码不兼容而中止构建的问题。
+- 补齐 DeepClone 1.42.0 编译所需的闭包绑定、引用存储和反射行为，修复类被跳过及生成代码无法编译的问题；保留完整 DeepClone 适配，不通过排除依赖绕过失败。`Closure::call()` 仍不支持。
+- 使用本项目从锁定官方输入重建的 PHPX 静态 SDK，记录来源、补丁、库与头文件摘要，并由编译组件和源码构建入口校验。新增衍生 SDK 素材供维护者重建；普通安装继续使用 setup。
+- 本版需要更新安装包及对应编译组件，旧组件不能作为新版 SDK 使用。项目源码保持不变；编译与本机校验通过仍需另行完成 Linux 启动、数据库和业务验收。
+
+## [v0.3.1](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.1)
+
+- 修复 Windows 与 macOS 安装引导进入项目构建后，阶段和编译日志不能及时显示的问题。现在会持续显示准备阶段、编译器的逐文件进度与真实完成数；没有新输出时显示等待时间，完成或失败时保留耗时、原始错误和退出码。
+- 增加锁定 `symfony/polyfill-deepclone v1.42.0` 对 PHP 8.4 静态目标的适配，修复其条件声明触发的 stray code 构建错误；适配只作用于隔离构建镜像，包版本或源码不匹配时拒绝应用。
+- 下载说明逐项解释 setup、轻量包、完整包、编译组件、校验文件及 GitHub 自动源码归档的用途，明确首次安装的推荐入口。
+- 构建进度修复已通过 Windows 和 macOS 的真实项目菜单、编译与产物校验；这不代表所有 SaiAdmin 依赖组合或 Linux 业务运行已通过验收。
+
+## [v0.3.0](https://github.com/supdger/webman-aot-builder/releases/tag/v0.3.0)
+
+- 新增一次启动的 CLI 引导流程：源码入口 `build.command` / `build.cmd` 自动准备材料和制作安装包；独立 setup 自动下载安装包。用户选择轻量或完整包、确认安装、选择项目目录后，工具自动完成校验、安装、新版本检查、项目构建及产物验证。
+- 构建、下载和安装显示可理解的步骤与实际状态。成功显示结果及下一步，失败显示原因、恢复建议和本机日志位置；项目失败可选择重试、重选目录或结束。
+- 修复 Windows 中文安装路径中的 PHP 配置和扩展加载问题，保留实际下载失败退出码；独立 Windows setup 使用 CRLF，避免 CMD 解析错误。
+- 修复任意目录层级的 `.DS_Store` 导致源码快照和构建镜像误判的问题；真实源码变化仍会中止，并显示变化路径和重试建议。
+- 安装和项目构建的验证针对开发机上的包身份、构建产物结构和完整性；Linux 部署及业务运行需另行验收。
 
 ## [v0.5.10](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.10) — 2026-10-27
 

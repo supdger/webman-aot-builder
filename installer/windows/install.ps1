@@ -9,6 +9,24 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 $installTimer = [Diagnostics.Stopwatch]::StartNew()
 
+# Keep PHP startup paths ASCII without changing application relative paths.
+$privatePhpExitCode = 0
+function Invoke-PrivatePhp([string]$RuntimeDirectory, [string]$Entry, [string[]]$Arguments) {
+    $RuntimeDirectory = [IO.Path]::GetFullPath($RuntimeDirectory)
+    $Entry = [IO.Path]::GetFullPath($Entry)
+    $previousCallerDirectory = $env:WEBMAN_AOT_CALLER_CWD
+    $env:WEBMAN_AOT_CALLER_CWD = (Get-Location).ProviderPath
+    $runtimeLocationPushed = $false
+    try {
+        Push-Location -LiteralPath $RuntimeDirectory
+        $runtimeLocationPushed = $true
+        & '.\php.exe' -c php.ini -d extension_dir=ext '..\app\tools\windows-php-bootstrap.php' $Entry @Arguments
+        $script:privatePhpExitCode = $LASTEXITCODE
+    } finally {
+        try { if ($runtimeLocationPushed) { Pop-Location } } finally { $env:WEBMAN_AOT_CALLER_CWD = $previousCallerDirectory }
+    }
+}
+
 if (-not [Environment]::Is64BitOperatingSystem -or
     $env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'x86')) {
     throw 'This package requires Windows x64.'
@@ -68,11 +86,9 @@ try {
     $previousHome = $env:WEBMAN_AOT_BUILDER_HOME
     $env:WEBMAN_AOT_BUILDER_HOME = $candidate
     try {
-        & (Join-Path $candidateCurrent 'runtime\php.exe') `
-            -c (Join-Path $candidateCurrent 'runtime\php.ini') `
-            -d "extension_dir=$(Join-Path $candidateCurrent 'runtime\ext')" `
-            (Join-Path $candidateCurrent 'app\bin\webman-aot-builder.php') --version | Out-Null
-        if ($LASTEXITCODE -ne 0) {
+        Invoke-PrivatePhp (Join-Path $candidateCurrent 'runtime') `
+            (Join-Path $candidateCurrent 'app\bin\webman-aot-builder.php') @('--version') | Out-Null
+        if ($privatePhpExitCode -ne 0) {
             throw 'Candidate self-check failed.'
         }
     } finally {
@@ -99,17 +115,16 @@ try {
             Write-Output "Previous webman-aot command saved in: $legacyLauncher"
         }
     }
-    if ($full) {
+    $reuse = -not $full -and -not [string]::IsNullOrWhiteSpace($env:WEBMAN_AOT_REUSE_HOME)
+    if ($full -or $reuse) {
         $bundle = Join-Path $packageRoot 'payload\minimal-toolchain\component.zip'
+        if ($reuse) { $bundle = '--reuse' }
         $offlineScript = Join-Path $candidateCurrent 'app\installer\offline-prepare.php'
         $previousHome = $env:WEBMAN_AOT_BUILDER_HOME
         $env:WEBMAN_AOT_BUILDER_HOME = $candidate
         try {
-            & (Join-Path $candidateCurrent 'runtime\php.exe') `
-                -c (Join-Path $candidateCurrent 'runtime\php.ini') `
-                -d "extension_dir=$(Join-Path $candidateCurrent 'runtime\ext')" `
-                $offlineScript $bundle
-            if ($LASTEXITCODE -ne 0) { throw 'Offline toolchain preparation failed.' }
+            Invoke-PrivatePhp (Join-Path $candidateCurrent 'runtime') $offlineScript @($bundle)
+            if ($privatePhpExitCode -ne 0) { throw 'Offline toolchain preparation failed.' }
         } finally {
             $env:WEBMAN_AOT_BUILDER_HOME = $previousHome
         }
@@ -131,16 +146,16 @@ try {
         $newToolchains = $true
         Copy-Item -LiteralPath (Join-Path $packageRoot 'payload\launcher\webman-aot.cmd') -Destination $launcher
         $newLauncher = $true
+        if ($full) {
         $previousHome = $env:WEBMAN_AOT_BUILDER_HOME
         $env:WEBMAN_AOT_BUILDER_HOME = $InstallRoot
         try {
-            & (Join-Path $current 'runtime\php.exe') `
-                -c (Join-Path $current 'runtime\php.ini') `
-                -d "extension_dir=$(Join-Path $current 'runtime\ext')" `
-                (Join-Path $current 'app\installer\offline-prepare.php') $bundle
-            if ($LASTEXITCODE -ne 0) { throw 'Activated offline toolchain self-check failed.' }
+            Invoke-PrivatePhp (Join-Path $current 'runtime') `
+                (Join-Path $current 'app\installer\offline-prepare.php') @($bundle)
+            if ($privatePhpExitCode -ne 0) { throw 'Activated offline toolchain self-check failed.' }
         } finally {
             $env:WEBMAN_AOT_BUILDER_HOME = $previousHome
+        }
         }
     } else {
         $smallBackup = Join-Path $InstallRoot ('.install-backups\current-' +

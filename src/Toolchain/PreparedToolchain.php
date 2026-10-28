@@ -10,7 +10,7 @@ use WebmanAotBuilder\Cli\UnavailableException;
 final class PreparedToolchain
 {
     /**
-     * @return array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string}
+     * @return array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string,sdkContext:array{sdkDirectory:string,sdkSha256:string,derivationSha256:string,toolchainLockSha256:string,toolchainLockFile:string,phpVersionId:int,deepcloneEnabled:bool}}
      */
     public function load(
         string $manifestPath,
@@ -78,6 +78,13 @@ final class PreparedToolchain
         }
         $sdk = $tools['phpx'] . '/full-static/sdk';
         $expected = $data['sdkSha256'] ?? null;
+        $approved = json_decode((string) file_get_contents($lockFile), true, flags: JSON_THROW_ON_ERROR);
+        $sdkPolicy = $approved['evidence']['patchedSdk'] ?? null;
+        if ($sdkPolicy !== null && (!is_array($sdkPolicy)
+                || !is_string($sdkPolicy['sdkSha256'] ?? null)
+                || ($sdkPolicy['sdkSha256'] ?? null) !== $expected)) {
+            throw new ConfigurationException('prepared static SDK differs from the approved patched SDK');
+        }
         if (!is_string($expected)
             || preg_match('/^[a-f0-9]{64}$/D', $expected) !== 1
             || !is_dir($sdk)
@@ -86,9 +93,21 @@ final class PreparedToolchain
         ) {
             throw new ConfigurationException('prepared static SDK fingerprint differs');
         }
+        if (!is_array($sdkPolicy)) {
+            throw new ConfigurationException('prepared static SDK has no selected derivation approval');
+        }
+        (new SdkArchiveGuard())->assertDerivation($sdk, $sdkPolicy);
+        $capabilities = (new StaticTargetLayout())->runtimeCapabilities($sdk);
+        $tools['sdkContext'] = ['sdkDirectory' => $sdk, 'sdkSha256' => $expected,
+            'derivationSha256' => $sdkPolicy['derivationSha256'], 'toolchainLockSha256' => $lockDigest,
+            'toolchainLockFile' => (string) realpath($lockFile),
+            'phpVersionId' => $capabilities['phpVersionId'], 'deepcloneEnabled' => $capabilities['deepcloneEnabled'],
+            'sdkNamespacedFunctionExportsKnown' => $capabilities['sdkNamespacedFunctionExportsKnown'],
+            'sdkNamespacedFunctionExports' => $capabilities['sdkNamespacedFunctionExports'],
+            'sdkFunctionExportsSha256' => $capabilities['sdkFunctionExportsSha256']];
         $tools['sdkSha256'] = $expected;
 
-        /** @var array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string} $tools */
+        /** @var array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string,sdkContext:array{sdkDirectory:string,sdkSha256:string,derivationSha256:string,toolchainLockSha256:string,toolchainLockFile:string,phpVersionId:int,deepcloneEnabled:bool}} $tools */
         return $tools;
     }
 

@@ -1,0 +1,110 @@
+#!/bin/bash
+# Generated from verified installer archives. Requires only macOS system tools.
+version='@VERSION@'
+platform='@PLATFORM@'
+small_file='@SMALL_FILE@'
+small_url='@SMALL_URL@'
+small_sha='@SMALL_SHA256@'
+small_size='@SMALL_SIZE@'
+full_file='@FULL_FILE@'
+full_url='@FULL_URL@'
+full_sha='@FULL_SHA256@'
+full_size='@FULL_SIZE@'
+started_at=$(date +%s)
+flavor=''
+archive=''
+forward=()
+work=''
+log=$(mktemp "${TMPDIR:-/tmp}/webman-aot-setup-log.XXXXXX") || exit 73
+say() { if [ -n "$log" ]; then printf '%s\n' "$*" | tee -a "$log"; else printf '%s\n' "$*"; fi; }
+finish() {
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        say "下载安装失败（退出码 ${status}，耗时 $(($(date +%s) - started_at)) 秒）。"
+        say '请检查上方原始错误；网络失败可稍后重试，校验失败请重新取得此版本安装包。'
+        say '反馈问题：https://github.com/supdger/webman-aot-builder/issues'
+    fi
+    [ -z "$log" ] || say "日志：$log"
+    if [ -t 0 ] && [ -t 1 ]; then printf '\n按回车关闭此窗口… '; IFS= read -r answer || :; fi
+    exit "$status"
+}
+trap finish EXIT
+fail() { say "$1"; exit "${2:-1}"; }
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --flavor=*) [ -z "$flavor" ] || fail '重复包类型参数。' 64; flavor=${1#*=} ;;
+        --archive=*) [ -z "$archive" ] || fail '重复安装包参数。' 64; archive=${1#*=} ;;
+        --install|--no-path|--home=*|--bin-dir=*|--project=*|--help) forward+=("$1") ;;
+        *) fail "未知参数：$1" 64 ;;
+    esac
+    shift
+done
+[ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] || fail '此入口需要 macOS ARM64。' 78
+if [ -z "$flavor" ]; then
+    if [ ! -t 0 ]; then
+        say '非交互输入未指定包类型，已取消；请使用 --flavor=small|full。'
+        exit 0
+    fi
+    say "Webman AOT Builder ${version}：选择安装包"
+    say "1. 轻量包（$small_size 字节；第一次构建会下载编译组件）"
+    say "2. 完整包（$full_size 字节；下载安装后可离线准备编译组件）"
+    say '0. 取消'
+    while :; do
+        printf '请输入 1 / 2 / 0：'
+        IFS= read -r choice || { say '输入结束，已取消；没有安装。'; exit 0; }
+        case "$choice" in 1|small) flavor=small; break ;; 2|full) flavor=full; break ;; 0) say '已取消；没有安装。'; exit 0 ;; *) say '请选择 1、2 或 0。' ;; esac
+    done
+fi
+case "$flavor" in
+    small) filename=$small_file; url=$small_url; expected=$small_sha; size=$small_size ;;
+    full) filename=$full_file; url=$full_url; expected=$full_sha; size=$full_size ;;
+    *) fail '包类型必须是 small 或 full。' 64 ;;
+esac
+cache="${HOME}/Library/Caches/webman-aot-builder/setup-$version"
+[ ! -L "$cache" ] || fail '缓存目录不能是符号链接。' 64
+mkdir -p "$cache" || fail '无法创建下载缓存，请检查个人目录写权限。'
+say "准备 $version / $platform / ${flavor}（$size 字节）。"
+valid_archive() {
+    [ -f "$1" ] && [ ! -L "$1" ] && [ "$(stat -f %z "$1")" = "$size" ] &&
+        [ "$(shasum -a 256 "$1" | awk '{print $1}')" = "$expected" ]
+}
+if [ -n "$archive" ]; then
+    say "检查已下载安装包：$archive"
+    valid_archive "$archive" || fail '安装包大小或 SHA-256 不匹配；不会执行包内代码。' 65
+else
+    archive="$cache/$filename"
+    if valid_archive "$archive"; then
+        say "复用已校验安装包：$archive"
+    else
+        [ ! -L "$archive" ] || fail '缓存安装包不能是符号链接。' 64
+        download=$(mktemp "$cache/download.XXXXXX") || fail '无法创建下载文件。'
+        say "下载：$url"
+        say '下方显示实际下载字节、速度和时间。'
+        curl --no-progress-bar --no-silent --progress-meter --fail --location --proto '=https' --proto-redir '=https' --output "$download" "$url" 2> >(tee -a "$log" >&2)
+        code=$?
+        [ "$code" -eq 0 ] || fail "下载失败（curl 退出码 ${code}）；保留 TLS 校验，请检查网络或代理后重试。" "$code"
+        valid_archive "$download" || fail "下载包大小或 SHA-256 不匹配；不会执行包内代码。临时文件：$download" 65
+        mv -f "$download" "$archive" || fail '无法保存已校验安装包。'
+    fi
+fi
+say '外层 SHA-256 校验成功；检查归档路径和文件类型。'
+names=$(mktemp "$cache/entries.XXXXXX") || fail '无法创建归档检查文件。'
+tar -tzf "$archive" > "$names" || fail '无法读取安装包归档。' 65
+LC_ALL=C awk '
+    !/^[A-Za-z0-9_.\/-]+$/ || /^\// { exit 1 }
+    { n=split($0, parts, "/"); for(i=1;i<=n;i++) if(parts[i]==".." || parts[i]==".") exit 1; if(seen[$0]++) exit 1; count++ }
+    END { if(!count) exit 1 }
+' "$names" || fail '归档含危险路径或重复条目；不会执行包内代码。' 65
+tar -tvzf "$archive" > "$names" || fail '无法检查归档文件类型。' 65
+LC_ALL=C awk 'substr($0,1,1)!="-" {exit 1}' "$names" || fail '归档含链接或特殊文件；不会执行包内代码。' 65
+work=$(mktemp -d "$cache/extract.XXXXXX") || fail '无法创建新的私有解压目录。'
+say "解压到新的私有目录：$work"
+tar -xzf "$archive" -C "$work" || fail '解压失败；没有安装。' 65
+[ -x "$work/payload/runtime/bin/php" ] && [ -f "$work/payload/app/tools/guided.php" ] && [ -f "$work/install.command" ] || fail '安装包缺少必要入口或执行权限。' 65
+say '包检查成功，进入安装确认与项目下一步。'
+# Parent retains the terminal once; the child only runs the shared PHP flow.
+"$work/payload/runtime/bin/php" "$work/payload/app/tools/guided.php" --mode=install "--package-root=$work" "--flavor=$flavor" "${forward[@]}"
+code=$?
+[ "$code" -eq 0 ] || exit "$code"
+say "下载安装流程结束，耗时 $(($(date +%s) - started_at)) 秒。"
+exit 0

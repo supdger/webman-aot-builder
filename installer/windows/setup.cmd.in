@@ -1,0 +1,197 @@
+@echo off
+setlocal
+chcp 65001 >nul
+set "WEBMAN_AOT_SETUP_SELF=%~f0"
+set "WEBMAN_AOT_SETUP_WORK=%TEMP%\webman-aot-setup-%RANDOM%-%RANDOM%"
+if exist "%WEBMAN_AOT_SETUP_WORK%" exit /b 73
+mkdir "%WEBMAN_AOT_SETUP_WORK%"
+if errorlevel 1 exit /b 73
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -Command "$s=[IO.File]::ReadAllText($env:WEBMAN_AOT_SETUP_SELF,[Text.Encoding]::UTF8); $m='# SETUP_'+'POWERSHELL'; $p=$s.IndexOf($m,[StringComparison]::Ordinal); if($p -lt 0){exit 65}; [IO.File]::WriteAllText((Join-Path $env:WEBMAN_AOT_SETUP_WORK 'setup.ps1'),$s.Substring($p+$m.Length),[Text.UTF8Encoding]::new($true))"
+if errorlevel 1 exit /b %ERRORLEVEL%
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%WEBMAN_AOT_SETUP_WORK%\setup.ps1" %*
+set "setup_exit=%ERRORLEVEL%"
+del "%WEBMAN_AOT_SETUP_WORK%\setup.ps1"
+rmdir "%WEBMAN_AOT_SETUP_WORK%"
+exit /b %setup_exit%
+# SETUP_POWERSHELL
+[CmdletBinding()]
+param(
+    [ValidateSet('small', 'full')][string]$Flavor,
+    [switch]$Install,
+    [string]$InstallRoot,
+    [string]$BinDir,
+    [switch]$NoPath,
+    [string]$Project,
+    [string]$Archive
+)
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)
+$version = '@VERSION@'
+$platform = '@PLATFORM@'
+$packages = @{
+    small = @{ File='@SMALL_FILE@'; Url='@SMALL_URL@'; Sha='@SMALL_SHA256@'; Size=[long]'@SMALL_SIZE@' }
+    full = @{ File='@FULL_FILE@'; Url='@FULL_URL@'; Sha='@FULL_SHA256@'; Size=[long]'@FULL_SIZE@' }
+}
+$timer = [Diagnostics.Stopwatch]::StartNew()
+$log = Join-Path ([IO.Path]::GetTempPath()) ('webman-aot-setup-' + [Guid]::NewGuid().ToString('N') + '.log')
+$exitCode = 1
+function Show-Status([string]$Message) {
+    Write-Host $Message
+    if ($log) { Add-Content -LiteralPath $log -Value $Message -Encoding UTF8 }
+}
+function Receive-Package($Package, [string]$Destination) {
+    $curl = $null
+    $stderrPath = Join-Path ([IO.Path]::GetTempPath()) ('webman-aot-download-' + [Guid]::NewGuid().ToString('N') + '.stderr.log')
+    $timer = [Diagnostics.Stopwatch]::StartNew()
+    try {
+        $curlCommand = Get-Command 'curl.exe' -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $arguments = @('--no-progress-bar', '--no-silent', '--progress-meter', '--fail', '--location',
+            '--proto', '=https', '--proto-redir', '=https', '--output', ('"' + $Destination + '"'), ('"' + $Package.Url + '"'))
+        $curl = Start-Process -FilePath $curlCommand.Source -ArgumentList $arguments -NoNewWindow -PassThru -RedirectStandardError $stderrPath
+        # Cache the handle before waiting so Windows PowerShell 5.1 retains ExitCode.
+        $curlHandle = $curl.Handle
+        Add-Content -LiteralPath $log -Value ('下载进程：' + $curl.Id) -Encoding UTF8
+        Show-Status ('下载已开始：0 / {0} 字节；正在连接服务器。' -f $Package.Size)
+        $nextStatus = 5.0
+        while (-not $curl.WaitForExit(200)) {
+            # The native writer owns stderr until it drains; monitor payload bytes only.
+            if ($timer.Elapsed.TotalSeconds -lt $nextStatus) { continue }
+            $nextStatus = $timer.Elapsed.TotalSeconds + 5.0
+            $bytes = if (Test-Path -LiteralPath $Destination -PathType Leaf) { (Get-Item -LiteralPath $Destination).Length } else { 0L }
+            Show-Status ('已下载 {0} / {1} 字节（{2:N1}%）；平均 {3:N2} MiB/秒，已用 {4:N1} 秒。' -f
+                $bytes, $Package.Size, [Math]::Min(99.9, ($bytes * 100.0 / $Package.Size)),
+                ($bytes / 1MB / [Math]::Max(0.001, $timer.Elapsed.TotalSeconds)), $timer.Elapsed.TotalSeconds)
+        }
+        $curl.WaitForExit()
+        $code = $curl.ExitCode
+        if ($code -isnot [int]) { throw '无法确认下载进程的退出状态；请保留日志后重试。' }
+        if ($code -ne 0) { $script:exitCode = $code }
+        $curl.Dispose()
+        $curl = $null
+        if (Test-Path -LiteralPath $stderrPath -PathType Leaf) {
+            $errorText = Get-Content -Raw -LiteralPath $stderrPath -Encoding UTF8
+            if ($errorText) { Add-Content -LiteralPath $log -Value $errorText -Encoding UTF8 }
+        }
+        $bytes = if (Test-Path -LiteralPath $Destination -PathType Leaf) { (Get-Item -LiteralPath $Destination).Length } else { 0L }
+        Show-Status ('下载结束：{0} / {1} 字节，耗时 {2:N1} 秒。' -f $bytes, $Package.Size, $timer.Elapsed.TotalSeconds)
+        return $code
+    } finally {
+        if ($null -ne $curl) {
+            try {
+                if (-not $curl.HasExited) { $curl.Kill() }
+                $curl.WaitForExit()
+            } finally { $curl.Dispose() }
+        }
+    }
+}
+function Test-Archive([string]$Path, $Package) {
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $false }
+    $item = Get-Item -LiteralPath $Path
+    return -not ($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -and
+        $item.Length -eq $Package.Size -and
+        (Get-FileHash -Algorithm SHA256 -LiteralPath $Path).Hash.ToLowerInvariant() -eq $Package.Sha
+}
+try {
+    if (-not [Environment]::Is64BitOperatingSystem -or $env:PROCESSOR_ARCHITECTURE -notin @('AMD64', 'x86')) { throw '此入口需要 Windows x64。' }
+    if (-not $Flavor) {
+        if ([Console]::IsInputRedirected) {
+            Show-Status '非交互输入未指定包类型，已取消；请使用 -Flavor small 或 full。'
+            $exitCode = 0
+            return
+        }
+        Show-Status "Webman AOT Builder $version：选择安装包"
+        Show-Status ('1. 轻量包（{0} 字节；首次构建会下载编译组件）' -f $packages.small.Size)
+        Show-Status ('2. 完整包（{0} 字节；下载安装后可离线准备编译组件）' -f $packages.full.Size)
+        Show-Status '0. 取消'
+        while (-not $Flavor) {
+            Write-Host '请输入 1 / 2 / 0：' -NoNewline
+            $choice = [Console]::ReadLine()
+            if ($null -eq $choice -or $choice -eq '0') { Show-Status '已取消；没有安装。'; $exitCode = 0; return }
+            switch ($choice) { '1' { $Flavor='small' } 'small' { $Flavor='small' } '2' { $Flavor='full' } 'full' { $Flavor='full' } default { Show-Status '请选择 1、2 或 0。' } }
+        }
+    }
+    $package = $packages[$Flavor]
+    $cache = Join-Path $env:LOCALAPPDATA ('webman-aot-builder\setup-' + $version)
+    if ((Test-Path -LiteralPath $cache) -and ((Get-Item -LiteralPath $cache).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '缓存目录不能是链接。' }
+    New-Item -ItemType Directory -Force -Path $cache | Out-Null
+    Show-Status ('准备 {0} / {1} / {2}（{3} 字节）。' -f $version,$platform,$Flavor,$package.Size)
+    if ($Archive) {
+        $Archive = [IO.Path]::GetFullPath($Archive)
+        Show-Status "检查已下载安装包：$Archive"
+        if (-not (Test-Archive $Archive $package)) { throw '安装包大小或 SHA-256 不匹配；不会执行包内代码。' }
+    } else {
+        $Archive = Join-Path $cache $package.File
+        if (Test-Archive $Archive $package) {
+            Show-Status "复用已校验安装包：$Archive"
+        } else {
+            if ((Test-Path -LiteralPath $Archive) -and ((Get-Item -LiteralPath $Archive).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw '缓存安装包不能是链接。' }
+            $download = Join-Path $cache ('download-' + [Guid]::NewGuid().ToString('N') + '.zip')
+            Show-Status ('下载：' + $package.Url)
+            Show-Status '下方每 5 秒显示实际下载字节、速度和时间。'
+            $downloadCode = Receive-Package $package $download
+            if ($downloadCode -ne 0) {
+                $exitCode = $downloadCode
+                $reason = switch ($downloadCode) {
+                    22 { '服务器拒绝下载或找不到此版本资产；请检查下载地址后重试。' }
+                    60 { 'TLS 证书校验未通过；请检查系统时间、证书或代理配置后重试。' }
+                    default { '请检查网络或代理后重试。' }
+                }
+                throw "下载失败（curl 退出码 $downloadCode）；$reason 原始错误见本机日志。"
+            }
+            if (-not (Test-Archive $download $package)) { throw "下载包大小或 SHA-256 不匹配；不会执行包内代码。临时文件：$download" }
+            Move-Item -LiteralPath $download -Destination $Archive -Force
+        }
+    }
+    Show-Status '外层 SHA-256 校验成功；检查归档路径和文件类型。'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip = [IO.Compression.ZipFile]::OpenRead($Archive)
+    try {
+        $seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+        if ($zip.Entries.Count -eq 0) { throw '归档为空。' }
+        foreach ($entry in $zip.Entries) {
+            $name = $entry.FullName
+            $type = ($entry.ExternalAttributes -shr 16) -band 61440
+            if ($name -notmatch '^[A-Za-z0-9_.\-/]+$' -or $name.StartsWith('/') -or $name.EndsWith('/') -or
+                @($name.Split('/') | Where-Object { $_ -eq '..' -or $_ -eq '.' -or $_ -eq '' }).Count -gt 0 -or
+                ($entry.ExternalAttributes -band 1024) -ne 0 -or $type -notin @(0,32768) -or -not $seen.Add($name)) { throw "归档含危险路径、链接或重复条目：$name" }
+        }
+        $extract = Join-Path $cache ('extract-' + [Guid]::NewGuid().ToString('N'))
+        if (Test-Path -LiteralPath $extract) { throw '私有解压目录已存在。' }
+        New-Item -ItemType Directory -Path $extract | Out-Null
+        Show-Status "解压到新的私有目录：$extract"
+        foreach ($entry in $zip.Entries) {
+            $target = Join-Path $extract $entry.FullName.Replace('/', '\')
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $target) | Out-Null
+            $input = $entry.Open()
+            $output = [IO.File]::Open($target,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write)
+            try { $input.CopyTo($output) } finally { $output.Dispose(); $input.Dispose() }
+        }
+    } finally { $zip.Dispose() }
+    $helper = Join-Path $extract 'install-guided.ps1'
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw '安装包缺少必要入口。' }
+    Show-Status '包检查成功，进入安装确认与项目下一步。'
+    $nativeArguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $helper, '-Flavor', $Flavor)
+    if ($Install) { $nativeArguments += '-Install' }
+    if ($InstallRoot) { $nativeArguments += @('-InstallRoot', $InstallRoot) }
+    if ($BinDir) { $nativeArguments += @('-BinDir', $BinDir) }
+    if ($NoPath) { $nativeArguments += '-NoPath' }
+    if ($Project) { $nativeArguments += @('-Project', $Project) }
+    $previousPause = $env:WEBMAN_AOT_NO_PAUSE
+    try {
+        $env:WEBMAN_AOT_NO_PAUSE = '1'
+        & powershell.exe @nativeArguments
+        $exitCode = $LASTEXITCODE
+    } finally { $env:WEBMAN_AOT_NO_PAUSE = $previousPause }
+    if ($exitCode -eq 0) { Show-Status ('下载安装流程结束，耗时 {0:N1} 秒。' -f $timer.Elapsed.TotalSeconds) }
+} catch {
+    Show-Status ('下载安装失败：' + $_.Exception.Message)
+    Show-Status '请检查原始错误，网络失败可稍后重试，校验失败请重新取得此版本安装包。'
+    Show-Status '反馈问题：https://github.com/supdger/webman-aot-builder/issues'
+} finally {
+    if ($log) { Show-Status "日志：$log" }
+    if (-not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+        Write-Host '按回车关闭此窗口…' -NoNewline
+        [void][Console]::ReadLine()
+    }
+}
+exit $exitCode

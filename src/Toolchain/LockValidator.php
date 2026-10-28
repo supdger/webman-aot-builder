@@ -92,10 +92,9 @@ final class LockValidator
             }
         }
         if (is_array($windowsDriver)
-            && (($windowsDriver['kind'] ?? null) !== 'host-tool'
-                || ($windowsDriver['version'] ?? null) !== ($phpSource['version'] ?? null))
+            && ($windowsDriver['kind'] ?? null) !== 'host-tool'
         ) {
-            $errors[] = 'Windows PHP driver must match the locked PHP source version';
+            $errors[] = 'selected Windows PHP driver must be a host tool';
         }
 
         $embeddedIds = [];

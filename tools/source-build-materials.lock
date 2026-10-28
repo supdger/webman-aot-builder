@@ -1,0 +1,8 @@
+schema webman-aot-builder-source-materials-v1
+url https://github.com/supdger/webman-aot-builder/releases/download/v0.2.3/webman-aot-builder-0.2.3-macos-php-relink-materials.tar.gz
+sha256 380880904e1aaa444d1c3485eb0a2733d47bc4fd8ec6e2fd7499ed45d384eeda
+size 137607655
+runtime webman-aot-builder-v0.2.0-release/artifacts/php-macos
+compiler webman-aot-builder-v0.2.0-release/artifacts/php-compiler
+licenses webman-aot-builder-spc-2.8.5/buildroot/source-licenses
+source webman-aot-builder-spc-2.8.5/downloads/php-8.4.25.tar.xz

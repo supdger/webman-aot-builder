@@ -7,6 +7,7 @@ require dirname(__DIR__) . '/src/Toolchain/ElfStaticVerifier.php';
 require dirname(__DIR__) . '/src/Toolchain/SdkArchiveGuard.php';
 require dirname(__DIR__) . '/src/Cli/ConfigurationException.php';
 require dirname(__DIR__) . '/src/Toolchain/TypePhpPatchSourceVerifier.php';
+require dirname(__DIR__) . '/src/Toolchain/StaticTargetLayout.php';
 
 use WebmanAotBuilder\Toolchain\ElfStaticVerifier;
 use WebmanAotBuilder\Toolchain\SdkArchiveGuard;
@@ -187,15 +188,11 @@ try {
         $extraLdFlags = implode(' ', [...$forceSymbols, ...array_map(flagPath(...), $archives)]);
     }
 
-    $gccVersion = '12.2.1';
-    $gccDirectory = $sysroot . '/usr/lib/gcc/x86_64-alpine-linux-musl/' . $gccVersion;
-    $cxxInclude = $sysroot . '/usr/include/c++/' . $gccVersion;
-    $targetInclude = $cxxInclude . '/x86_64-alpine-linux-musl';
-    foreach ([$gccDirectory, $cxxInclude, $targetInclude] as $directory) {
-        if (!is_dir($directory)) {
-            throw new RuntimeException("sysroot is incomplete: {$directory}");
-        }
-    }
+    $layout = (new WebmanAotBuilder\Toolchain\StaticTargetLayout())->sysroot($sysroot);
+    $phpVersion = (new WebmanAotBuilder\Toolchain\StaticTargetLayout())->phpVersion($phpx . '/full-static/sdk');
+    $gccDirectory = $layout['gcc'];
+    $cxxInclude = $layout['cxx'];
+    $targetInclude = $layout['targetInclude'];
     $sysrootFlag = flagPath($sysroot);
     $gccDirectoryFlag = flagPath($gccDirectory);
     $cxxIncludeFlag = flagPath($cxxInclude);
@@ -205,7 +202,7 @@ try {
     $project = <<<YAML
 name: full-static-cross-smoke
 mode: bin
-php-version: "8.4"
+php-version: "{$phpVersion}"
 build-dir: build
 output: full_static_cross_smoke
 cxx-std: c++17

@@ -3,6 +3,9 @@
 
 declare(strict_types=1);
 
+require dirname(__DIR__) . '/src/Cli/ConfigurationException.php';
+require dirname(__DIR__) . '/src/Toolchain/StaticTargetLayout.php';
+
 /**
  * @return array<string, string>
  */
@@ -85,10 +88,10 @@ try {
             'paths' => [
                 'usr/bin/cc',
                 'usr/lib/bfd-plugins/liblto_plugin.so',
-                'usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/plugin/libcc1plugin.so',
-                'usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/plugin/libcc1plugin.so.0',
-                'usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/plugin/libcp1plugin.so',
-                'usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/plugin/libcp1plugin.so.0',
+                'usr/lib/gcc/x86_64-alpine-linux-musl/*/plugin/libcc1plugin.so',
+                'usr/lib/gcc/x86_64-alpine-linux-musl/*/plugin/libcc1plugin.so.0',
+                'usr/lib/gcc/x86_64-alpine-linux-musl/*/plugin/libcp1plugin.so',
+                'usr/lib/gcc/x86_64-alpine-linux-musl/*/plugin/libcp1plugin.so.0',
                 'usr/lib/libatomic.so',
                 'usr/lib/libcc1.so',
                 'usr/lib/libcc1.so.0',
@@ -96,7 +99,7 @@ try {
                 'usr/lib/libitm.so',
                 'usr/lib/libitm.so.1',
                 'usr/bin/x86_64-alpine-linux-musl-gcc',
-                'usr/bin/x86_64-alpine-linux-musl-gcc-12.2.1',
+                'usr/bin/x86_64-alpine-linux-musl-gcc-*',
                 'usr/bin/x86_64-alpine-linux-musl-gcc-ar',
                 'usr/bin/x86_64-alpine-linux-musl-gcc-nm',
                 'usr/bin/x86_64-alpine-linux-musl-gcc-ranlib',
@@ -112,9 +115,6 @@ try {
         $command = [$tar];
         if (PHP_OS_FAMILY === 'Windows' && isset($windowsLinkExclusions[$package['id']])) {
             $rule = $windowsLinkExclusions[$package['id']];
-            if (!hash_equals($rule['sha256'], (string) $package['sha256'])) {
-                throw new RuntimeException("sysroot link rule requires locked {$package['id']} archive");
-            }
             foreach ($rule['paths'] as $path) {
                 $command[] = '--exclude=' . $path;
             }
@@ -122,18 +122,9 @@ try {
         execute([...$command, '-xf', $archive, '-C', $output]);
     }
 
-    $required = [
-        '/usr/include/stdio.h',
-        '/usr/include/c++/12.2.1/vector',
-        '/usr/include/c++/12.2.1/x86_64-alpine-linux-musl/bits/c++config.h',
-        '/usr/lib/libstdc++.a',
-        '/usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/crtbegin.o',
-        '/usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/libgcc.a',
-    ];
-    foreach ($required as $relativePath) {
-        if (!is_file($output . $relativePath)) {
-            throw new RuntimeException("assembled sysroot is incomplete: {$relativePath}");
-        }
+    (new WebmanAotBuilder\Toolchain\StaticTargetLayout())->sysroot($output);
+    if (!is_file($output . '/usr/include/stdio.h')) {
+        throw new RuntimeException('assembled sysroot lacks musl C headers');
     }
 
     fwrite(

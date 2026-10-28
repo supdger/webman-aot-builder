@@ -127,11 +127,20 @@ if [ -e "$launcher" ] || [ -L "$launcher" ]; then
     fi
 fi
 
-if [ "$full" -eq 1 ]; then
+reuse=0
+if [ "$full" -eq 0 ] && [ -n "${WEBMAN_AOT_REUSE_HOME:-}" ]; then
+    WEBMAN_AOT_BUILDER_HOME="$candidate" \
+        "$candidate/current/runtime/bin/php" -n \
+        "$candidate/current/app/installer/offline-prepare.php" --reuse
+    reuse=1
+fi
+if [ "$full" -eq 1 ] || [ "$reuse" -eq 1 ]; then
+    if [ "$full" -eq 1 ]; then
     WEBMAN_AOT_BUILDER_HOME="$candidate" \
         "$candidate/current/runtime/bin/php" -n \
         "$candidate/current/app/installer/offline-prepare.php" \
         "$package_root/payload/minimal-toolchain/component.zip"
+    fi
     backup_root="${aot_home}/.install-backups/full-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     mkdir -p "$backup_root"
     [ ! -d "$aot_home/current" ] || mv "$aot_home/current" "$backup_root/current"
@@ -145,10 +154,12 @@ if [ "$full" -eq 1 ]; then
     cp "$package_root/payload/launcher/webman-aot" "$launcher"
     new_launcher=1
     chmod 700 "$launcher"
+    if [ "$full" -eq 1 ]; then
     WEBMAN_AOT_BUILDER_HOME="$aot_home" \
         "$aot_home/current/runtime/bin/php" -n \
         "$aot_home/current/app/installer/offline-prepare.php" \
         "$package_root/payload/minimal-toolchain/component.zip"
+    fi
 else
     backup_root="${aot_home}/.install-backups/current-$(date -u +%Y%m%dT%H%M%SZ)-$$"
     mkdir -p "$backup_root"

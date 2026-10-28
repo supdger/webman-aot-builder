@@ -32,4 +32,9 @@ if [ ! -f "$application" ]; then
     exit 1
 fi
 
+if [ "${1:-}" = 'uninstall' ]; then
+    shift
+    launcher_bin=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+    exec sh "$aot_home/current/app/installer/macos/uninstall.sh" --home="$aot_home" --bin-dir="$launcher_bin" "$@"
+fi
 exec "$private_php" -n "$application" "$@"

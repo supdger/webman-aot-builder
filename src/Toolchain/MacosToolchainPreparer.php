@@ -45,71 +45,30 @@ final class MacosToolchainPreparer implements ToolchainPreparer
             '--lock=' . $candidate . '/toolchain.lock.json',
             '--php=' . $compilerPhp,
         ];
-        $process = proc_open(
-            $command,
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipes,
-            dirname($this->script)
-        );
-        if (!is_resource($process)) {
-            throw new UnavailableException('unable to start private macOS toolchain preparation');
-        }
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
         $tail = '';
-        $exit = null;
-        $nextHeartbeat = microtime(true) + 30;
-        $pendingStages = '';
-        $reportStages = static function (string $chunk) use ($progress, &$pendingStages): void {
-            if ($progress === null) {
-                return;
-            }
-            $pendingStages .= $chunk;
-            while (($newline = strpos($pendingStages, "\n")) !== false) {
-                $line = trim(substr($pendingStages, 0, $newline));
-                $pendingStages = substr($pendingStages, $newline + 1);
-                if (str_starts_with($line, '[prepare] ')) {
-                    $progress(substr($line, 10));
-                }
-            }
-        };
-        while (true) {
-            $status = proc_get_status($process);
-            foreach ([1, 2] as $index) {
-                $chunk = stream_get_contents($pipes[$index]);
-                if (is_string($chunk) && $chunk !== '') {
-                    $tail = substr($tail . $chunk, -8192);
-                    if ($index === 2) {
-                        $reportStages($chunk);
-                    }
-                }
-            }
-            if (!$status['running']) {
-                $exit = $status['exitcode'];
-                break;
-            }
-            if ($progress !== null && microtime(true) >= $nextHeartbeat) {
-                $progress('SDK preparation is still running...');
-                $nextHeartbeat = microtime(true) + 30;
-            }
-            usleep(20000);
-        }
-        foreach ([1, 2] as $index) {
-            stream_set_blocking($pipes[$index], true);
-            $chunk = stream_get_contents($pipes[$index]);
-            if (is_string($chunk) && $chunk !== '') {
+        $started = microtime(true);
+        $code = \WebmanAotBuilder\Cli\ProcessOutput::run(
+            $command, dirname($this->script), null,
+            ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'r'],
+            static function (int $index, string $chunk) use (&$tail): void {
                 $tail = substr($tail . $chunk, -8192);
-                if ($index === 2) {
-                    $reportStages($chunk);
+                // Keep CLI JSON stdout clean; all preparation diagnostics go to stderr.
+                fwrite(STDERR, $chunk);
+                fflush(STDERR);
+            },
+            static function (float $elapsed, float $silent) use ($progress): void {
+                $message = sprintf('SDK process is running; elapsed %.0fs, no output for %.0fs; work progress unknown.', $elapsed, $silent);
+                if ($progress !== null) {
+                    $progress($message);
+                } else {
+                    fwrite(STDERR, $message . PHP_EOL);
                 }
             }
-            fclose($pipes[$index]);
-        }
-        $closed = proc_close($process);
-        if (($exit >= 0 ? $exit : $closed) !== 0) {
+        );
+        fwrite(STDERR, sprintf("[prepare] SDK process %s in %.1fs; exit code %d.\n", $code === 0 ? 'completed' : 'failed', microtime(true) - $started, $code));
+        if ($code !== 0) {
             throw new UnavailableException(
-                'macOS private toolchain preparation failed: ' . trim($tail)
+                'Macos private toolchain preparation failed (exit code ' . $code . '): ' . trim($tail)
             );
         }
         $this->assertReady($candidate);

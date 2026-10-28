@@ -7,6 +7,11 @@ use WebmanAotBuilder\Cli\Runtime;
 use WebmanAotBuilder\Platform\UserDirectoryLayout;
 
 $root = dirname(__DIR__);
+if (($argv[1] ?? '') === 'uninstall') {
+    require $root . '/packages/composer-installer/src/Uninstaller.php';
+    exit((new Supdger\WebmanAotInstaller\Uninstaller())->run(array_slice($argv, 2)));
+}
+
 $loader = static function (string $class) use ($root): void {
     $prefix = 'WebmanAotBuilder\\';
     if (!str_starts_with($class, $prefix)) {

@@ -30,5 +30,26 @@ if not exist "%APPLICATION%" (
     exit /b 1
 )
 
-"%PRIVATE_PHP%" -c "%AOT_HOME%\current\runtime\php.ini" -d "extension_dir=%AOT_HOME%\current\runtime\ext" "%APPLICATION%" %*
+if /I "%~1"=="uninstall" goto uninstall_dispatch
+
+set "WEBMAN_AOT_CALLER_CWD=%CD%"
+pushd "%AOT_HOME%\current\runtime"
+if errorlevel 1 exit /b 70
+".\php.exe" -c php.ini -d extension_dir=ext "..\app\tools\windows-php-bootstrap.php" "%APPLICATION%" %*
+set "runtime_exit=%ERRORLEVEL%"
+popd
+exit /b %runtime_exit%
+
+:uninstall_dispatch
+for %%I in ("%~dp0.") do set "PUBLIC_BIN=%%~fI"
+if not "%~3"=="" goto uninstall_usage
+if /I "%~2"=="--list" goto uninstall_list
+if not "%~2"=="" goto uninstall_usage
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%AOT_HOME%\current\app\installer\windows\uninstall.ps1" -InstallRoot "%AOT_HOME%" -BinDir "%PUBLIC_BIN%"
 exit /b %ERRORLEVEL%
+:uninstall_list
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%AOT_HOME%\current\app\installer\windows\uninstall.ps1" -InstallRoot "%AOT_HOME%" -BinDir "%PUBLIC_BIN%" -List
+exit /b %ERRORLEVEL%
+:uninstall_usage
+1>&2 echo Usage: webman-aot uninstall [--list]
+exit /b 64

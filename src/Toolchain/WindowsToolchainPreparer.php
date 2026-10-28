@@ -73,72 +73,30 @@ final class WindowsToolchainPreparer implements ToolchainPreparer
             '-PrepareOnly',
             '-Offline',
         ];
-        $process = proc_open(
-            $command,
-            [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
-            $pipes,
-            dirname($this->script),
-            $environment
-        );
-        if (!is_resource($process)) {
-            throw new UnavailableException('unable to start private Windows toolchain preparation');
-        }
-        fclose($pipes[0]);
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
         $tail = '';
-        $exit = null;
-        $output = '';
-        $nextHeartbeat = microtime(true) + 30;
-        $reportOutput = static function (string $chunk) use (&$output, $progress): void {
-            if ($progress === null) {
-                return;
-            }
-            $output .= str_replace("\r", "\n", $chunk);
-            while (($newline = strpos($output, "\n")) !== false) {
-                $line = trim(substr($output, 0, $newline));
-                $output = substr($output, $newline + 1);
-                if (preg_match('/^(Downloading|Extracting|Stripping|Applying|Assembling|Calculating|Building)\b/', $line) === 1) {
-                    $progress('SDK: ' . $line);
-                }
-            }
-            $output = substr($output, -4096);
-        };
-        while (true) {
-            $status = proc_get_status($process);
-            foreach ([1, 2] as $index) {
-                $chunk = stream_get_contents($pipes[$index]);
-                if (is_string($chunk) && $chunk !== '') {
-                    $tail = substr($tail . $chunk, -8192);
-                    if ($index === 1) {
-                        $reportOutput($chunk);
-                    }
-                }
-            }
-            if (!$status['running']) {
-                $exit = $status['exitcode'];
-                break;
-            }
-            if ($progress !== null && microtime(true) >= $nextHeartbeat) {
-                $progress('SDK preparation is still running...');
-                $nextHeartbeat = microtime(true) + 30;
-            }
-            usleep(20000);
-        }
-        foreach ([1, 2] as $index) {
-            $chunk = stream_get_contents($pipes[$index]);
-            if (is_string($chunk) && $chunk !== '') {
+        $started = microtime(true);
+        $code = \WebmanAotBuilder\Cli\ProcessOutput::run(
+            $command, dirname($this->script), $environment,
+            ['file', PHP_OS_FAMILY === 'Windows' ? 'NUL' : '/dev/null', 'r'],
+            static function (int $index, string $chunk) use (&$tail): void {
                 $tail = substr($tail . $chunk, -8192);
-                if ($index === 1) {
-                    $reportOutput($chunk);
+                // Keep CLI JSON stdout clean; all preparation diagnostics go to stderr.
+                fwrite(STDERR, $chunk);
+                fflush(STDERR);
+            },
+            static function (float $elapsed, float $silent) use ($progress): void {
+                $message = sprintf('SDK process is running; elapsed %.0fs, no output for %.0fs; work progress unknown.', $elapsed, $silent);
+                if ($progress !== null) {
+                    $progress($message);
+                } else {
+                    fwrite(STDERR, $message . PHP_EOL);
                 }
             }
-            fclose($pipes[$index]);
-        }
-        $closed = proc_close($process);
-        if (($exit >= 0 ? $exit : $closed) !== 0) {
+        );
+        fwrite(STDERR, sprintf("[prepare] SDK process %s in %.1fs; exit code %d.\n", $code === 0 ? 'completed' : 'failed', microtime(true) - $started, $code));
+        if ($code !== 0) {
             throw new UnavailableException(
-                'Windows private toolchain preparation failed: ' . trim($tail)
+                'Windows private toolchain preparation failed (exit code ' . $code . '): ' . trim($tail)
             );
         }
         $this->assertReady($candidate);

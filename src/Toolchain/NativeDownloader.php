@@ -170,6 +170,8 @@ final class NativeDownloader implements Downloader
         };
         try {
             $exit = null;
+            clearstatcache(true, $destination);
+            $progress?->__invoke(is_file($destination) ? (int) filesize($destination) : 0, null);
             $nextReport = microtime(true) + 5;
             while (true) {
                 $status = proc_get_status($process);
@@ -219,6 +221,8 @@ final class NativeDownloader implements Downloader
                     "unable to download locked component: {$url} (curl exit code {$exitCode})"
                 );
             }
+            clearstatcache(true, $destination);
+            $progress?->__invoke((int) filesize($destination), self::contentLength(@file($headersPath, FILE_IGNORE_NEW_LINES)));
         } finally {
             if (is_resource($process)) {
                 if (proc_get_status($process)['running']) {

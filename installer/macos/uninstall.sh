@@ -1,132 +1,62 @@
 #!/bin/sh
-
 set -eu
 
-aot_home="${HOME}/Library/Application Support/webman-aot-builder"
-bin_dir="${HOME}/.local/bin"
-purge=0
-update_path=1
-
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        --home)
-            shift
-            [ "$#" -gt 0 ] || { echo "Missing value for --home" >&2; exit 64; }
-            aot_home=$1
-            ;;
-        --bin-dir)
-            shift
-            [ "$#" -gt 0 ] || { echo "Missing value for --bin-dir" >&2; exit 64; }
-            bin_dir=$1
-            ;;
-        --purge)
-            purge=1
-            ;;
-        --no-path)
-            update_path=0
-            ;;
-        *)
-            echo "Unknown uninstaller option: $1" >&2
-            exit 64
-            ;;
+# Run outside the selected installation so its private PHP can also be removed.
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+source_root=$(CDPATH= cd -- "$script_dir/../.." && pwd -P)
+aot_home=${WEBMAN_AOT_BUILDER_HOME:-"$HOME/Library/Application Support/webman-aot-builder"}
+bin_dir="$HOME/.local/bin"
+engine="$source_root/packages/composer-installer/src/Uninstaller.php"
+if [ ! -f "$engine" ]; then
+    engine="$script_dir/payload/app/packages/composer-installer/src/Uninstaller.php"
+fi
+[ -f "$engine" ] && [ ! -L "$engine" ] || { echo '[失败] 卸载引擎缺失；请使用新版源码或 Composer 入口。' >&2; exit 70; }
+# Keep the documented --home/--bin-dir arguments and pass all choices to the shared engine.
+parse_home=$aot_home
+previous=''
+for option do
+    if [ "$previous" = '--home' ]; then parse_home=$option; previous=''; continue; fi
+    case "$option" in
+        --home) previous='--home' ;;
+        --home=*) parse_home=${option#--home=} ;;
     esac
-    shift
 done
+private_php="$parse_home/current/runtime/bin/php"
+# Check lexical ancestors before resolving or executing any private runtime.
+probe=$private_php
+while [ "$probe" != '/' ] && [ "$probe" != '.' ]; do
+    [ ! -L "$probe" ] || { echo "[失败] 运行时路径含链接：${probe}；保留安装，请改用 Composer 入口。" >&2; exit 70; }
+    parent=$(dirname -- "$probe")
+    [ "$parent" != "$probe" ] || break
+    probe=$parent
+done
+engine_root=$(CDPATH= cd -- "$(dirname -- "$engine")/.." && pwd -P)
 
-case "$aot_home" in
-    ''|'/'|"$HOME")
-        echo "Refusing unsafe Webman AOT Builder home: $aot_home" >&2
-        exit 78
-        ;;
-esac
-
-launcher="$bin_dir/webman-aot"
-previous_launcher="$aot_home/.previous-launcher/webman-aot"
-resolved_home=$(cd "$aot_home" 2>/dev/null && pwd -P || printf '%s' "$aot_home")
-resolved_bin=$(cd "$bin_dir" 2>/dev/null && pwd -P || printf '%s' "$bin_dir")
-bin_inside_home=0
-case "$resolved_bin" in
-    "$resolved_home"|"$resolved_home"/*) bin_inside_home=1 ;;
-esac
-launcher_present=0
-launcher_owned=0
-if [ -e "$launcher" ] || [ -L "$launcher" ]; then
-    launcher_present=1
-    if [ ! -L "$launcher" ] && [ -f "$launcher" ] &&
-        grep -F 'WEBMAN_AOT_BUILDER_PUBLIC_LAUNCHER' "$launcher" >/dev/null 2>&1; then
-        launcher_owned=1
-    fi
-fi
-if [ "$purge" -eq 1 ] && [ -f "$previous_launcher" ] &&
-    [ "$launcher_present" -eq 1 ] && [ "$launcher_owned" -eq 0 ]; then
-    echo "Cannot purge Builder data: a previous webman-aot command is backed up while another command occupies $launcher" >&2
-    exit 70
-fi
-if [ "$purge" -eq 1 ] && [ "$bin_inside_home" -eq 1 ] &&
-    [ "$launcher_present" -eq 1 ] && [ "$launcher_owned" -eq 0 ]; then
-    echo "Cannot purge Builder data while an unowned webman-aot command remains inside it: $launcher" >&2
-    exit 70
-fi
-if [ "$launcher_owned" -eq 1 ]; then
-    rm -f -- "$launcher"
-    launcher_present=0
-elif [ "$launcher_present" -eq 1 ]; then
-    echo "Command is not owned by Webman AOT Builder; leaving it in place: $launcher"
-fi
-if [ "$launcher_present" -eq 0 ] && [ -f "$previous_launcher" ]; then
-    mkdir -p "$bin_dir"
-    mv "$previous_launcher" "$launcher"
-    launcher_present=1
-    echo "Previous webman-aot command restored: $launcher"
-fi
-obsolete_launcher="$bin_dir/webman-aot-builder"
-if [ -f "$obsolete_launcher" ] && grep -F 'WEBMAN_AOT_BUILDER_HOME' "$obsolete_launcher" >/dev/null 2>&1; then
-    rm -f -- "$obsolete_launcher"
-fi
-if [ "$purge" -eq 1 ]; then
-    if [ "$bin_inside_home" -eq 1 ]; then
-        if [ "$launcher_present" -eq 1 ]; then
-            saved_dir=$(mktemp -d "${TMPDIR:-/tmp}/webman-aot-previous.XXXXXX")
-            case "$saved_dir" in
-                "$resolved_home"|"$resolved_home"/*)
-                    rmdir "$saved_dir"
-                    echo "Cannot preserve the previous command: temporary directory is inside Builder data." >&2
-                    exit 70
-                    ;;
-            esac
-            saved_launcher="$saved_dir/webman-aot"
-            mv "$launcher" "$saved_launcher"
-            restore_launcher() {
-                if [ -e "$saved_launcher" ] || [ -L "$saved_launcher" ]; then
-                    mkdir -p "$bin_dir"
-                    mv "$saved_launcher" "$launcher"
-                fi
-                rmdir "$saved_dir" 2>/dev/null || :
-            }
-            trap restore_launcher EXIT
-            trap 'exit 130' HUP INT TERM
-            rm -rf -- "$aot_home"
-            restore_launcher
-            trap - EXIT HUP INT TERM
-            echo "Preserved webman-aot command inside $bin_dir after purging Builder data."
-        else
-            rm -rf -- "$aot_home"
-        fi
-    else
-        rm -rf -- "$aot_home"
-    fi
+if [ -x "$private_php" ] && [ ! -L "$private_php" ]; then
+    expected=$(sed -n 's/.*"macos-arm64": "\([0-9a-f]*\)".*/\1/p' "$engine_root/resources/uninstall-launchers.json")
+    actual=$(/usr/bin/shasum -a 256 "$private_php" | awk '{print $1}')
+    [ -n "$expected" ] && [ "$actual" = "$expected" ] || { echo '[失败] 私有 PHP 摘要不属于本入口受信运行时；保留安装，请改用 Composer 入口。' >&2; exit 70; }
+    echo '[准备] 将已核对摘要的私有 PHP 复制到临时目录，以便同步卸载当前版本。'
+    temporary=$(mktemp -d "${TMPDIR:-/tmp}/webman-aot-uninstall.XXXXXX")
+    cleanup() { rm -rf -- "$temporary"; }
+    trap cleanup EXIT
+    trap 'exit 130' HUP INT TERM
+    cp "$private_php" "$temporary/php"
+    chmod 700 "$temporary/php"
+    php_command="$temporary/php"
 else
-    rm -rf -- "$aot_home/current" "$aot_home/versions" "$aot_home/.install-candidates"
+    php_command=$(command -v php || :)
+    [ -n "$php_command" ] || { echo '[失败] 私有 PHP 不存在且未找到系统 PHP；请从 Composer 入口运行卸载。' >&2; exit 70; }
 fi
-
-if [ "$update_path" -eq 1 ] && [ -f "${HOME}/.zprofile" ]; then
-    temporary="${HOME}/.zprofile.webman-aot-builder.$$"
-    awk '
-        $0 == "# >>> webman-aot-builder >>>" { skip = 1; next }
-        $0 == "# <<< webman-aot-builder <<<" { skip = 0; next }
-        !skip { print }
-    ' "${HOME}/.zprofile" >"$temporary"
-    mv "$temporary" "${HOME}/.zprofile"
+# Load all code before deletion; the template resource remains available for the final recheck.
+engine_root=$(CDPATH= cd -- "$(dirname -- "$engine")/.." && pwd -P)
+if [ -z "${temporary:-}" ]; then
+    temporary=$(mktemp -d "${TMPDIR:-/tmp}/webman-aot-uninstall.XXXXXX")
+    cleanup() { rm -rf -- "$temporary"; }
+    trap cleanup EXIT
+    trap 'exit 130' HUP INT TERM
 fi
-
-echo "Webman AOT Builder uninstalled."
+mkdir -p "$temporary/src" "$temporary/resources"
+cp "$engine" "$temporary/src/Uninstaller.php"
+cp "$engine_root/resources/uninstall-launchers.json" "$temporary/resources/uninstall-launchers.json"
+"$php_command" -n "$temporary/src/Uninstaller.php" --home="$aot_home" --bin-dir="$bin_dir" "$@"

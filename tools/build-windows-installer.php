@@ -10,8 +10,8 @@ require dirname(__DIR__) . '/src/Toolchain/Downloader.php';
 require dirname(__DIR__) . '/src/Toolchain/NativeDownloader.php';
 require dirname(__DIR__) . '/src/Version.php';
 
-if (PHP_VERSION_ID < 80400 || !extension_loaded('zip') || !extension_loaded('Phar')) {
-    fwrite(STDERR, "PHP 8.4 or newer with zip and Phar is required.\n");
+if (PHP_INT_SIZE !== 8 || !class_exists(ZipArchive::class) || !class_exists(Phar::class)) {
+    fwrite(STDERR, "64-bit PHP with ZIP and Phar capabilities is required.\n");
     exit(1);
 }
 
@@ -21,20 +21,29 @@ $compare = null;
 $revision = 'v' . WebmanAotBuilder\Version::VALUE;
 $revisionProvided = false;
 $flavor = 'small';
+$preparedTypephp = null;
 $minimalComponentInput = null;
+$resultPath = null;
+$inputDirectory = $root . '/dist/installer-inputs';
 
 foreach (array_slice($argv, 1) as $argument) {
     if ($argument === '--help') {
-        fwrite(STDOUT, "Usage: php tools/build-windows-installer.php [--flavor=small|full] [--minimal-component=<local-zip>] [--compare=<local-zip>] [--output=<directory>] [--revision=<value>]\n");
+        fwrite(STDOUT, "Usage: php tools/build-windows-installer.php [--flavor=small|full] [--minimal-component=<local-zip>] [--prepared-typephp=<patched-source>] [--compare=<local-zip>] [--inputs=<cache-directory>] [--output=<directory>] [--revision=<value>]\n");
         exit(0);
     }
-    if (str_starts_with($argument, '--compare=')) {
+    if (str_starts_with($argument, '--result=')) {
+        $resultPath = substr($argument, strlen('--result='));
+    } elseif (str_starts_with($argument, '--inputs=')) {
+        $inputDirectory = substr($argument, strlen('--inputs='));
+    } elseif (str_starts_with($argument, '--compare=')) {
         $compare = substr($argument, strlen('--compare='));
     } elseif (str_starts_with($argument, '--output=')) {
         $output = substr($argument, strlen('--output='));
     } elseif (str_starts_with($argument, '--revision=')) {
         $revision = substr($argument, strlen('--revision='));
         $revisionProvided = true;
+    } elseif (str_starts_with($argument, '--prepared-typephp=')) {
+        $preparedTypephp = substr($argument, strlen('--prepared-typephp='));
     } elseif (str_starts_with($argument, '--flavor=')) {
         $flavor = substr($argument, strlen('--flavor='));
     } elseif (str_starts_with($argument, '--minimal-component=')) {
@@ -45,7 +54,13 @@ foreach (array_slice($argv, 1) as $argument) {
     }
 }
 
-if ($output === '' || $revision === '' || !in_array($flavor, ['small', 'full'], true)
+if ($preparedTypephp !== null && !is_dir($preparedTypephp)) {
+    fwrite(STDERR, 'prepared TypePHP directory is missing' . PHP_EOL);
+    exit(64);
+}
+
+if (($resultPath !== null && (preg_match('~^(?:[A-Za-z]:[\\\\/]|/|\\\\\\\\)~', $resultPath) !== 1 || file_exists($resultPath) || file_exists($resultPath . '.pending')))
+    || $output === '' || $revision === '' || !in_array($flavor, ['small', 'full'], true)
     || ($compare !== null && !is_file($compare))
     || ($minimalComponentInput !== null && !is_file($minimalComponentInput))) {
     fwrite(STDERR, "Output and revision must be non-empty; --compare must name an existing ZIP.\n");
@@ -111,11 +126,13 @@ function verifiedInput(string $url, string $sha256, string $directory): string
     }
     $output = new ProgressOutput(STDOUT);
     $lastBytes = 0;
+    $downloadStarted = microtime(true);
     $showProgress = static function (int $bytes, ?int $reportedTotal = null, bool $verified = false) use (
         $name,
         $expectedBytes,
         $output,
-        &$lastBytes
+        &$lastBytes,
+        $downloadStarted
     ): void {
         $total = $reportedTotal ?? $expectedBytes;
         $status = $total === null
@@ -125,6 +142,8 @@ function verifiedInput(string $url, string $sha256, string $directory): string
                 $name,
                 min($verified ? 100 : 99.9, $bytes * 100 / $total)
             );
+        $elapsed = max(0.001, microtime(true) - $downloadStarted);
+        $status .= sprintf('，%.2f MiB，平均 %.2f MiB/秒，已用 %.1f 秒', $bytes / 1048576, $bytes / 1048576 / $elapsed, $elapsed);
         if ($bytes < $lastBytes) {
             $status .= ' (retrying from start)';
         }
@@ -294,7 +313,7 @@ try {
     if (!is_array($windowsRuntime) || !is_array($typePhp)) {
         throw new RuntimeException('Locked Windows runtime or TypePHP source is missing');
     }
-    $inputs = $root . '/dist/installer-inputs';
+    $inputs = $inputDirectory;
     fwrite(STDOUT, "[prepare] Checking locked PHP and TypePHP inputs ...\n");
     $phpArchive = verifiedInput(
         (string) $windowsRuntime['archiveUrl'],
@@ -331,10 +350,28 @@ try {
     }
 
     $command = [PHP_BINARY];
-    $loadedIni = php_ini_loaded_file();
-    if (is_string($loadedIni) && $loadedIni !== '') {
-        $command[] = '-c';
-        $command[] = $loadedIni;
+    $packageCwd = $root;
+    $packageEnvironment = null;
+    $sourceRuntime = getenv('WEBMAN_AOT_SOURCE_PHP_RUNTIME');
+    if (PHP_OS_FAMILY === 'Windows' && $sourceRuntime !== false) {
+        if (preg_match('~^(?:[A-Za-z]:[\\\\/]|\\\\\\\\)~', $sourceRuntime) !== 1
+            || !is_file($sourceRuntime . '/php.ini')
+            || !is_file($sourceRuntime . '/php.exe')
+            || !hash_equals((string) $windowsRuntime['binarySha256'],
+                (string) hash_file('sha256', $sourceRuntime . '/php.exe'))) {
+            throw new RuntimeException('Source PHP runtime path or locked binary is invalid');
+        }
+        $command = [$sourceRuntime . '/php.exe', '-c', 'php.ini', '-d', 'extension_dir=ext',
+            $root . '/tools/windows-php-bootstrap.php'];
+        $packageCwd = $sourceRuntime;
+        $packageEnvironment = getenv();
+        $packageEnvironment['WEBMAN_AOT_CALLER_CWD'] = $root;
+    } else {
+        $loadedIni = php_ini_loaded_file();
+        if (is_string($loadedIni) && $loadedIni !== '') {
+            $command[] = '-c';
+            $command[] = $loadedIni;
+        }
     }
     array_push(
         $command,
@@ -347,6 +384,9 @@ try {
         '--output=' . $output,
         '--revision=' . $revision,
     );
+    if ($flavor === 'small' && $preparedTypephp !== null) {
+        $command[] = '--prepared-typephp=' . $preparedTypephp;
+    }
     fwrite(STDOUT, "[build] Packaging Windows installer; this can take several minutes ...\n");
     $process = proc_open(
         $command,
@@ -354,8 +394,8 @@ try {
             1 => ['pipe', 'w'],
             2 => ['pipe', 'w']],
         $pipes,
-        $root,
-        null,
+        $packageCwd,
+        $packageEnvironment,
         PHP_OS_FAMILY === 'Windows' ? ['bypass_shell' => true] : []
     );
     if (!is_resource($process)) {
@@ -369,7 +409,9 @@ try {
     $nextReport = microtime(true) + 5;
     while (true) {
         $result .= (string) stream_get_contents($pipes[1]);
-        $error .= (string) stream_get_contents($pipes[2]);
+        $chunk = (string) stream_get_contents($pipes[2]);
+        $error .= $chunk;
+        fwrite(STDERR, $chunk);
         $status = proc_get_status($process);
         if (!$status['running']) {
             break;
@@ -425,6 +467,17 @@ try {
         fwrite(STDOUT, "[MATCH] Source-built and reference installers contain the same "
             . count($actual) . " verified files.\n");
         fwrite(STDOUT, "ZIP byte hashes can differ because archive metadata or compression differs.\n");
+    }
+    if ($resultPath !== null) {
+        // The PS owner publishes only after its isolated install/version succeeds.
+        $pending = $resultPath . '.pending';
+        $metadata = ['schema' => 'webman-aot-builder-source-build-result-v1',
+            'platform' => 'windows-x86_64', 'flavor' => $flavor, 'revision' => $revision,
+            'archive' => realpath($archive), 'size' => filesize($archive),
+            'sha256' => hash_file('sha256', $archive), 'verified' => ['payload-manifest']];
+        if (file_put_contents($pending, json_encode($metadata, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n") === false) {
+            throw new RuntimeException('Unable to stage source-build result');
+        }
     }
     fwrite(STDOUT, sprintf("[OK] Source build finished in %.1f seconds.\n", microtime(true) - $startedAt));
 } catch (Throwable $exception) {
