@@ -1,0 +1,16 @@
+--- a/src/Optimizer/LoopVarOptimizer.php
++++ b/src/Optimizer/LoopVarOptimizer.php
+@@ -423,6 +423,13 @@
+             return false;
+         }
+ 
++        foreach ($this->collectLoopExprVars($expr) as $name => $_) {
++            if (!$this->hasVar($name)
++                && !isset($this->context->arguments[$this->escapeVarName($name)])) {
++                return false;
++            }
++        }
++
+         return $this->detectTypeOfExpr($expr) === Type::INT;
+     }
+ 

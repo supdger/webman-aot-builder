@@ -1,0 +1,98 @@
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -5719,17 +5719,58 @@
+ 
+     protected function isSameOrSubclassOf(string $class, string $parent): bool
+     {
+-        $class = strtolower(ltrim($class, '\\'));
+         $parent = strtolower(ltrim($parent, '\\'));
+-        while ($class !== '') {
+-            if ($class === $parent) {
+-                return true;
++        $seen = [];
++        $current = strtolower(ltrim($class, '\\'));
++        while ($current !== '') {
++            if (isset($seen[$current])) {
++                return false;
+             }
+-            $class = $this->getParentClass($class);
++            $seen[$current] = true;
++            $classDef = $this->getClassDef($current);
++            if ($classDef instanceof ClassDef) {
++                // A runtime declaration's synthetic name and public name are one
++                // class. Parent links are stored on the synthetic name.
++                $native = strtolower($this->nativeClassName($classDef));
++                $seen[$native] = true;
++                foreach ($this->classIdentityNames($classDef) as $name) {
++                    if ($name === $parent) {
++                        return true;
++                    }
++                }
++                $next = $classDef->extends !== ''
++                    ? $classDef->extends
++                    : $this->getParentClass($native);
++            } else {
++                if ($current === $parent) {
++                    return true;
++                }
++                $next = $this->getParentClass($current);
++            }
++            $current = strtolower(ltrim($next, '\\'));
+         }
+         return false;
+     }
+ 
++    /**
++     * @return list<string>
++     */
++    private function classIdentityNames(ClassDef $classDef): array
++    {
++        $names = [strtolower($this->nativeClassName($classDef))];
++        if ($classDef->runtimePublicName !== '') {
++            $names[] = strtolower(ltrim($classDef->runtimePublicName, '\\'));
++        }
++        return $names;
++    }
++
++    private function nativeClassName(ClassDef $classDef): string
++    {
++        return $classDef->namespace === ''
++            ? $classDef->name
++            : $classDef->namespace . '\\' . $classDef->name;
++    }
++
+     protected function canAccessProtectedProperty(string $scope, string $declaringClass): bool
+     {
+         if ($scope === '') {
+@@ -6056,7 +6097,7 @@
+      */
+     protected function checkAccessible(ClassDef $classDef, int $flags): bool
+     {
+-        return $this->checkAccessibleByClassName($classDef->getNamespacedName(false), $flags);
++        return $this->checkAccessibleByClassName($this->nativeClassName($classDef), $flags);
+     }
+ 
+     protected function checkAccessibleByClassName(
+@@ -6081,15 +6122,19 @@
+         // Private methods can only be used by the current class.
+         if ($flags & Modifiers::PRIVATE) {
+             return $scopeClassDef !== null
+-                && $this->isSameClassName($declaringClass, $scopeClassDef->getNamespacedName(false));
++                && in_array(
++                    strtolower(ltrim($declaringClass, '\\')),
++                    $this->classIdentityNames($scopeClassDef),
++                    true
++                );
+         }
+-        // Protected methods can only be used by the current class and its subclasses.
++        // Protected methods can be used by the declaring class and either ancestor.
+         if ($flags & Modifiers::PROTECTED) {
+             if (!$scopeClassDef) {
+                 return false;
+             }
+             return $this->canAccessProtectedProperty(
+-                $scopeClassDef->getNamespacedName(false),
++                $this->nativeClassName($scopeClassDef),
+                 $declaringClass
+             );
+         }

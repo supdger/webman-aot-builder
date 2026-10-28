@@ -164,6 +164,11 @@ final class ProjectWorkspace
             throw new ConfigurationException("workspace directory is unsafe: {$directory}");
         }
         $this->removeContents($directory);
+        foreach (scandir($directory) ?: [] as $stray) {
+            if ($stray === '.' || $stray === '..') { continue; }
+            $p = $directory . '/' . $stray;
+            if (is_file($p) && !is_link($p)) { unlink($p); }
+        }
         if (!rmdir($directory)) {
             throw new ConfigurationException("unable to remove workspace directory: {$directory}");
         }

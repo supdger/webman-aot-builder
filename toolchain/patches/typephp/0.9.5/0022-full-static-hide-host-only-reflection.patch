@@ -1,0 +1,128 @@
+--- a/src/Resolver/Reflection.php
++++ b/src/Resolver/Reflection.php
+@@ -10,12 +10,61 @@
+ 
+ use TypePhp\Metadata\Constants;
+ 
++require_once dirname(__DIR__) . "/Build/TargetInternalClassMetadata.php";
++
+ class Reflection
+ {
++    private static array $targetClasses = [];
++    private static string $targetClassesFingerprint = '';
++    private static ?array $targetExtensions = null;
++    private static bool $targetExtensionRegistryClosed = false;
++
++    public static function setTargetInternalClasses(?string $sdk, ?string $nm): void
++    {
++        $metadata = \TypePhp\Build\TargetInternalClassMetadata::read($sdk, $nm);
++        self::$targetClasses = $metadata['classes'];
++        self::$targetClassesFingerprint = $metadata['sha256'];
++        self::$targetExtensions = $metadata['extensions'];
++        self::$targetExtensionRegistryClosed = $metadata['extensionsClosed'];
++    }
++
++    public static function isTargetExtensionRegistryClosed(): bool
++    {
++        return self::$targetLinuxFullStatic && self::$targetExtensionRegistryClosed;
++    }
++
++    public static function targetExtensions(): ?array
++    {
++        return self::$targetExtensions;
++    }
++
++    public static function targetInternalClassFingerprint(): string
++    {
++        return self::$targetClassesFingerprint;
++    }
++
++    public static function getTargetInternalClass(string $class): ?array
++    {
++        // Preserve the existing reflection contract for classes visible to the driver.
++        if (self::getClass($class) !== null) { return null; }
++        return self::$targetClasses[strtolower(ltrim($class, '\\'))] ?? null;
++    }
++
++    public static function getTargetInternalMethod(string $class, string $method): ?\TypePhp\Entity\MethodDef
++    {
++        return self::getTargetInternalClass($class)['methods'][strtolower($method)] ?? null;
++    }
++
+     private static array $functions = [];
+     private static array $classes = [];
+     private static array $interfaces = [];
++    private static bool $targetLinuxFullStatic = false;
+ 
++    public static function setTargetLinuxFullStatic(bool $enabled): void
++    {
++        self::$targetLinuxFullStatic = $enabled;
++    }
++
+     /** Release reflector wrappers before an embedded compiler unloads its module. */
+     public static function clearCaches(): void
+     {
+@@ -53,7 +102,7 @@
+             }
+         }
+ 
+-        return isset($internalClasses[strtolower($class)]);
++        return isset($internalClasses[strtolower($class)]) || self::getTargetInternalClass($class) !== null;
+     }
+ 
+     public static function isInternalInterface(string $interface): bool
+@@ -80,6 +129,17 @@
+ 
+     public static function getFunction(string $fn): ?\ReflectionFunction
+     {
++        if (self::$targetLinuxFullStatic
++            && in_array(strtolower(ltrim($fn, '\\')), [
++                'sapi_windows_vt100_support',
++                'sapi_windows_cp_get',
++                'sapi_windows_cp_set',
++                'sapi_windows_cp_conv',
++            ], true)) {
++            // These host functions are absent from the locked Linux target.
++            return null;
++        }
++
+         if (!isset(self::$functions[$fn])) {
+             try {
+                 $ref = new \ReflectionFunction($fn);
+@@ -131,6 +191,19 @@
+ 
+     public static function getClassMethodModifiers(string $className, string $fn): ?int
+     {
++        $target = self::getTargetInternalMethod($className, $fn);
++        if ($target !== null) {
++            $flags = 0;
++            foreach ([\PhpParser\Modifiers::PUBLIC => \ReflectionMethod::IS_PUBLIC,
++                \PhpParser\Modifiers::PROTECTED => \ReflectionMethod::IS_PROTECTED,
++                \PhpParser\Modifiers::PRIVATE => \ReflectionMethod::IS_PRIVATE,
++                \PhpParser\Modifiers::STATIC => \ReflectionMethod::IS_STATIC,
++                \PhpParser\Modifiers::FINAL => \ReflectionMethod::IS_FINAL,
++                \PhpParser\Modifiers::ABSTRACT => \ReflectionMethod::IS_ABSTRACT] as $source => $reflection) {
++                if ($target->flags & $source) { $flags |= $reflection; }
++            }
++            return $flags;
++        }
+         $classRef = self::getClass($className);
+         if (!$classRef) {
+             return null;
+@@ -166,6 +239,7 @@
+ 
+     public static function hasMethod(string $extends, string $method): bool
+     {
++        if (self::getTargetInternalMethod($extends, $method) !== null) { return true; }
+         $class = self::getClass($extends);
+         if (!$class) {
+             return false;
+@@ -188,6 +262,8 @@
+ 
+     public static function isAbstractClass(string $name): bool
+     {
++        $target = self::getTargetInternalClass($name);
++        if ($target !== null) { return (bool) ($target['flags'] & \PhpParser\Modifiers::ABSTRACT); }
+         $class = self::getClass($name);
+         if (!$class) {
+             return false;

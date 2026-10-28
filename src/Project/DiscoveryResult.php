@@ -9,8 +9,11 @@ final class DiscoveryResult
     /**
      * @param list<array{path:string,category:string,owner:string}> $files
      */
-    public function __construct(private readonly array $files)
-    {
+    public function __construct(
+        private readonly array $files,
+        private readonly ?array $compilerSources = null,
+        private readonly array $sourceDiagnostics = []
+    ) {
     }
 
     /**
@@ -19,6 +22,18 @@ final class DiscoveryResult
     public function files(): array
     {
         return $this->files;
+    }
+
+    /** @return list<string> */
+    public function compilerSources(): array
+    {
+        return $this->compilerSources ?? $this->paths(ProjectDiscovery::BUSINESS_PHP);
+    }
+
+    /** @return list<array{file:string,line:int,expression:string,candidates:list<string>}> */
+    public function sourceDiagnostics(): array
+    {
+        return $this->sourceDiagnostics;
     }
 
     /**
@@ -58,6 +73,8 @@ final class DiscoveryResult
         return [
             'files' => $this->files,
             'counts' => $this->counts(),
+            'compilerSources' => $this->compilerSources(),
+            'sourceDiagnostics' => $this->sourceDiagnostics,
         ];
     }
 }

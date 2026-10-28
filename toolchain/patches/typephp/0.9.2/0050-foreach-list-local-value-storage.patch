@@ -1,0 +1,124 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -217,6 +217,10 @@
+         $assignments = [];
+         $blocked = [];
+         $calls = [];
++        $listBindings = [];
++        $booleanAssignments = [];
++        $allowListBindings = $this->functionDef !== null && !$this->functionDef->stub
++            && !$this->classDef?->nativeObject && !$this->functionUsesNativeObject($this->functionDef);
+         $dynamic = false;
+         $variables = static function (mixed $value) use (&$variables, &$blocked): void {
+             foreach (is_array($value) ? $value : [$value] as $node) {
+@@ -250,7 +254,19 @@
+             }
+             return [Type::INT => true];
+         };
+-        $scan = function (mixed $value) use (&$scan, &$assignments, &$blocked, &$calls, &$dynamic, $variables, $classes): void {
++        $listTargets = static function (mixed $value) use (&$listTargets, &$assignments, &$listBindings, $variables): void {
++            foreach (is_array($value) ? $value : [$value] as $item) {
++                if (!$item instanceof \PhpParser\Node\ArrayItem) { continue; }
++                if ($item->byRef) { $variables($item); continue; }
++                if ($item->value instanceof \PhpParser\Node\Expr\List_) { $listTargets($item->value->items); }
++                elseif ($item->value instanceof Variable && is_string($item->value->name)) {
++                    $name = $item->value->name;
++                    $assignments[$name] = ($assignments[$name] ?? []) + [Type::VAR => true];
++                    $listBindings[$name] = true;
++                } else { $variables($item->value); }
++            }
++        };
++        $scan = function (mixed $value) use (&$scan, &$assignments, &$blocked, &$calls, &$dynamic, &$booleanAssignments, $variables, $classes, $listTargets, $allowListBindings): void {
+             foreach (is_array($value) ? $value : [$value] as $node) {
+                 if (!$node instanceof \PhpParser\Node) { continue; }
+                 if ($node instanceof \PhpParser\Node\Expr\Closure) {
+@@ -273,7 +289,10 @@
+                     $variables($node);
+                 }
+                 if ($node instanceof \PhpParser\Node\Stmt\Foreach_) {
+-                    $variables([$node->keyVar, $node->valueVar]);
++                    $variables($node->keyVar);
++                    if ($allowListBindings && !$node->byRef && $node->valueVar instanceof \PhpParser\Node\Expr\List_) {
++                        $listTargets($node->valueVar->items);
++                    } else { $variables($node->valueVar); }
+                 } elseif ($node instanceof \PhpParser\Node\Stmt\Catch_) {
+                     $phpObject = !($this->class && $this->isNativeObjectClass($this->getFullClassName()));
+                     foreach ($node->types as $catchType) {
+@@ -290,6 +309,16 @@
+                     if ($node->var instanceof Variable && is_string($node->var->name)) {
+                         $name = $node->var->name;
+                         $assigned = $classes($node->expr);
++                        if ($assigned === null && in_array($node->expr->getType(), [
++                            'Expr_BinaryOp_BooleanAnd', 'Expr_BinaryOp_BooleanOr',
++                            'Expr_BinaryOp_LogicalAnd', 'Expr_BinaryOp_LogicalOr', 'Expr_BinaryOp_LogicalXor',
++                            'Expr_BinaryOp_Equal', 'Expr_BinaryOp_NotEqual', 'Expr_BinaryOp_Identical',
++                            'Expr_BinaryOp_NotIdentical', 'Expr_BinaryOp_Smaller', 'Expr_BinaryOp_SmallerOrEqual',
++                            'Expr_BinaryOp_Greater', 'Expr_BinaryOp_GreaterOrEqual', 'Expr_BooleanNot',
++                        ], true)) {
++                            $assigned = [Type::BOOL => true];
++                            $booleanAssignments[$name] = true;
++                        }
+                         if ($assigned === null) { $blocked[$name] = true; }
+                         else { $assignments[$name] = ($assignments[$name] ?? []) + $assigned; }
+                     } elseif ($node->var instanceof \PhpParser\Node\Expr\List_
+@@ -304,6 +333,9 @@
+             }
+         };
+         $scan($body);
++        foreach ($booleanAssignments as $name => $_) {
++            if (!isset($listBindings[$name])) { $blocked[$name] = true; }
++        }
+         if ($dynamic) { return; }
+         foreach ($calls as $call) {
+             $class = '';
+@@ -342,7 +374,7 @@
+                 if (str_starts_with($type, Type::OBJECT . ':')) { $objectClasses[] = substr($type, strlen(Type::OBJECT) + 1); }
+             }
+             $join = count($objectClasses) !== count($classes);
+-            if ($join && !$this->phpLocalWritesBeforeReads($body, $sourceName)) { continue; }
++            if ($join && !$this->phpLocalWritesBeforeReads($body, $sourceName, isset($listBindings[$sourceName]))) { continue; }
+             $join = $join || count($objectClasses) > 1;
+             if (!$join) { continue; }
+             $this->context->varTypeDegradations[$name] = Type::VAR;
+@@ -354,7 +386,7 @@
+     }
+ 
+     /** Conservative definition proof only for new mixed PHP local joins. */
+-    private function phpLocalWritesBeforeReads(NodeAbstract|array|null $body, string $name): bool
++    private function phpLocalWritesBeforeReads(NodeAbstract|array|null $body, string $name, bool $foreachBindings = false): bool
+     {
+         $valid = true;
+         $read = function (mixed $value, bool $written) use (&$read, &$valid, $name): void {
+@@ -370,7 +402,7 @@
+                 foreach ($node->getSubNodeNames() as $field) { $read($node->{$field}, $written); }
+             }
+         };
+-        $walk = function (mixed $value, bool $written) use (&$walk, &$valid, $read, $name): bool {
++        $walk = function (mixed $value, bool $written) use (&$walk, &$valid, $read, $name, $foreachBindings): bool {
+             foreach (is_array($value) ? $value : [$value] as $node) {
+                 if (!$node instanceof \PhpParser\Node) { continue; }
+                 if ($node instanceof \PhpParser\Node\Stmt\Goto_ || $node instanceof \PhpParser\Node\Stmt\Label) {
+@@ -380,6 +412,23 @@
+                 } elseif ($node instanceof \PhpParser\Node\Expr\Assign && $node->var instanceof Variable && $node->var->name === $name) {
+                     $read($node->expr, $written);
+                     $written = true;
++                } elseif ($foreachBindings && $node instanceof \PhpParser\Node\Stmt\Foreach_) {
++                    $read($node->expr, $written);
++                    $read($node->keyVar, $written);
++                    $loopWritten = $written;
++                    $targets = function (mixed $value) use (&$targets, &$loopWritten, $read, $written, $name): void {
++                        foreach (is_array($value) ? $value : [$value] as $item) {
++                            if (!$item instanceof \PhpParser\Node\ArrayItem) { continue; }
++                            $read($item->key, $written);
++                            if ($item->value instanceof \PhpParser\Node\Expr\List_) { $targets($item->value->items); }
++                            elseif ($item->value instanceof Variable && $item->value->name === $name) { $loopWritten = true; }
++                            else { $read($item->value, $written); }
++                        }
++                    };
++                    if ($node->valueVar instanceof \PhpParser\Node\Expr\List_) { $targets($node->valueVar->items); }
++                    else { $read($node->valueVar, $written); }
++                    $walk($node->stmts, $loopWritten);
++                    // A foreach may execute zero times; its writes do not dominate the following statement.
+                 } elseif ($node instanceof \PhpParser\Node\Stmt\If_) {
+                     $read($node->cond, $written);
+                     $branches = [$walk($node->stmts, $written)];

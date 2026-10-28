@@ -1,0 +1,21 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -275,7 +275,17 @@
+                 if ($node instanceof \PhpParser\Node\Stmt\Foreach_) {
+                     $variables([$node->keyVar, $node->valueVar]);
+                 } elseif ($node instanceof \PhpParser\Node\Stmt\Catch_) {
+-                    $variables($node->var);
++                    $phpObject = !($this->class && $this->isNativeObjectClass($this->getFullClassName()));
++                    foreach ($node->types as $catchType) {
++                        $class = $this->getNamespacedClassName($this->parseIdentifier($catchType));
++                        if ($this->isNativeObjectClass($class)
++                            || (!$this->hasClass($class) && !$this->isInternalClass($class)
++                                && !$this->hasInterface($class) && !$this->isInternalInterface($class))) { $phpObject = false; }
++                    }
++                    if ($phpObject && $node->var instanceof Variable && is_string($node->var->name)) {
++                        $name = $node->var->name;
++                        $assignments[$name] = ($assignments[$name] ?? []) + [Type::OBJECT => true];
++                    } else { $variables($node->var); }
+                 } elseif ($node instanceof \PhpParser\Node\Expr\Assign) {
+                     if ($node->var instanceof Variable && is_string($node->var->name)) {
+                         $name = $node->var->name;

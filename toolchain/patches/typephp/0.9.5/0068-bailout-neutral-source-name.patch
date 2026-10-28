@@ -1,0 +1,33 @@
+--- a/src/Build/RuntimeDeclarationsTrait.php
++++ b/src/Build/RuntimeDeclarationsTrait.php
+@@ -1101,7 +1101,9 @@
+         zend_destroy_static_vars(program);
+         destroy_op_array(program);
+         efree_size(program, sizeof(zend_op_array));
+-        zend_bailout();
++        // zend_bailout() expands __FILE__ here; the generated unit path is
++        // a private build directory, so report a stable neutral name.
++        _zend_bailout("typephp-native-runtime.cc", __LINE__);
+     } zend_end_try();
+     symbols.restore();
+     zend_destroy_static_vars(program);
+@@ -1366,7 +1368,9 @@
+     if (bailed) {
+         if (parent_key) zend_string_release(parent_key);
+         zend_string_release(key);
+-        zend_bailout();
++        // zend_bailout() expands __FILE__ here; the generated unit path is
++        // a private build directory, so report a stable neutral name.
++        _zend_bailout("typephp-native-runtime.cc", __LINE__);
+     }
+     if (linked == nullptr) {
+         // The request table owns the CE after insertion, including failed links.
+@@ -1913,7 +1917,7 @@
+         zend_string_release(source);
+         zend_string_release(text);
+     }
+-    if (bailed) zend_bailout();
++    if (bailed) _zend_bailout("typephp-native-runtime.cc", __LINE__); // see above: no __FILE__
+     php::throwErrorIfOccurred();
+ }
+ CPP;

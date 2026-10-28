@@ -26,130 +26,180 @@ final class ProjectDiscovery
     ) {
     }
 
-    public function discover(ProjectProfile $profile): DiscoveryResult
+    /** @var list<string> */
+    private array $skipped = [];
+
+    /** @return list<string> */
+    public function skippedPaths(): array
     {
-        RuntimeDataPaths::assertNoExcludedPhp($this->projectDirectory);
-        $roots = [
-            ['path' => 'app', 'owner' => 'project', 'required' => true],
-            ['path' => 'support', 'owner' => 'project', 'required' => false],
-            ['path' => 'config', 'owner' => 'project', 'required' => false],
-            ['path' => 'public', 'owner' => 'project', 'required' => false],
-            [
-                'path' => 'vendor/workerman/webman-framework/src',
-                'owner' => 'webman-core',
-                'required' => true,
-            ],
-        ];
-        if ($profile->name() === ProjectProfile::SAIADMIN) {
-            $this->assertSaiAdminInstallationSources();
-            $roots[] = [
-                'path' => 'vendor/saithink/saiadmin/src',
-                'owner' => 'saiadmin-core',
-                'required' => true,
-            ];
-        }
+        return $this->skipped;
+    }
 
-        $pluginRoot = $this->absolute('plugin');
-        if (is_link($pluginRoot)) {
-            throw new ConfigurationException('project discovery refuses symlink: plugin');
+    public function discover(
+        bool $useRecordedInputs = true,
+        array $explicitSources = [],
+        ?string $explicitEntry = null,
+        array $explicitPhpSources = []
+    ): DiscoveryResult
+    {
+        if (!is_dir($this->projectDirectory) || is_link($this->projectDirectory)) {
+            throw new ConfigurationException('project discovery requires a real project directory');
         }
-        if (is_dir($pluginRoot)) {
-            $plugins = [];
-            foreach (new \DirectoryIterator($pluginRoot) as $entry) {
-                if ($entry->isDot()) {
-                    continue;
-                }
-                if ($entry->isLink()) {
-                    throw new ConfigurationException(
-                        "project discovery refuses symlink: plugin/{$entry->getFilename()}"
-                    );
-                }
-                if (!$entry->isDir()) {
-                    continue;
-                }
-                $name = $entry->getFilename();
-                if (preg_match('/^[A-Za-z0-9_-]+$/D', $name) !== 1) {
-                    throw new ConfigurationException("invalid Webman plugin directory name: {$name}");
-                }
-                $plugins[] = $name;
-            }
-            sort($plugins, SORT_STRING);
-            foreach ($plugins as $plugin) {
-                $roots[] = [
-                    'path' => "plugin/{$plugin}",
-                    'owner' => "plugin:{$plugin}",
-                    'required' => true,
-                ];
-            }
+        if (!is_file($this->projectDirectory . '/composer.json')
+            && !is_file($this->projectDirectory . '/start.php')
+            && !is_file($this->projectDirectory . '/project.linux.yml')
+            && !is_file($this->projectDirectory . '/project.yml')
+        ) {
+            throw new ConfigurationException(
+                'not a Webman/PHP project directory: no composer.json, start.php, or project manifest found; run webman-aot build inside your project root'
+            );
         }
-
+        RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
+        $manifestFile = is_file($this->projectDirectory . '/project.linux.yml')
+            ? $this->projectDirectory . '/project.linux.yml' : $this->projectDirectory . '/project.yml';
+        $entry = (new CompilationEntryResolver($this->projectDirectory))->resolve(
+            $explicitEntry,
+            is_file($manifestFile) && !is_link($manifestFile) ? (string) file_get_contents($manifestFile) : null
+        );
+        if ($entry !== null) {
+            $explicitSources[] = $entry;
+            $explicitPhpSources[] = $entry;
+        }
+        $phpSources = array_values(array_unique(array_merge(
+            array_values(array_filter($explicitSources, static fn(string $path): bool =>
+                !CompilationSourceResolver::isNativeSourcePath($path))),
+            $explicitPhpSources
+        )));
+        $explicitSources = array_values(array_unique(array_merge($explicitSources, $explicitPhpSources)));
+        $sourceInputs = $useRecordedInputs ? $this->sourceInputs() : null;
         $files = [];
-        foreach ($roots as $root) {
-            $absolute = $this->absolute($root['path']);
-            if (is_link($absolute)) {
-                throw new ConfigurationException(
-                    "project discovery refuses symlink: {$root['path']}"
-                );
-            }
-            if (!is_dir($absolute)) {
-                if ($root['required']) {
-                    throw new ConfigurationException(
-                        "required project source directory is missing: {$root['path']}"
-                    );
-                }
-                continue;
-            }
-            $this->scanRoot($root['path'], $root['owner'], $files);
-        }
-        foreach ($this->dynamicPhp as $path => $digest) {
-            if (!isset($files[$path])
-                || $files[$path]['category'] !== self::THIRD_PARTY_DYNAMIC_PHP
-            ) {
-                throw new ConfigurationException(
-                    "registered third-party dynamic PHP is missing: {$path}"
-                );
+        $this->scanRoot($files, $sourceInputs, $phpSources);
+        foreach ($sourceInputs ?? [] as $path => $present) {
+            if (!isset($files[$path])) {
+                throw new ConfigurationException("recorded project source is missing or unsafe: {$path}");
             }
         }
         ksort($files, SORT_STRING);
 
-        return new DiscoveryResult(array_values($files));
+        $inventory = array_values($files);
+        $selection = null;
+        $receipt = $this->projectDirectory . '/.typephp/build/compilation-sources.json';
+        $project = $this->projectDirectory . '/project.linux.yml';
+        if ($useRecordedInputs
+            && str_ends_with(str_replace('\\', '/', $this->projectDirectory), '/.webman-aot-builder/build/project')
+            && is_file($receipt) && !is_link($receipt)
+            && is_file($project) && !is_link($project)) {
+            $record = json_decode((string) file_get_contents($receipt), true);
+            if (is_array($record) && ($record['schema'] ?? null) === 'webman-aot-compilation-sources-v2'
+                && ($record['manifestSha256'] ?? null) === hash_file('sha256', $project)
+                && is_array($record['sources'] ?? null) && is_array($record['diagnostics'] ?? null)) {
+                foreach ($record['sources'] as $path) {
+                    if (!is_string($path) || !isset($files[$path])) {
+                        throw new ConfigurationException('recorded compiler source is missing or unsafe');
+                    }
+                }
+                foreach ($record['diagnostics'] as &$diagnostic) {
+                    $set = $diagnostic['candidateSet'] ?? null;
+                    if (!is_int($set) || !is_array($record['candidateSets'][$set] ?? null)) {
+                        throw new ConfigurationException('recorded source diagnostic is invalid');
+                    }
+                    if ($record['candidateSets'][$set] === []
+                        || !is_string($diagnostic['file'] ?? null)
+                        || !is_int($diagnostic['line'] ?? null)
+                        || !is_string($diagnostic['expression'] ?? null)) {
+                        throw new ConfigurationException('recorded source uncertainty has no candidates');
+                    }
+                    foreach ($record['candidateSets'][$set] as $candidate) {
+                        if (!is_string($candidate) || !isset($files[$candidate])) {
+                            throw new ConfigurationException('recorded uncertain source candidate is missing or unsafe');
+                        }
+                    }
+                    $diagnostic['candidates'] = $record['candidateSets'][$set];
+                    unset($diagnostic['candidateSet']);
+                }
+                unset($diagnostic);
+                $selection = $record;
+            }
+        }
+        $selection ??= (new CompilationSourceResolver($this->projectDirectory))->resolve($inventory, $explicitSources);
+        $nativeSources = array_fill_keys($selection['sources'], true);
+        foreach ($inventory as &$file) {
+            if (isset($nativeSources[$file['path']])) {
+                $file['category'] = self::BUSINESS_PHP;
+            }
+        }
+        unset($file);
+        return new DiscoveryResult($inventory, $selection['sources'], $selection['diagnostics']);
     }
 
     /**
      * @param array<string, array{path:string,category:string,owner:string}> $files
+     * @param array<string,true>|null $sourceInputs
+     * @param list<string> $explicitSources
      */
-    private function scanRoot(string $relativeRoot, string $owner, array &$files): void
+    private function scanRoot(array &$files, ?array $sourceInputs, array $explicitSources): void
     {
-        $absoluteRoot = $this->absolute($relativeRoot);
+        $sourceDirectories = [];
+        foreach (array_keys($sourceInputs ?? []) as $path) {
+            for ($parent = dirname($path); $parent !== '.'; $parent = dirname($parent)) {
+                $sourceDirectories[$parent] = true;
+            }
+        }
+        $absoluteRoot = $this->projectDirectory;
         $directory = new \RecursiveDirectoryIterator(
             $absoluteRoot,
             \FilesystemIterator::SKIP_DOTS
         );
         $filter = new \RecursiveCallbackFilterIterator(
             $directory,
-            function (\SplFileInfo $entry): bool {
+            function (\SplFileInfo $entry) use ($sourceInputs, $sourceDirectories): bool {
+                if ($entry->isDir() && str_starts_with($entry->getFilename(), '.')) {
+                    return false;
+                }
                 $relative = $this->relative($entry->getPathname());
-                return !RuntimeDataPaths::isSourceExcluded($relative);
+                $root = explode('/', $relative, 2)[0];
+                if (in_array($root, [
+                    '.git', '.typephp', '.webman-aot-builder', '.webman-aot',
+                    'dist-aot',
+                ], true)
+                    || (RuntimeDataPaths::isWritableDataPath($relative)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
+                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                        && strtolower($entry->getExtension()) !== 'php')
+                    || (in_array($root, ['runtime', 'node_modules'], true)
+                        && !$entry->isDir())
+                    || RuntimeDataPaths::isDevFixturePath($relative)
+                ) {
+                    return false;
+                }
+                if ($sourceInputs !== null
+                    && !isset($sourceInputs[$relative])
+                    && !isset($sourceDirectories[$relative])
+                ) {
+                    return false;
+                }
+                if ($entry->isLink()) {
+                    $this->skipped[] = $relative;
+                    return false;
+                }
+                return true;
             }
         );
         $iterator = new \RecursiveIteratorIterator($filter);
         foreach ($iterator as $entry) {
             if ($entry->isLink()) {
-                $relative = $this->relative($entry->getPathname());
-                throw new ConfigurationException("project discovery refuses symlink: {$relative}");
+                $this->skipped[] = $this->relative($entry->getPathname());
+                continue;
             }
             if (!$entry->isFile()) {
                 continue;
             }
             $path = $this->relative($entry->getPathname());
-            $category = $this->classify($path);
-            if ($category === null) {
-                continue;
-            }
+            $category = $this->classify($path, $explicitSources);
             $record = [
                 'path' => $path,
                 'category' => $category,
-                'owner' => $owner,
+                'owner' => $this->owner($path),
             ];
             if (isset($files[$path]) && $files[$path] !== $record) {
                 throw new ConfigurationException("project file has conflicting discovery owners: {$path}");
@@ -158,125 +208,92 @@ final class ProjectDiscovery
         }
     }
 
-    private function classify(string $path): string
+    /** @return array<string,true>|null */
+    private function sourceInputs(): ?array
     {
+        $mirror = realpath($this->projectDirectory);
+        if (!is_string($mirror)
+            || !str_ends_with(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/project')
+        ) {
+            return null;
+        }
+        $relative = '.typephp/build/source-inputs.json';
+        $path = $this->absolute($relative);
+        $componentPath = rtrim($this->projectDirectory, '/\\');
+        foreach (explode('/', $relative) as $component) {
+            $componentPath .= DIRECTORY_SEPARATOR . $component;
+            if (is_link($componentPath)) {
+                throw new ConfigurationException('project source input manifest is unsafe');
+            }
+        }
+        if (!file_exists($path)) {
+            return null;
+        }
+        $bytes = is_file($path) ? file_get_contents($path) : false;
+        if (!is_string($bytes)) {
+            throw new ConfigurationException('project source input manifest cannot be read');
+        }
+        try {
+            $manifest = json_decode($bytes, true, flags: JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            throw new ConfigurationException('project source input manifest is invalid', previous: $exception);
+        }
+        if (!is_array($manifest)
+            || ($manifest['schema'] ?? null) !== 'webman-aot-builder-source-inputs-v1'
+            || !is_array($manifest['paths'] ?? null)
+            || !array_is_list($manifest['paths'])
+            || $manifest['paths'] === []
+        ) {
+            throw new ConfigurationException('project source input manifest is invalid');
+        }
+        $paths = [];
+        foreach ($manifest['paths'] as $source) {
+            if (!is_string($source) || $source === ''
+                || str_contains($source, '\\')
+                || str_starts_with($source, '/')
+                || preg_match('/^[A-Za-z]:/', $source) === 1
+                || in_array('..', explode('/', $source), true)
+                || in_array('.', explode('/', $source), true)
+                || in_array('', explode('/', $source), true)
+                || isset($paths[$source])
+            ) {
+                throw new ConfigurationException('project source input manifest contains an unsafe or duplicate path');
+            }
+            if (explode('/', $source, 2)[0] === 'build') {
+                // Tolerate manifests recorded before the compiler-owned
+                // build/ tree was excluded from source inputs; its contents
+                // are rewritten or pruned during compilation by design.
+                continue;
+            }
+            $paths[$source] = true;
+        }
+        return $paths;
+    }
+
+    /** @param list<string> $explicitSources */
+    private function classify(string $path, array $explicitSources): string
+    {
+        if (in_array($path, $explicitSources, true)) {
+            return self::BUSINESS_PHP;
+        }
         $normalized = strtolower(trim(str_replace('\\', '/', $path), '/'));
         $basename = basename($normalized);
-        if ($basename === '.ds_store' || $basename === 'readme.md') {
+        if ($basename === '.ds_store'
+            || preg_match('/^(?:readme|license|changelog|notice)(?:\.(?:md|txt|rst))?$/D', $basename) === 1
+            || in_array($normalized, ['composer.json', 'composer.lock', 'project.linux.yml'], true)
+        ) {
             return self::SOURCE_METADATA;
-        }
-        if (isset($this->dynamicPhp[$path])) {
-            if (!str_starts_with($path, 'vendor/')
-                || preg_match('/^[a-f0-9]{64}$/D', $this->dynamicPhp[$path]) !== 1
-                || hash_file('sha256', $this->absolute($path)) !== $this->dynamicPhp[$path]
-            ) {
-                throw new ConfigurationException(
-                    "registered third-party dynamic PHP drifted: {$path}"
-                );
-            }
-            return self::THIRD_PARTY_DYNAMIC_PHP;
-        }
-        if (str_starts_with($normalized, 'vendor/saithink/saiadmin/src/orm/')) {
-            return self::INSTALL_ONLY;
-        }
-        $installedPrefix = 'vendor/saithink/saiadmin/src/plugin/saiadmin/';
-        if (str_starts_with($normalized, $installedPrefix)) {
-            $installedPath = 'plugin/saiadmin/' . substr($path, strlen($installedPrefix));
-            $source = $this->absolute($path);
-            $installed = $this->absolute($installedPath);
-            if (!is_file($installed)
-                || is_link($installed)
-                || hash_file('sha256', $source) !== hash_file('sha256', $installed)
-            ) {
-                throw new ConfigurationException(
-                    "SaiAdmin installation copy differs from active plugin: {$path}"
-                );
-            }
-            return self::INSTALL_ONLY;
-        }
-        if (in_array($normalized, [
-            'vendor/workerman/webman-framework/src/install.php',
-            'vendor/workerman/webman-framework/src/start.php',
-            'vendor/workerman/webman-framework/src/windows.php',
-            'vendor/workerman/webman-framework/src/support/plugin.php',
-        ], true)
-            || preg_match('#^plugin/[^/]+/(?:install\.php|db/)#D', $normalized) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/(?:install\.php|db/)#D',
-                $normalized
-            ) === 1
-        ) {
-            return self::INSTALL_ONLY;
-        }
-        if (str_starts_with($normalized, 'config/')
-            || preg_match('#^plugin/[^/]+/config/#D', $normalized) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/config/#D',
-                $normalized
-            ) === 1
-        ) {
-            return self::CONFIG;
-        }
-        if (preg_match('#^app/(?:view|views|template|templates)/#D', $normalized) === 1
-            || preg_match(
-                '#^plugin/[^/]+/app/(?:view|views|template|templates)/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^plugin/[^/]+/utils/code/stub/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/app/(?:view|views|template|templates)/#D',
-                $normalized
-            ) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/utils/code/stub/#D',
-                $normalized
-            ) === 1
-        ) {
-            return self::TEMPLATE;
-        }
-        if (str_starts_with($normalized, 'public/')
-            || preg_match('#^plugin/[^/]+/public/#D', $normalized) === 1
-            || preg_match(
-                '#^vendor/saithink/saiadmin/src/plugin/[^/]+/public/#D',
-                $normalized
-            ) === 1
-        ) {
-            return self::STATIC_ASSET;
         }
         if (strtolower(pathinfo($path, PATHINFO_EXTENSION)) === 'php') {
             return self::BUSINESS_PHP;
         }
 
-        return self::UNCLASSIFIED;
+        return self::STATIC_ASSET;
     }
 
-    private function assertSaiAdminInstallationSources(): void
+    private function owner(string $path): string
     {
-        $ormRoot = $this->absolute('vendor/saithink/saiadmin/src/orm');
-        $templateRoot = $this->absolute('vendor/saithink/saiadmin/src/plugin/saiadmin');
-        if (!is_dir($ormRoot) && !is_dir($templateRoot)) {
-            return;
-        }
-        $installer = $this->absolute('vendor/saithink/saiadmin/src/Install.php');
-        $ormCommand = $this->absolute(
-            'vendor/saithink/saiadmin/src/plugin/saiadmin/command/SaiOrm.php'
-        );
-        $installSource = is_file($installer) ? file_get_contents($installer) : false;
-        $ormSource = is_file($ormCommand) ? file_get_contents($ormCommand) : false;
-        if (!is_string($installSource)
-            || !str_contains($installSource, "'plugin/saiadmin' => 'plugin/saiadmin'")
-            || !str_contains($installSource, 'copy_dir(')
-            || !is_string($ormSource)
-            || !str_contains($ormSource, "vendor/saithink/saiadmin/src/orm/")
-            || !str_contains($ormSource, 'copyDirectory(')
-        ) {
-            throw new ConfigurationException(
-                'SaiAdmin installation-source contract drifted'
-            );
-        }
+        return 'project';
     }
 
     private function relative(string $path): string

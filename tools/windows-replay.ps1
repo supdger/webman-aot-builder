@@ -168,6 +168,7 @@ $lock = Get-Content -LiteralPath $LockFile -Raw |
 $componentIds = @(
     'typephp-source',
     'typephp-windows-x64',
+    'typephp-vendor',
     'php-driver-windows-x64',
     'phpx-source',
     'phpx-sdk-linux-x64',
@@ -199,7 +200,7 @@ foreach ($required in @($sevenZip)) {
 }
 
 $driverRoot = Join-Path $WorkRoot 'php-driver'
-Write-Host 'Extracting locked PHP 8.4.25 Windows driver ...'
+Write-Host 'Extracting locked PHP 8.4.26 Windows driver ...'
 New-Item -ItemType Directory -Path $driverRoot | Out-Null
 & $systemTar -xf $archives['php-driver-windows-x64'] -C $driverRoot
 Assert-LastExitCode 'PHP Windows driver extraction'
@@ -209,7 +210,7 @@ if (-not (Test-Path -LiteralPath $php -PathType Leaf)) {
 }
 $driverVersion = (& $php -n -r 'echo PHP_VERSION;')
 Assert-LastExitCode 'PHP Windows driver version'
-if ($driverVersion -ne '8.4.25') {
+if ($driverVersion -ne '8.4.26') {
     throw "locked PHP Windows driver has unexpected version: $driverVersion"
 }
 
@@ -219,7 +220,15 @@ New-Item -ItemType Directory -Path $sourceExtract | Out-Null
 & $systemTar -xf $archives['typephp-source'] -C $sourceExtract
 Assert-LastExitCode 'TypePHP source extraction'
 $typephpRoot = Get-SingleDirectory $sourceExtract 'TypePHP source archive'
-Copy-Item -LiteralPath (Join-Path $hostRoot 'vendor') -Destination $typephpRoot -Recurse
+# The 0.9.5 host package is a bare tpc binary; the compiler's Composer
+# dependencies ship as the separate locked vendor bundle.
+$vendorExtract = Join-Path $WorkRoot 'typephp-vendor'
+Write-Host 'Extracting locked TypePHP vendor bundle ...'
+New-Item -ItemType Directory -Path $vendorExtract | Out-Null
+& $systemTar -xf $archives['typephp-vendor'] -C $vendorExtract
+Assert-LastExitCode 'TypePHP vendor bundle extraction'
+$vendorRoot = Get-SingleDirectory $vendorExtract 'TypePHP vendor archive'
+Copy-Item -LiteralPath (Join-Path $vendorRoot 'vendor') -Destination $typephpRoot -Recurse
 $swooleVendor = Join-Path $typephpRoot 'vendor\swoole'
 New-Item -ItemType Directory -Path $swooleVendor -Force | Out-Null
 
@@ -245,10 +254,10 @@ if ($null -eq $sdkTar) {
 $sdkPayload = Join-Path $WorkRoot 'sdk-payload'
 New-Item -ItemType Directory -Path $sdkPayload | Out-Null
 $sdkLock = Get-LockedComponent $lock 'phpx-sdk-linux-x64'
-if ([string] $sdkLock.sha256 -ne 'e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981') {
+if ([string] $sdkLock.sha256 -ne '9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930') {
     throw 'PHPX SDK symlink compatibility rule requires the locked archive'
 }
-$ncursesLink = 'phpx-sdk_v2.9.1_php8.4.25_linux-x64/include/ncursesw/ncurses.h'
+$ncursesLink = 'phpx-sdk_v2.9.4_php8.4.25_linux-x64/include/ncursesw/ncurses.h'
 & $sevenZip x '-y' "-o$sdkPayload" "-x!$ncursesLink" $sdkTar.FullName | Out-Host
 Assert-LastExitCode 'PHPX SDK tar extraction'
 $sdkSource = Get-SingleDirectory $sdkPayload 'PHPX SDK archive'
@@ -308,7 +317,7 @@ $strippedSdk = & $php (Join-Path $repository 'tools\strip-sdk-debug.php') `
     "--objcopy=$llvmObjcopy" |
     ConvertFrom-Json
 Assert-LastExitCode 'private SDK debug stripping'
-if ($strippedSdk.sha256 -ne 'bc4b4053092176f8e046a5db0b66c659daa4f23468c09c982223d4fea24d7eeb') {
+if ($strippedSdk.sha256 -ne '4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623') {
     throw "stripped SDK digest mismatch: $($strippedSdk.sha256)"
 }
 $strippedSdk | ConvertTo-Json -Depth 4 | Write-Host
@@ -382,7 +391,7 @@ $result = [ordered] @{
     host = 'windows-x86_64'
     containerUsed = $false
     normalizedInputSha256 = $normalizedInput.sha256
-    expectedNormalizedInputSha256 = 'f18bac511781f372bb65e4fe4b4ac518535792a4d57b896f84b050f540419ba2'
+    expectedNormalizedInputSha256 = 'deb62f759d3d11cbbbe0dc86b5ffb22dfae95069d49edfaeb70bbd668bb4cc31'
     matchesMacNormalizedInput = $false
     artifact = $artifact
     artifactSize = (Get-Item -LiteralPath $artifact).Length

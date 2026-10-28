@@ -59,7 +59,7 @@ final class ReproducibilityInput
         }
 
         $patches = [];
-        $patchDirectory = $root . '/toolchain/patches/typephp/0.9.2';
+        $patchDirectory = $root . '/toolchain/patches/typephp/0.9.5';
         foreach ([
             '0001-full-static-sdk-target.patch',
             '0002-static-extension-registry.patch',
@@ -67,23 +67,29 @@ final class ReproducibilityInput
             '0004-full-static-host-target-separation.patch',
             '0005-windows-clang-response-paths.patch',
             '0006-pcntl-target-reference-metadata.patch',
-            '0007-full-static-skip-host-php-import-libs.patch',
-            '0008-full-static-linux-internal-metadata.patch',
-            '0009-full-static-linux-builtin-lifetime.patch',
             '0010-reproducible-arginfo-source-identity.patch',
             '0011-native-inheritance-and-target-reference-calls.patch',
             '0012-loop-probe-defers-unknown-foreach-vars.patch',
-            '0013-namespaced-global-function-dependencies.patch',
             '0014-default-helpers-and-globals-reference.patch',
             '0015-portable-full-static-magic-dir.patch',
             '0016-embedded-anonymous-class-valid-php.patch',
-            '0017-full-static-anonymous-source-embedding.patch',
-            '0018-full-static-target-php-eol.patch',
-            '0019-full-static-target-internal-functions.patch',
-            '0020-full-static-target-constants-and-host-functions.patch',
             '0021-portable-source-scan-order.patch',
             '0022-full-static-hide-host-only-reflection.patch',
-            '0023-full-static-select-target-reflection.patch',
+            '0024-closure-runtime-binding-and-reference-storage.patch',
+            '0026-compiler-command-paths.patch',
+            '0027-compiler-runtime-capabilities.patch',
+            '0028-ordinary-toarray-method-contracts.patch',
+            '0029-unavailable-composer-traits.patch',
+            '0030-polymorphic-php-local-storage.patch',
+            '0031-persistent-php-reference-storage.patch',
+            '0035-target-function-value-storage.patch',
+            '0036-request-namespace-function-fallback.patch',
+            '0037-php-string-bitwise-not.patch',
+            '0039-target-internal-class-declarations.patch',
+            '0045-switch-goto-termination.patch',
+            '0047-lexical-finally-goto-exits.patch',
+            '0053-native-runtime-declarations.patch',
+            '0054-load-time-constant-and-list-reference.patch',
         ] as $patch) {
             $patches[$patch] = $this->hashNormalizedTextFile(
                 $patchDirectory . '/' . $patch,
@@ -112,7 +118,7 @@ final class ReproducibilityInput
                 'allowMultipleDefinition' => true,
                 'stripDebug' => true,
                 'stripSdkDebug' => true,
-                'strippedSdkSha256' => 'bc4b4053092176f8e046a5db0b66c659daa4f23468c09c982223d4fea24d7eeb',
+                'strippedSdkSha256' => '4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623',
                 'removeCommentSection' => true,
                 'jobCount' => 4,
             ],

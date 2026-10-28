@@ -1,0 +1,168 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -22,6 +22,127 @@
+     protected function addLocalVar(string $name, string $type): void
+     {
+         $this->context->localVars[$name] = $this->context->varTypeDegradations[$name] ?? $type;
++    }
++
++    /** Reserve dynamic storage before any call is emitted for a polymorphic PHP local. */
++    protected function prepareObjectAssignmentJoins(NodeAbstract|array|null $body): void
++    {
++        $assignments = [];
++        $blocked = [];
++        $calls = [];
++        $dynamic = false;
++        $variables = static function (mixed $value) use (&$variables, &$blocked): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof Variable && is_string($node->name)) {
++                    $blocked[$node->name] = true;
++                }
++                foreach ($node->getSubNodeNames() as $field) { $variables($node->{$field}); }
++            }
++        };
++        $classes = function ($expression) use (&$classes): ?array {
++            if ($expression instanceof \PhpParser\Node\Expr\Ternary && $expression->if !== null) {
++                $left = $classes($expression->if);
++                $right = $classes($expression->else);
++                return $left !== null && $right !== null ? $left + $right : null;
++            }
++            if (!$expression instanceof \PhpParser\Node\Expr\New_
++                || !$expression->class instanceof \PhpParser\Node\Name) { return null; }
++            $class = $this->resolveNewExprClass($expression);
++            if ($class === null || !$this->hasClass($class) || $this->isNativeObjectClass($class)
++                || !$this->isNativeClass($class) || $this->isInternalClass($class)) { return null; }
++            return [strtolower($class) => $class];
++        };
++        $scan = function (mixed $value) use (&$scan, &$assignments, &$blocked, &$calls, &$dynamic, $variables, $classes): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof \PhpParser\Node\Expr\Closure) {
++                    foreach ($node->uses as $use) { if ($use->byRef) { $variables($use->var); } }
++                    continue;
++                }
++                if ($node instanceof \PhpParser\Node\FunctionLike
++                    || $node instanceof \PhpParser\Node\Stmt\ClassLike) { continue; }
++                if ($node instanceof Variable && !is_string($node->name)) { $dynamic = true; }
++                if ($node instanceof \PhpParser\Node\Stmt\Static_
++                    || $node instanceof \PhpParser\Node\Stmt\Global_
++                    || $node instanceof \PhpParser\Node\Stmt\Unset_
++                    || $node instanceof \PhpParser\Node\Expr\AssignRef
++                    || $node instanceof \PhpParser\Node\Expr\AssignOp
++                    || $node instanceof \PhpParser\Node\Expr\PreInc
++                    || $node instanceof \PhpParser\Node\Expr\PostInc
++                    || $node instanceof \PhpParser\Node\Expr\PreDec
++                    || $node instanceof \PhpParser\Node\Expr\PostDec
++                    || ($node instanceof \PhpParser\Node\ArrayItem && $node->byRef)) {
++                    $variables($node);
++                }
++                if ($node instanceof \PhpParser\Node\Stmt\Foreach_) {
++                    $variables([$node->keyVar, $node->valueVar]);
++                } elseif ($node instanceof \PhpParser\Node\Stmt\Catch_) {
++                    $variables($node->var);
++                } elseif ($node instanceof \PhpParser\Node\Expr\Assign) {
++                    if ($node->var instanceof Variable && is_string($node->var->name)) {
++                        $name = $node->var->name;
++                        $assigned = $classes($node->expr);
++                        if ($assigned === null) { $blocked[$name] = true; }
++                        else { $assignments[$name] = ($assignments[$name] ?? []) + $assigned; }
++                    } elseif ($node->var instanceof \PhpParser\Node\Expr\List_
++                        || $node->var instanceof \PhpParser\Node\Expr\Array_) {
++                        $variables($node->var);
++                    }
++                }
++                if ($node instanceof \PhpParser\Node\Expr\CallLike && !$node->isFirstClassCallable()) {
++                    $calls[] = $node;
++                }
++                foreach ($node->getSubNodeNames() as $field) { $scan($node->{$field}); }
++            }
++        };
++        $scan($body);
++        if ($dynamic) { return; }
++        foreach ($calls as $call) {
++            $class = '';
++            $function = '';
++            if ($call instanceof \PhpParser\Node\Expr\StaticCall
++                && $call->class instanceof \PhpParser\Node\Name
++                && $call->name instanceof \PhpParser\Node\Identifier) {
++                $class = $call->class->toString() === 'self'
++                    ? $this->getFullClassName() : $this->getNamespacedClassName($call->class->toString());
++                $function = $call->name->toString();
++            } elseif ($call instanceof \PhpParser\Node\Expr\FuncCall
++                && $call->name instanceof \PhpParser\Node\Name) {
++                $function = $call->name->toString();
++            } elseif ($call instanceof \PhpParser\Node\Expr\New_) {
++                $class = $this->resolveNewExprClass($call) ?? '';
++                $function = '__construct';
++            }
++            foreach ($call->getArgs() as $index => $arg) {
++                $info = $function === '' ? null : ($arg->name !== null
++                    ? $this->getAotCallArgInfoByName($function, $class, $arg->name->toString())
++                    : $this->getAotCallArgInfo($function, $class, $index));
++                if ($arg->unpack || $info === null || $info->byRef) { $variables($arg->value); }
++            }
++        }
++        foreach ($assignments as $sourceName => $classes) {
++            $name = $this->escapeVarName($sourceName);
++            if (count($classes) < 2 || isset($blocked[$sourceName])
++                || $this->hasArgument($name) || $this->hasStaticVar($name)
++                || $this->hasScopeGlobalVar($name) || $this->isSuperGlobal($name)
++                || isset($this->context->varTypeDegradations[$name])
++                || isset($this->context->typedRefRoots[$name])
++                || isset($this->context->explicitNativeTypeVars[$name])) { continue; }
++            $join = false;
++            foreach ($classes as $left) {
++                foreach ($classes as $right) {
++                    if (!$this->isObjectClassStaticallyAssignableTo($left, $right)
++                        && !$this->isObjectClassStaticallyAssignableTo($right, $left)) { $join = true; }
++                }
++            }
++            if (!$join) { continue; }
++            $this->context->varTypeDegradations[$name] = Type::VAR;
++            $this->context->localVars[$name] = Type::VAR;
++            unset($this->context->objects[$name], $this->context->declaredObjects[$name],
++                $this->context->stableObjects[$name], $this->context->exactObjects[$name],
++                $this->context->hoistedProps[$name], $this->context->unsafeObjectProps[$name]);
++        }
+     }
+ 
+     /**
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -6698,6 +6698,7 @@
+             $this->context->localClosureCandidates = (new LocalClosureAnalyzer())->analyze($v->stmts);
+         }
+ 
++        $this->prepareObjectAssignmentJoins($v->stmts);
+         $stmts = '';
+         $this->indentLevel++;
+         try {
+--- a/src/Generator/ClosureGenerator.php
++++ b/src/Generator/ClosureGenerator.php
+@@ -736,6 +736,7 @@
+                 $this->addArgument('this_', Type::OBJECT);
+             }
+ 
++            $this->prepareObjectAssignmentJoins($expr instanceof Expr\ArrowFunction ? $expr->expr : $expr->stmts);
+             $this->indentLevel++;
+             $body = '';
+             if ($expr instanceof Expr\ArrowFunction) {
+@@ -780,6 +781,7 @@
+ 
+     protected function genClosureBody(NodeAbstract $expr): string
+     {
++        $this->prepareObjectAssignmentJoins($expr instanceof Expr\ArrowFunction ? $expr->expr : $expr->stmts);
+         if ($expr instanceof Node\Expr\ArrowFunction) {
+             return $this->genArrowFunctionBody($expr);
+         }
+--- a/src/Generator/FiberGenerator.php
++++ b/src/Generator/FiberGenerator.php
+@@ -296,6 +296,7 @@
+         // effect metadata so suspension does not erase Immutable guarantees.
+         $this->initializeImmutableFunctionContext();
+ 
++        $this->prepareObjectAssignmentJoins($v->stmts);
+         $body = '';
+         $this->indentLevel++;
+         if ($v->stmts) {

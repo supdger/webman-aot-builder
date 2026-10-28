@@ -9,13 +9,14 @@
             "upstreamBinarySha256": "f9dc3279f42c60809d24b3123a2aaa9a8015da6b8830fdff63a2a6e44eb122a2",
             "binarySha256": "5aebf5e4f036b4182b4959c06c9f88ed8b67e4118b30d3cad8ef556d9324c102",
             "compilerDriver": {
-                "phpVersion": "8.4.25",
-                "provider": "locked php-source built for host metadata parity with Windows PHP 8.4.25",
-                "sourceSha256": "dc1ad8b4109898d9db49744450403874858c23efc685b1032a50bd1e83906848",
-                "binarySha256": "eee66dae9bfb59eb9208c8c46006f049b14c554e9a5f72c552b3cb024f61e798",
+                "phpVersion": "8.4.26",
+                "provider": "locked php-source built for host metadata parity with Windows PHP 8.4.26",
+                "sourceSha256": "32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1",
+                "binarySha256": "0b84b59ce12a5811fd54d78583958a5e2c2f770890a02d57a10a8e0497c74b0c",
                 "configure": [
                     "--disable-all",
                     "--enable-cli",
+                    "--enable-embed=static",
                     "--disable-cgi",
                     "--disable-phpdbg",
                     "--enable-bcmath",

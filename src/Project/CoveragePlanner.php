@@ -34,6 +34,14 @@ final class CoveragePlanner
     {
         $discovered = [];
         $ledger = [];
+        $compilerSources = array_fill_keys($discovery->compilerSources(), true);
+        foreach ($discovery->sourceDiagnostics() as $diagnostic) {
+            foreach ($diagnostic['candidates'] as $candidate) {
+                if (!isset($compilerSources[$candidate])) {
+                    throw new ConfigurationException("unresolved source candidate lacks native coverage: {$candidate} ({$diagnostic['file']}:{$diagnostic['line']})");
+                }
+            }
+        }
         foreach ($discovery->files() as $file) {
             $path = $file['path'];
             $discovered[$path] = true;
@@ -44,6 +52,17 @@ final class CoveragePlanner
             $sourceSha256 = $this->digestProjectFile($path);
             $decision = $decisions[$path] ?? null;
             if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
+                if (!isset($compilerSources[$path])) {
+                    if ($decision !== null) {
+                        throw new ConfigurationException("coverage decision references an unselected compiler source: {$path}");
+                    }
+                    $ledger[] = $this->record(
+                        $file, $sourceSha256, CoverageLedger::SOURCE_NOT_SELECTED,
+                        'source.selection.v1',
+                        'source is outside the declared compiler input and its proven include/autoload closure'
+                    );
+                    continue;
+                }
                 $ledger[] = $this->planBusinessPhp(
                     $file,
                     $sourceSha256,
@@ -121,7 +140,7 @@ final class CoveragePlanner
             static fn(array $left, array $right): int => $left['path'] <=> $right['path']
         );
 
-        return new CoverageLedger($ledger);
+        return new CoverageLedger($ledger, $discovery->sourceDiagnostics());
     }
 
     /**
@@ -212,12 +231,21 @@ final class CoveragePlanner
             || str_starts_with($relativePath, '/')
             || preg_match('/^[A-Za-z]:/', $relativePath) === 1
             || in_array('..', explode('/', str_replace('\\', '/', $relativePath)), true)
+            || in_array('.', explode('/', str_replace('\\', '/', $relativePath)), true)
+            || in_array('', explode('/', str_replace('\\', '/', $relativePath)), true)
         ) {
             throw new ConfigurationException("coverage path is unsafe: {$relativePath}");
         }
         $path = rtrim($this->projectDirectory, '/\\')
             . DIRECTORY_SEPARATOR
             . str_replace('/', DIRECTORY_SEPARATOR, $relativePath);
+        $componentPath = rtrim($this->projectDirectory, '/\\');
+        foreach (explode('/', str_replace('\\', '/', $relativePath)) as $component) {
+            $componentPath .= DIRECTORY_SEPARATOR . $component;
+            if (is_link($componentPath)) {
+                throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
+            }
+        }
         if (!is_file($path) || is_link($path)) {
             throw new ConfigurationException("coverage file is missing or unsafe: {$relativePath}");
         }

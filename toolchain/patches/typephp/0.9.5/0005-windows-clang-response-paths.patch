@@ -1,0 +1,40 @@
+--- a/src/Backend/CompilerBackend.php
++++ b/src/Backend/CompilerBackend.php
+@@ -20,6 +20,13 @@
+      */
+     protected string $lastResponseFile = '';
+ 
++    private ?\TypePhp\Build\GeneratedArtifactReceipt $artifactReceipt = null;
++
++    public function setGeneratedArtifactReceipt(?\TypePhp\Build\GeneratedArtifactReceipt $receipt): void
++    {
++        $this->artifactReceipt = $receipt;
++    }
++
+     public function __construct(PlatformBase $platform)
+     {
+         $this->platform = $platform;
+@@ -181,13 +188,22 @@
+         $this->lastResponseFile = $rspFile;
+         $lines = [];
+         foreach ($objectFiles as $file) {
++            if (PHP_OS_FAMILY === 'Windows') {
++                // Clang response files treat backslashes as escapes.
++                $file = str_replace('\\', '/', $file);
++            }
+             // Wrap paths containing spaces in double quotes; supported by both MSVC link.exe and GCC/Clang.
+             if (str_contains($file, ' ')) {
+                 $file = '"' . $file . '"';
+             }
+             $lines[] = $file;
+         }
+-        file_put_contents($rspFile, implode("\n", $lines));
++        $content = implode("\n", $lines);
++        $written = file_put_contents($rspFile, $content);
++        if ($written === strlen($content)) {
++            $this->artifactReceipt?->record($rspFile, 'link-cache', $targetFile, __METHOD__,
++                ['dependencies' => $objectFiles]);
++        }
+         return escapeshellarg('@' . $rspFile);
+     }
+ 

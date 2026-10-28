@@ -1,0 +1,67 @@
+--- a/src/Parser/TypeConversionTrait.php
++++ b/src/Parser/TypeConversionTrait.php
+@@ -313,15 +313,16 @@
+         }
+         $this->checkLeftValue($expr);
+         if ($expr instanceof Node\Expr\ArrayDimFetch) {
+-            if ($expr->dim === null) {
+-                $this->fatalError($expr, 'Cannot assign reference to array dim fetch without dim');
+-            }
+             if ($expr->var instanceof Expr\Variable && is_string($expr->var->name)
+                 && $this->isDynamicScopeVariable($expr->var)
+                 && $expr->var->getAttribute('dynamicVariableMode', 'read') === 'read') {
+                 $expr->var->setAttribute('dynamicVariableMode', 'read-reference');
+             }
+             $array = $this->parseWritableIdentifier($expr->var);
++            if ($expr->dim === null) {
++                // `$ref = &$arr[]` appends a null slot and binds it.
++                return $this->arrayAppendReference($array);
++            }
+             return $this->arrayElementReference($array, $this->parseIdentifier($expr->dim));
+         }
+         if ($expr instanceof Node\Expr\PropertyFetch) {
+@@ -356,6 +357,16 @@
+             . 'ZVAL_MAKE_REF(slot); return php::Reference(slot); }()';
+     }
+ 
++    protected function arrayAppendReference(string $array): string
++    {
++        return '[&]() -> php::Reference { zval *container = ' . $array . '.unwrap_ptr(); ZVAL_DEREF(container); '
++            . 'if (Z_TYPE_P(container) != IS_ARRAY) { array_init(container); } else { SEPARATE_ARRAY(container); } '
++            . 'zval empty_value; ZVAL_NULL(&empty_value); '
++            . 'zval *slot = zend_hash_next_index_insert(Z_ARRVAL_P(container), &empty_value); '
++            . 'if (slot == nullptr) { return php::Reference(); } '
++            . 'ZVAL_MAKE_REF(slot); return php::Reference(slot); }()';
++    }
++
+     /**
+      * A reference created from an ordinary local has no Zend type source.
+      * Exposing fixed C++ storage through such a reference would therefore let
+--- a/src/Parser/AssignOpTrait.php
++++ b/src/Parser/AssignOpTrait.php
+@@ -2049,10 +2049,10 @@
+         } elseif ($this->isStaticPropertyFetch($expr->expr)) {
+             $rightExpr = $tmpVar . ' = ' . $this->emitStaticPropertyFetchRef($expr->expr, $expr);
+         } elseif ($this->isArrayDimFetch($expr->expr)) {
+-            if ($expr->expr->dim == null) {
+-                $this->fatalError($expr, 'Cannot assign reference to array dim fetch without dim');
+-            }
+             if ($this->isVarExpr($expr->expr->var) && $expr->expr->var->name === 'GLOBALS') {
++                if ($expr->expr->dim == null) {
++                    $this->fatalError($expr, 'Cannot assign reference to array dim fetch without dim');
++                }
+                 $slot = $this->getStaticGlobalsSlot($expr->expr);
+                 if ($slot !== null) {
+                     $this->parseGlobalsArrayDimFetch($expr->expr);
+@@ -2062,7 +2062,10 @@
+                 }
+             } else {
+                 $array = $this->parseWritableIdentifier($expr->expr->var);
+-                $rightExpr = $tmpVar . ' = ' . $this->arrayElementReference($array, $this->parseIdentifier($expr->expr->dim));
++                // `$ref = &$arr[]` appends a null slot and binds it.
++                $rightExpr = $tmpVar . ' = ' . ($expr->expr->dim == null
++                    ? $this->arrayAppendReference($array)
++                    : $this->arrayElementReference($array, $this->parseIdentifier($expr->expr->dim)));
+             }
+         } else {
+             $this->fatalError($expr, 'Cannot assign reference to ' . $this->parseIdentifier($expr->expr));

@@ -1,0 +1,105 @@
+--- a/src/Parser/ExceptionControlFlowTrait.php
++++ b/src/Parser/ExceptionControlFlowTrait.php
+@@ -51,8 +51,34 @@
+     protected function parseTryCatch(mixed $v): string
+     {
+         $code = $this->parseBeforeStmtLines();
++        $finally = $v->finally;
++        $gotoTargets = [];
++        $gotoVariable = null;
++        $gotoEntry = null;
++        if ($finally) {
++            $v = clone $v;
++            $labels = [];
++            $this->collectFinallyGotoLabels($v->stmts, $labels);
++            foreach ($v->catches as $catch) { $this->collectFinallyGotoLabels($catch->stmts, $labels); }
++            $gotoVariable = $this->genTmpVarName();
++            $source = isset($this->file) && is_file($this->file) ? file_get_contents($this->file) : '';
++            do {
++                $gotoEntry = 'typephp_finally_' . $gotoVariable;
++                if (!str_contains($source, $gotoEntry)) { break; }
++                $gotoVariable = $this->genTmpVarName();
++            } while (true);
++            $v->stmts = $this->routeFinallyGotos($v->stmts, $labels, $gotoVariable, $gotoEntry, $gotoTargets);
++            foreach ($v->catches as $index => $catch) {
++                $catch = clone $catch;
++                $catch->stmts = $this->routeFinallyGotos($catch->stmts, $labels, $gotoVariable, $gotoEntry, $gotoTargets);
++                $v->catches[$index] = $catch;
++            }
++            if ($gotoTargets) {
++                $this->addLocalVar($gotoVariable, Type::INT);
++                $code .= $this->getIndent() . $gotoVariable . ' = 0;' . PHP_EOL;
++            }
++        }
+         $code .= 'try {';
+-        $finally = $v->finally;
+         $stmts = $finally ? $this->injectFinallyBeforeReturn($v->stmts, $finally->stmts) : $v->stmts;
+ 
+         $catches = $v->catches;
+@@ -81,6 +107,7 @@
+         $code .= ' catch (zend_object *_ex) {' . PHP_EOL;
+         $this->indentLevel++;
+         $code .= $this->getIndent() . $exVar . ' = php::catchException();' . PHP_EOL;
++        if ($gotoTargets) { $code .= $this->getIndent() . $gotoVariable . ' = 0;' . PHP_EOL; }
+         if ($catches) {
+             $catchMatched = $this->genTmpVarName();
+             $code .= $this->getIndent() . 'bool ' . $catchMatched . ' = false;' . PHP_EOL;
+@@ -92,6 +119,7 @@
+         $code .= $this->getIndent() . '}' . PHP_EOL;
+ 
+         if ($finally) {
++            if ($gotoTargets) { $code .= $this->getIndent() . $gotoEntry . ':;' . PHP_EOL; }
+             $code .= $this->parseStmts($finally->stmts);
+             $code .= PHP_EOL;
+         }
+@@ -104,7 +132,42 @@
+         $this->indentLevel--;
+         $code .= $this->getIndent() . '}';
+ 
++        foreach ($gotoTargets as $target => $id) {
++            $code .= PHP_EOL . $this->getIndent() . 'if (' . $gotoVariable . ' == ' . $id . ') { goto ' . $target . '; }';
++        }
+         return $code;
++    }
++
++    protected function collectFinallyGotoLabels(Node|array $node, array &$labels): void
++    {
++        if (is_array($node)) { foreach ($node as $child) { if ($child instanceof Node) { $this->collectFinallyGotoLabels($child, $labels); } } return; }
++        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike || $node instanceof Node\Stmt\Finally_) { return; }
++        if ($node instanceof Node\Stmt\Label) { $labels[$node->name->name] = true; }
++        foreach ($node->getSubNodeNames() as $name) { $child = $node->$name; if ($child instanceof Node || is_array($child)) { $this->collectFinallyGotoLabels($child, $labels); } }
++    }
++
++    protected function routeFinallyGotos(array $nodes, array $labels, string $variable, string $entry, array &$targets): array
++    {
++        $result = [];
++        foreach ($nodes as $node) {
++            if ($node instanceof Node\Stmt\Goto_ && !isset($labels[$node->name->name])) {
++                $target = $node->name->name;
++                $targets[$target] ??= count($targets) + 1;
++                $result[] = new Node\Stmt\Expression(new Expr\Assign(new Variable($variable), new Node\Scalar\Int_($targets[$target])));
++                $goto = clone $node;
++                $goto->name = new Node\Identifier($entry);
++                $result[] = $goto;
++            } elseif ($node instanceof Node && !$node instanceof Node\FunctionLike && !$node instanceof Node\Stmt\ClassLike && !$node instanceof Node\Stmt\Finally_) {
++                $node = clone $node;
++                foreach ($node->getSubNodeNames() as $name) {
++                    $child = $node->$name;
++                    if (is_array($child)) { $node->$name = $this->routeFinallyGotos($child, $labels, $variable, $entry, $targets); }
++                    elseif ($child instanceof Node) { $node->$name = $this->routeFinallyGotos([$child], $labels, $variable, $entry, $targets)[0]; }
++                }
++                $result[] = $node;
++            } else { $result[] = $node; }
++        }
++        return $result;
+     }
+ 
+     protected function injectFinallyBeforeReturn(array $stmts, array $finallyStmts, int $localControlDepth = 0): array
+@@ -134,7 +197,6 @@
+             }
+ 
+             if ($stmt instanceof Node\Stmt\Goto_) {
+-                array_push($result, ...$this->cloneStmtList($finallyStmts));
+                 $result[] = $stmt;
+                 continue;
+             }

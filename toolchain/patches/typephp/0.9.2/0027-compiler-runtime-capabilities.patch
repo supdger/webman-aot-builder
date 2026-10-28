@@ -1,0 +1,57 @@
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -688,15 +688,37 @@
+     /** @var array<string, true> Fully resolved class names referenced by source code. */
+     protected array $referencedClasses = [];
+ 
++    protected static function assertRuntimeCapabilities(): void
++    {
++        if (PHP_INT_SIZE !== 8) {
++            throw new \RuntimeException('TypePHP requires 64-bit integers');
++        }
++        foreach (['tokenizer', 'json', 'SPL'] as $extension) {
++            if (!extension_loaded($extension)) {
++                throw new \RuntimeException('TypePHP requires the ' . $extension . ' extension');
++            }
++        }
++        foreach (['proc_open', 'proc_close', 'token_get_all', 'json_decode'] as $function) {
++            if (!function_exists($function)) {
++                throw new \RuntimeException('TypePHP requires the ' . $function . ' function');
++            }
++        }
++        foreach (['isPrivateSet', 'isProtectedSet'] as $method) {
++            if (!method_exists(\ReflectionProperty::class, $method)) {
++                throw new \RuntimeException('TypePHP requires ReflectionProperty::' . $method);
++            }
++        }
++        if (!method_exists(ParserFactory::class, 'createForVersion')
++            || !method_exists(PhpVersion::class, 'fromString')) {
++            throw new \RuntimeException('TypePHP requires the PHP parser version-selection API');
++        }
++        token_get_all('<?php class TypePhpRuntimeSyntax { public const string NAME = "ok"; public string $name { get => "ok"; } }', TOKEN_PARSE);
++    }
++
+     public function __construct(string $rootPath, ?CompilerRuntime $compilerRuntime = null)
+     {
+         $this->osType = PHP_OS_FAMILY;
+-        if (version_compare(PHP_VERSION, '8.4.0', '<')) {
+-            $this->error('PHP 8.4.0 or later is required');
+-        }
+-        if (version_compare(PHP_VERSION, '8.6.0', '>=')) {
+-            $this->error('PHP 8.6.0 or later is not supported');
+-        }
++        self::assertRuntimeCapabilities();
+         $this->rootPath = $rootPath;
+         $this->compilerRuntime = $compilerRuntime
+             ?? CompilerRuntime::nativeAt($rootPath, PHP_BINARY);
+--- a/composer.json
++++ b/composer.json
+@@ -15,7 +15,7 @@
+     "bin/tpc.php"
+   ],
+   "require": {
+-    "php": ">=8.4 <8.6",
++    "php": ">=8.4",
+     "composer-runtime-api": "^2.2",
+     "nikic/php-parser": "^5.6",
+     "league/climate": "^3.10",

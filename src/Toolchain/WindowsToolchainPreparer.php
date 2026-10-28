@@ -154,7 +154,7 @@ final class WindowsToolchainPreparer implements ToolchainPreparer
         );
         (new TypePhpPatchSourceVerifier())->verify(
             $tools['typephp'],
-            dirname($this->script, 2) . '/toolchain/patches/typephp/0.9.2/manifest.json'
+            dirname($this->script, 2) . '/toolchain/patches/typephp/0.9.5/manifest.json'
         );
     }
 }

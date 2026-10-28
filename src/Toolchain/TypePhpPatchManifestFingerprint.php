@@ -24,7 +24,7 @@ final class TypePhpPatchManifestFingerprint
         if (!is_array($manifest)
             || count($manifest) !== 4
             || $manifest['component'] !== 'typephp-source'
-            || $manifest['version'] !== '0.9.2'
+            || $manifest['version'] !== '0.9.5'
             || !is_array($manifest['rules'])
             || !array_is_list($manifest['rules'])
             || $manifest['rules'] === []
@@ -36,13 +36,19 @@ final class TypePhpPatchManifestFingerprint
         foreach ($manifest['rules'] as $rule) {
             $path = is_array($rule) ? ($rule['path'] ?? null) : null;
             if (!is_array($rule)
-                || count($rule) !== 3
+                || array_diff(array_keys($rule), ['path', 'beforeSha256', 'afterSha256', 'added', 'preparedBeforeSha256']) !== []
                 || !is_string($path)
-                || preg_match('~^(?:src|vendor)/[A-Za-z0-9._/-]+$~D', $path) !== 1
+                || preg_match('~^(?:composer\.json|(?:src|vendor)/[A-Za-z0-9._/-]+)$~D', $path) !== 1
                 || in_array('..', explode('/', $path), true)
                 || isset($rules[$path])
                 || preg_match('/^[a-f0-9]{64}$/D', (string) ($rule['beforeSha256'] ?? '')) !== 1
                 || preg_match('/^[a-f0-9]{64}$/D', (string) ($rule['afterSha256'] ?? '')) !== 1
+                || (array_key_exists('added', $rule)
+                    && ($rule['added'] !== true || $rule['beforeSha256'] !== hash('sha256', '')
+                        || array_key_exists('preparedBeforeSha256', $rule)))
+                || (array_key_exists('preparedBeforeSha256', $rule)
+                    && (!is_string($rule['preparedBeforeSha256'])
+                        || preg_match('/^[a-f0-9]{64}$/D', $rule['preparedBeforeSha256']) !== 1))
             ) {
                 throw new ConfigurationException('TypePHP patch manifest rule drifted');
             }
@@ -51,6 +57,12 @@ final class TypePhpPatchManifestFingerprint
                 'beforeSha256' => $rule['beforeSha256'],
                 'afterSha256' => $rule['afterSha256'],
             ];
+            if (array_key_exists('added', $rule)) {
+                $rules[$path]['added'] = true;
+            }
+            if (array_key_exists('preparedBeforeSha256', $rule)) {
+                $rules[$path]['preparedBeforeSha256'] = $rule['preparedBeforeSha256'];
+            }
         }
         ksort($rules, SORT_STRING);
         $canonical = [

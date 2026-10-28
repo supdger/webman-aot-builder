@@ -1,85 +1,93 @@
 # Webman AOT Builder
 
-Webman AOT Builder 是把 Webman / SaiAdmin PHP 项目编译为 Linux amd64 全静态程序的构建工具。
-你在 macOS Apple Silicon 或 Windows x64 开发机上构建，再把生成的 `dist-aot/` 目录部署到 Linux；
-目标机无需另外安装 PHP。工具安装在开发机上，无需装进 Webman 项目，也无需 Docker。
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Latest release](https://img.shields.io/github/v/release/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder/releases/latest) [![Downloads](https://img.shields.io/github/downloads/supdger/webman-aot-builder/total)](https://github.com/supdger/webman-aot-builder/releases) [![GitHub stars](https://img.shields.io/github/stars/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder)
 
-## 工作原理
+[English](README.md) | [简体中文](README.zh-CN.md)
 
-AOT（Ahead-of-Time）是运行前编译。构建器在隔离副本中适配项目，使用 TypePHP 将 PHP 代码编译为本地代码，
-再通过 Clang 和 PHPx 静态 SDK 交叉编译、链接为 Linux 可执行程序。配置、模板和静态资源按需保留为外置文件，
-构建过程不改写原项目源码。
+Webman AOT Builder compiles PHP projects into fully static Linux amd64 executables. Original PHP source is passed directly to TypePHP.
+Install the tool and build your project on a macOS Apple Silicon or Windows x64 development machine, then deploy the generated `dist-aot/` directory to Linux. The target machine does not need PHP installed.
 
-```mermaid
-flowchart LR
-    A["Webman / SaiAdmin 项目"] --> B["隔离副本与兼容适配"]
-    B --> C["TypePHP 编译与静态链接"]
-    C --> D["dist-aot：程序与运行资源"]
-    D --> E["Linux amd64 运行"]
-```
+## How it works
 
-## 源码与安装包
+The builder enumerates readable PHP sources and passes an unchanged, isolated copy of each PHP file to TypePHP, then generates an executable with Clang and the PHPx static SDK. It returns the artifact on success or preserves TypePHP's original compilation errors on failure.
+Your original source code stays unchanged. Configuration, templates, and static assets remain external files as needed.
 
-本仓库是构建工具的源码，包含命令行程序、项目适配、编译组件管理和安装包制作脚本。
-开发或自行制作安装包可从 [最新开发源码](https://github.com/supdger/webman-aot-builder/tree/main) 开始，
-具体步骤见 [源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
+Compiler compatibility work in the development source preserves runtime conditions, loading order, and declarations from multiple files. The [native regression runner](tests/native-declarations.php) compares reduced fixtures with SDK-matched PHP, including raw output, errors, and exit status. These changes are not yet released; the final frozen suite and complete project build remain under verification.
 
-直接使用请下载 [最新正式版安装包](https://github.com/supdger/webman-aot-builder/releases/latest)，
-选择与你的**开发机**匹配的 macOS Apple Silicon 或 Windows x64 包。
-轻量包首次使用时联网准备编译组件；完整包包含组件，可在安装时离线准备。
-两种包安装后都提供 `webman-aot` 命令。GitHub 的 `Source code (zip)` 是源码压缩包，不是安装包。
+## Source code and installation packages
 
-## 安装与使用
+This repository contains the builder's source code, including the command-line tool, source input organization, compiler component management, and installation package scripts.
+For development or building your own installation packages, start with the [latest development source](https://github.com/supdger/webman-aot-builder/tree/main).
+See the [source build guide](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source) for details.
 
-下载、校验和安装请按 [安装与使用指南](https://github.com/supdger/webman-aot-builder/wiki/Install) 操作。
-安装后可在任意目录运行以下命令，检查开发机并准备缺失的编译组件，健康时输出 `Result: healthy`：
+Maintainers can compose a component from a complete verified compiler source using `tools/build-minimal-component.php --compiler-source-root=PATH`, while reusing a prepared SDK. The development-source entry verifies source provenance, the complete authoritative Composer map, and the builder's full-static runtime declaration contract; see the source build guide for the required inputs. This component check does not replace installation, complete-project build, or native regression acceptance.
+
+To use the tool, download an [installation package from the latest stable release](https://github.com/supdger/webman-aot-builder/releases/latest).
+Choose the macOS Apple Silicon or Windows x64 package that matches your **development machine**.
+Lightweight packages download and prepare compiler components on first use; full packages include the components and can prepare them offline during installation.
+Both packages provide the `webman-aot` command after installation. GitHub's `Source code (zip)` download is a source archive, not an installation package.
+If Windows cannot download the components, download the full installation package whose name contains `full-windows-x86_64.zip`, extract the entire archive, and run `install.cmd`. A `components.zip` archive contains only component resources and has no installer. See [full package installation on Windows](https://github.com/supdger/webman-aot-builder/wiki/Install-Windows#windows-完整包安装).
+
+## Installation and usage
+
+Follow the [installation and usage guide](https://github.com/supdger/webman-aot-builder/wiki/Install) to download, verify, and install the tool.
+After installation, run the following command from any directory to check your development machine and prepare missing compiler components. A healthy environment reports `Result: healthy`:
 
 ```sh
 webman-aot doctor
 ```
 
-构建时进入**自己的 Webman 项目根目录**（包含 `composer.json`、`composer.lock`、`start.php` 和 `app/`），运行：
+To build, go to **your own PHP project directory** and run:
 
 ```sh
 webman-aot build
 webman-aot verify
 ```
 
-`build` 生成 `dist-aot/`，`verify` 检查该目录的分发结构和静态属性。
-SaiAdmin 项目使用 `webman-aot build --profile=saiadmin`，适用版本及要求见
-[SaiAdmin 兼容说明](https://github.com/supdger/webman-aot-builder/wiki/SaiAdmin-Compatibility)。
+`build` generates `dist-aot/`; `verify` checks its distribution structure and static properties.
+Compilation has only four prerequisites:
 
-## 构建结果
+1. The PHP source to compile is readable.
+2. TypePHP and the target platform toolchain are available.
+3. The output directory is writable.
+4. Executable builds have an explicit entrypoint; individual files and libraries follow their corresponding compilation modes.
 
-产物结构示意（运行资源随项目而异）：
+The input source supplies the executable entrypoint required by TypePHP, such as a global `main(): void`. TypePHP decides whether the entrypoint and language features meet its requirements. The builder does not identify frameworks, check dependency versions, review business code, generate or rewrite PHP source, or impose project, framework, plugin, directory layout, or business startup requirements.
+
+## Build output
+
+Example output structure (runtime resources vary by project):
 
 ```text
 dist-aot/
-├── server          # Linux amd64 全静态程序
-├── start.sh        # 启动脚本
-├── stop.sh         # 停止脚本
-├── config/         # 外置配置
-├── …               # 项目所需的模板、静态资源等
-└── manifest.json   # 分发清单
+├── server          # Fully static Linux amd64 executable
+├── start.sh        # Startup script
+├── stop.sh         # Shutdown script
+├── config/         # External configuration
+├── …               # Templates, static assets, and other project resources
+└── manifest.json   # Distribution manifest
 ```
 
-把**整个 `dist-aot/`** 复制到 Linux amd64 目标机，按项目需要配置 `.env`、数据库等运行环境后，
-在该目录启动：
+Keep external resource files in their original relative layout beside the executable. Native regression checks run with only the executable, runtime configuration, and explicitly declared non-PHP resources; compiled PHP source is absent from the runtime container.
+
+Copy **the entire `dist-aot/` directory** to your Linux amd64 target machine. Configure `.env`, databases, and other runtime requirements for your project, then start the application from that directory:
 
 ```sh
 ./start.sh
 ```
 
-后台运行用 `./start.sh --daemon`，停止用 `./stop.sh`。
-目标机配置和启动后的业务检查见 [Linux 部署与验收](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance)。
+Use `./start.sh --daemon` to run in the background and `./stop.sh` to stop it.
+See [Linux deployment and acceptance checks](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance) for target configuration and business checks after startup.
 
-## 实机构建与启动验证
+## Builds and startup checks on real machines
 
-2026-09-30，用户在 macOS Apple Silicon 和 Windows x64 实机构建 SaiAdmin 项目，并分别将产物复制到 Linux x86_64 服务器启动。以下为用户提供的终端关键输出摘录；macOS 和 Windows 是构建宿主，生成的程序面向 Linux。
+These records describe the historical v0.3.2 adaptation workflow. They do not establish Windows compilation or linking results for the current original-source workflow.
 
-### macOS Apple Silicon：构建并在 Linux 启动
+On 2026-09-30, the user built a SaiAdmin project on macOS Apple Silicon and Windows x64 machines, then copied each build to a Linux x86_64 server and started it. The excerpts below contain key terminal output provided by the user. macOS and Windows are build hosts; the generated executables target Linux.
 
-使用 v0.3.2 轻量包安装并准备编译组件，构建 SaiAdmin 项目。以下保留安装、组件准备、编译及产物校验的关键节点，省略重复进度行：
+### macOS Apple Silicon: build and start on Linux
+
+The v0.3.2 lightweight package was used to install the tool, prepare compiler components, and build the SaiAdmin project. The following excerpts preserve key installation, component preparation, compilation, and artifact verification steps, with repeated progress lines omitted:
 
 ```text
 Package contents SHA-256 verified.
@@ -96,7 +104,7 @@ Successfully compiled 2063 files
 项目构建与校验成功。
 ```
 
-将这次 Mac 构建的产物复制到 Linux x86_64 服务器，在产物目录执行 `./start.sh`，报告 8 个 worker 启动成功（进程用户名已脱敏）：
+The artifacts from this Mac build were copied to a Linux x86_64 server. Running `./start.sh` in the output directory reported that all 8 workers started successfully (the process username has been anonymized):
 
 ```text
 Workerman[main.php] start in DEBUG mode
@@ -106,9 +114,9 @@ select      tcp         <用户>      webman      http://0.0.0.0:8788    8      
 Press Ctrl+C to stop. Start success.
 ```
 
-### Windows x64：构建并在 CentOS 7 启动
+### Windows x64: build and start on CentOS 7
 
-使用 v0.3.2 Windows 完整包构建 SaiAdmin 项目。现有日志保留了编译尾段、构建完成和产物校验，构建总耗时约 35 分 43 秒：
+The v0.3.2 Windows full package was used to build the SaiAdmin project. The available log preserves the final compilation steps, build completion, and artifact verification. The total build time was approximately 35 minutes and 43 seconds:
 
 ```text
 [1920/2063] 94% vendor\symfony\console\Formatter\OutputFormatterStyleStack.cc
@@ -121,7 +129,7 @@ Successfully compiled 2063 files
 项目构建与校验成功。
 ```
 
-将这次 Windows 构建的产物复制到另一台 CentOS 7 服务器，在产物目录执行 `./start.sh`，报告 4 个 worker 启动成功（进程用户名已脱敏）：
+The artifacts from this Windows build were copied to another server running CentOS 7. Running `./start.sh` in the output directory reported that all 4 workers started successfully (the process username has been anonymized):
 
 ```text
 Workerman[main.php] start in DEBUG mode
@@ -131,14 +139,14 @@ select      tcp         <用户>      webman      http://0.0.0.0:1717    4      
 Press Ctrl+C to stop. Start success.
 ```
 
-两台开发机的构建与产物校验均成功，两个 Linux 目标环境均报告服务启动成功；Mac 安装过程另有成功记录。启动仍有兼容性告警，HTTP、数据库和业务接口尚未验收。详细过程见 [实机测试记录](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source#v032-实机测试记录)。
+Builds and artifact verification succeeded on both development machines, and both Linux target environments reported successful service startup. Successful installation on the Mac was also recorded. Compatibility warnings remained during startup; HTTP, database, and business API acceptance checks have not yet been completed. See the [real-machine test records](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source#v032-实机测试记录) for details.
 
-## 文档
+## Documentation
 
-- [Wiki](https://github.com/supdger/webman-aot-builder/wiki/Home)：安装、使用与维护文档
-- [更新日志](https://github.com/supdger/webman-aot-builder/blob/main/CHANGELOG.md)：功能、修复与升级影响
+- [Wiki](https://github.com/supdger/webman-aot-builder/wiki/Home): installation, usage, and maintenance documentation
+- [Changelog](https://github.com/supdger/webman-aot-builder/blob/main/CHANGELOG.md): features, fixes, and upgrade implications
 
-## 许可与反馈
+## License and feedback
 
-原创代码采用 [MIT 许可证](LICENSE)，第三方组件的许可与归属见 [NOTICE](NOTICE.md)。
-问题与建议请提交到 [Issues](https://github.com/supdger/webman-aot-builder/issues)。
+Original code is licensed under the [MIT License](LICENSE). See [NOTICE](NOTICE.md) for third-party component licenses and attribution.
+Please submit problems and suggestions to [Issues](https://github.com/supdger/webman-aot-builder/issues).

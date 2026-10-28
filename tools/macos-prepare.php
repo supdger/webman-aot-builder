@@ -66,6 +66,74 @@ function makeDirectory(string $path): void
     }
 }
 
+function composerExecutable(array $arguments): string
+{
+    $candidates = [];
+    foreach ($arguments as $argument) {
+        if (str_starts_with($argument, '--composer=')) {
+            $candidates[] = substr($argument, strlen('--composer='));
+            break;
+        }
+    }
+    if ($candidates === []) {
+        foreach (explode(PATH_SEPARATOR, getenv('PATH') ?: '') as $directory) {
+            if ($directory !== '') {
+                $candidates[] = $directory . '/composer';
+                $candidates[] = $directory . '/composer.phar';
+            }
+        }
+    }
+    foreach ($candidates as $candidate) {
+        $path = realpath($candidate);
+        if (is_string($path) && is_file($path) && is_readable($path) && is_executable($path)) {
+            return $path;
+        }
+    }
+    throw new RuntimeException('Composer is required to refresh patched compiler autoload metadata; provide --composer=PATH');
+}
+
+final class ComposerAutoloadException extends RuntimeException
+{
+}
+
+function refreshCompilerAutoload(string $composer, string $typephp, string $workRoot, array $environment): void
+{
+    fwrite(STDERR, "[prepare] Regenerating patched compiler autoload metadata with Composer\n");
+    $environment['COMPOSER_HOME'] = $workRoot . '/composer-home';
+    $environment['COMPOSER_DISABLE_NETWORK'] = '1';
+    $process = proc_open(
+        [$composer, '--no-interaction', '--no-plugins', '--no-scripts', '--no-cache',
+            '--working-dir=' . $typephp, 'dump-autoload', '--classmap-authoritative'],
+        [0 => ['file', '/dev/null', 'r'], 1 => STDERR, 2 => STDERR],
+        $pipes,
+        $typephp,
+        $environment
+    );
+    if (!is_resource($process)) {
+        throw new ComposerAutoloadException('unable to start Composer autoload generation', 1);
+    }
+    $nextHeartbeat = microtime(true) + 30;
+    do {
+        $status = proc_get_status($process);
+        if ($status['running'] && microtime(true) >= $nextHeartbeat) {
+            fwrite(STDERR, "[prepare] Composer autoload generation is still running\n");
+            $nextHeartbeat = microtime(true) + 30;
+        }
+        if ($status['running']) {
+            usleep(20000);
+        }
+    } while ($status['running']);
+    $closed = proc_close($process);
+    $exit = $status['exitcode'] >= 0 ? $status['exitcode'] : $closed;
+    if ($exit < 0 && $status['signaled']) {
+        $exit = 128 + $status['termsig'];
+    }
+    if ($exit !== 0) {
+        throw new ComposerAutoloadException('Composer autoload generation failed with exit ' . $exit, $exit > 0 ? $exit : 1);
+    }
+    fwrite(STDERR, "[prepare] Patched compiler autoload metadata regenerated successfully\n");
+}
+
 function removeVendoredPhpx(string $path, string $workRoot): void
 {
     $resolved = realpath($path);
@@ -108,6 +176,8 @@ function prepare(array $arguments): void
     $artifacts = realpath(option($arguments, 'artifacts'));
     $lockFile = realpath(option($arguments, 'lock'));
     $driver = realpath(option($arguments, 'php'));
+    $composer = composerExecutable($arguments);
+    $composerEnvironment = getenv();
     $workRoot = option($arguments, 'work-root');
     if (!is_string($artifacts) || !is_string($lockFile) || !is_string($driver)
         || !is_file($driver) || is_link($driver)
@@ -118,6 +188,10 @@ function prepare(array $arguments): void
     }
     if (!is_dir($workRoot)) {
         makeDirectory($workRoot);
+    }
+    $workRoot = realpath($workRoot);
+    if (!is_string($workRoot)) {
+        throw new RuntimeException('unable to resolve private work root');
     }
     $contents = file_get_contents($lockFile);
     if (!is_string($contents)) {
@@ -130,6 +204,7 @@ function prepare(array $arguments): void
     $required = [
         'typephp-source',
         'typephp-macos-arm64',
+        'typephp-vendor',
         'phpx-source',
         'phpx-sdk-linux-x64',
         'llvm-macos-arm64',
@@ -169,14 +244,61 @@ function prepare(array $arguments): void
     if (!copy($driver, $php) || !chmod($php, 0700)) {
         throw new RuntimeException('unable to install private PHP driver');
     }
-    if (trim(run([$php, '-n', '-r', 'echo PHP_VERSION;'])) !== '8.4.25') {
+    if (trim(run([$php, '-n', '-r', 'echo PHP_VERSION;'])) !== '8.4.26') {
         throw new RuntimeException('private PHP driver version differs from locked PHP');
+    }
+    // TypePHP 0.9.5 probes PHP_HOME for the embed SAPI runtime, so stage the
+    // driver's install prefix pieces (libphp.a, php-config, headers) alongside
+    // the binary instead of shipping the CLI executable alone.
+    $driverPrefix = basename(dirname($driver)) === 'bin'
+        ? dirname($driver, 2)
+        : dirname($driver);
+    foreach (['lib/libphp.a' => 'lib/libphp.a', 'bin/php-config' => 'bin/php-config'] as $from => $to) {
+        $source = $driverPrefix . '/' . $from;
+        if (is_file($source) && !is_link($source)) {
+            makeDirectory(dirname($phpHome . '/' . $to));
+            if (!copy($source, $phpHome . '/' . $to)) {
+                throw new RuntimeException('unable to stage PHP embed runtime file: ' . $from);
+            }
+            if (str_ends_with($to, 'php-config')) {
+                chmod($phpHome . '/' . $to, 0700);
+            }
+        }
+    }
+    $include = $driverPrefix . '/include/php';
+    if (is_dir($include) && !is_link($include)) {
+        makeDirectory($phpHome . '/include');
+        run(['/bin/cp', '-R', $include, $phpHome . '/include/php']);
+    }
+    $stagedConfig = $phpHome . '/bin/php-config';
+    if (is_file($stagedConfig)) {
+        $config = file_get_contents($stagedConfig);
+        if (is_string($config)) {
+            $config = preg_replace(
+                '/^prefix=.*$/m',
+                "prefix='" . str_replace("'", "'\\''", $phpHome) . "'",
+                $config
+            );
+            if (!is_string($config)
+                || file_put_contents($stagedConfig, $config, LOCK_EX) === false
+            ) {
+                throw new RuntimeException('unable to rewrite staged php-config prefix');
+            }
+        }
+    }
+    if (!is_file($phpHome . '/lib/libphp.a')) {
+        throw new RuntimeException(
+            'private PHP driver lacks the embed SAPI static library; build PHP with --enable-embed=static'
+        );
     }
 
     fwrite(STDERR, "[prepare] Extracting locked TypePHP and PHPX sources\n");
-    $host = extractArchive($tar, $archives['typephp-macos-arm64'], $workRoot . '/typephp-host');
+    extractArchive($tar, $archives['typephp-macos-arm64'], $workRoot . '/typephp-host');
     $typephp = extractArchive($tar, $archives['typephp-source'], $workRoot . '/typephp-source');
-    run(['/bin/cp', '-R', $host . '/vendor', $typephp . '/vendor']);
+    // The 0.9.5 host package is a bare tpc binary; the compiler's Composer
+    // dependencies ship as the separate locked vendor bundle.
+    $vendor = extractArchive($tar, $archives['typephp-vendor'], $workRoot . '/typephp-vendor');
+    run(['/bin/cp', '-R', $vendor . '/vendor', $typephp . '/vendor']);
     $swoole = $typephp . '/vendor/swoole';
     makeDirectory($swoole);
     $phpxSource = extractArchive($tar, $archives['phpx-source'], $workRoot . '/phpx-source');
@@ -221,7 +343,7 @@ function prepare(array $arguments): void
         flags: JSON_THROW_ON_ERROR
     );
     $sdkDigest = $stripped['sha256'] ?? null;
-    if ($sdkDigest !== 'bc4b4053092176f8e046a5db0b66c659daa4f23468c09c982223d4fea24d7eeb') {
+    if ($sdkDigest !== '4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623') {
         throw new RuntimeException('stripped private SDK digest differs from locked cross-host SDK');
     }
     $phprc = $workRoot . '/php-config';
@@ -237,6 +359,8 @@ function prepare(array $arguments): void
         "--typephp={$typephp}",
         "--phpx={$phpx}",
     ]);
+    // Preserve Composer's installed interpreter, before the compiler PATH override.
+    refreshCompilerAutoload($composer, $typephp, $workRoot, $composerEnvironment);
 
     fwrite(STDERR, "[prepare] Assembling locked Linux sysroot\n");
     $sysroot = $workRoot . '/sysroot';
@@ -279,5 +403,5 @@ try {
     prepare(array_slice($argv, 1));
 } catch (Throwable $exception) {
     fwrite(STDERR, '[ERROR] ' . $exception->getMessage() . PHP_EOL);
-    exit(1);
+    exit($exception instanceof ComposerAutoloadException ? $exception->getCode() : 1);
 }

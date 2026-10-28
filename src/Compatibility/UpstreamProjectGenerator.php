@@ -5,131 +5,81 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
-use WebmanAotBuilder\Project\ProjectProfile;
 
 final class UpstreamProjectGenerator
 {
     /**
-     * @return array{projectFile:string,projectSha256:string,mainSha256:string,mappings:int,coverageMappings:list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>,generatorRevision:string,status:string,adaptations:array<string,string>}
+     * @return array{projectFile:string,projectSha256:string,mainFile:string,mainSha256:string,mappings:int,coverageMappings:list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>,entrypointMapping:?array,generatorRevision:string,status:string,adaptations:array<string,string>}
      */
     public function generate(
         string $mirror,
         string $archive,
         string $privateCache,
         string $lockFile,
-        string $profile,
-        string $outputName
+        string $outputName,
+        ?string $targetSdkRoot = null,
+        ?string $explicitEntry = null
     ): array {
-        if (!in_array($profile, [ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
-            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1
-        ) {
-            throw new ConfigurationException('invalid upstream project profile or output name');
+        if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1) {
+            throw new ConfigurationException('invalid PHP project output name');
         }
-        $contents = is_file($lockFile) && !is_link($lockFile)
-            ? file_get_contents($lockFile)
-            : false;
+        $contents = is_file($lockFile) && !is_link($lockFile) ? file_get_contents($lockFile) : false;
         if (!is_string($contents)) {
             throw new ConfigurationException('upstream generator compatibility lock is missing');
         }
         try {
             $lock = json_decode($contents, true, flags: JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
-            throw new ConfigurationException(
-                'upstream generator compatibility lock is invalid',
-                previous: $exception
-            );
+            throw new ConfigurationException('upstream generator compatibility lock is invalid', previous: $exception);
         }
         if (!is_array($lock)
             || ($lock['schema'] ?? null) !== 'webman-aot-builder-upstream-generator-lock-v1'
             || !is_array($lock['generator'] ?? null)
-            || !is_array($lock['packages'] ?? null)
-            || !is_array($lock['mappings'] ?? null)
             || ($lock['generator']['sourcePath'] ?? null) !== 'src/Compiler/ProjectGenerator.php'
         ) {
             throw new ConfigurationException('upstream generator compatibility lock shape drifted');
         }
-        $generatorRoot = (new UpstreamGeneratorArchive())->materialize(
-            $archive,
-            $lock['generator'],
-            $privateCache
-        );
+        $generatorRoot = (new UpstreamGeneratorArchive())->materialize($archive, $lock['generator'], $privateCache);
         $generatorFile = $generatorRoot . '/src/Compiler/ProjectGenerator.php';
         $generatorSha256 = $lock['generator']['sourceSha256'];
-        $profileFile = $generatorRoot . '/src/Compiler/Profile/SaiAdminProfile.php';
-        if ($profile === ProjectProfile::SAIADMIN) {
-            $generatorOverlay = (new SaiAdminGeneratorOverlay())->prepare(
-                $generatorFile,
-                $generatorSha256,
-                $lock['generator']['mainStubSha256'],
-                $privateCache
-            );
-            $generatorFile = $generatorOverlay['path'];
-            $generatorSha256 = $generatorOverlay['sha256'];
-            $profileFile = (new SaiAdminProfileOverlay())->prepare(
-                $profileFile,
-                $lock['generator']['profileSha256'],
-                $mirror . '/composer.lock',
-                $privateCache
-            );
-        }
-        require_once $profileFile;
-        require_once $generatorFile;
+        $generated = null;
         $manifest = (new UpstreamGeneratorBoundary())->run(
             $mirror,
             $generatorFile,
             $generatorSha256,
-            $lock['packages'],
-            $lock['mappings'],
-            static function () use ($mirror, $profile, $outputName): void {
-                $generator = new \Tinywan\Typephp\Compiler\ProjectGenerator($mirror);
-                $generator->generateMain();
-                $generator->generateProjectYml([
-                    'profile' => $profile === ProjectProfile::SAIADMIN ? 'saiadmin' : null,
-                    'build' => ['output_name' => $outputName],
-                ]);
-            },
-            $profile === ProjectProfile::SAIADMIN
+            [],
+            [],
+            static function () use ($mirror, $generatorRoot, $lock, $outputName, $explicitEntry, &$generated): array {
+                $generated = (new GenericProjectGenerator())->generate(
+                    $mirror,
+                    $generatorRoot . '/src/Stubs/main.php.stub',
+                    $lock['generator']['mainStubSha256'],
+                    $outputName,
+                    explicitEntry: $explicitEntry,
+                );
+                return $generated['mappings'];
+            }
         );
-        $adaptations = (new GeneratedProjectAdapter())->apply($mirror, $lock);
-        if ($profile === ProjectProfile::SAIADMIN) {
-            $adaptations['saiAdminGeneratorOverlaySha256'] = $generatorSha256;
-            $monologPolicy = $lock['optionalAdaptations']['monolog/monolog'] ?? null;
-            if (!is_array($monologPolicy)) {
-                throw new ConfigurationException('SaiAdmin Monolog adaptation policy is missing');
-            }
-            $monologDigest = (new MonologWebProcessorRule())->apply($mirror, $monologPolicy);
-            if ($monologDigest !== null) {
-                $adaptations['monologWebProcessorSha256'] = $monologDigest;
-            }
-            $intlPolicy = $lock['optionalAdaptations']['symfony/native-intl-polyfill'] ?? null;
-            if (!is_array($intlPolicy)) {
-                throw new ConfigurationException('SaiAdmin native intl adaptation policy is missing');
-            }
-            $intlAdaptation = (new NativeIntlPolyfillRule())->apply($mirror, $intlPolicy);
-            $adaptations['nativeIntlShadowSha256'] = $intlAdaptation['shadowSha256'];
-            $adaptations['nativeIntlProjectSha256'] = $intlAdaptation['projectSha256'];
+        $adaptations = [];
+        foreach ($manifest as &$mapping) {
+            $mapping['shadowSha256'] = hash_file('sha256', $mirror . '/' . $mapping['shadow']);
         }
-        $pluginSourcesSha256 = (new PluginSourceCompletion())->apply(
-            $mirror,
-            $profile,
-            $lock['dynamicPhp'] ?? []
-        );
-        if ($pluginSourcesSha256 !== null) {
-            $adaptations['pluginSourcesSha256'] = $pluginSourcesSha256;
-        }
+        unset($mapping);
         $projectFile = $mirror . '/project.linux.yml';
-        $mainFile = $mirror . '/main.php';
+        $mainFile = $generated['mainFile'] === null ? null : $mirror . '/' . $generated['mainFile'];
         $projectSha256 = hash_file('sha256', $projectFile);
-        $mainSha256 = hash_file('sha256', $mainFile);
+        $mainSha256 = $mainFile === null ? hash('sha256', '') : hash_file('sha256', $mainFile);
         if (!is_string($projectSha256) || !is_string($mainSha256)) {
-            throw new ConfigurationException('upstream generator output cannot be hashed');
+            throw new ConfigurationException('PHP generator output cannot be hashed');
         }
         return [
             'projectFile' => $projectFile,
             'projectSha256' => $projectSha256,
+            'mainFile' => $mainFile,
             'mainSha256' => $mainSha256,
             'mappings' => count($manifest),
             'coverageMappings' => $manifest,
+            'entrypointMapping' => $generated['entrypointMapping'],
             'generatorRevision' => $lock['generator']['revision'],
             'status' => is_string($lock['status'] ?? null) ? $lock['status'] : 'unknown',
             'adaptations' => $adaptations,

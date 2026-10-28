@@ -20,7 +20,6 @@ final class DistributionAssembler
      * @param array{
      *   sourceTreeSha256:string,
      *   composerLockSha256:string,
-     *   profile:string,
      *   compatibilityLockSha256:string,
      *   toolchainLockSha256:string,
      *   normalizedInputSha256:string,
@@ -30,7 +29,8 @@ final class DistributionAssembler
      * @param list<string> $sensitiveMarkers
      * @param (\Closure(string):void)|null $beforeStage
      * @param list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> $generatedMappings
-     * @return array{path:string,previous:?string,verification:array<string,mixed>}
+     * @param list<array{path:string,reason:string}> $interpreted
+     * @return array{path:string,previous:?string,verification:array<string,mixed>,coverage:array{direct:int,shadow:int,interpreted:int}}
      */
     public function assemble(
         string $projectDirectory,
@@ -42,7 +42,8 @@ final class DistributionAssembler
         string $host,
         array $sensitiveMarkers = [],
         ?\Closure $beforeStage = null,
-        array $generatedMappings = []
+        array $generatedMappings = [],
+        array $interpreted = []
     ): array {
         $project = realpath($projectDirectory);
         $mirror = realpath($mirrorDirectory);
@@ -70,7 +71,9 @@ final class DistributionAssembler
             || ($metadata['sourceSha256'] ?? null) !== $source['sha256']
             || ($inputs['sourceTreeSha256'] ?? null) !== $source['sha256']
             || ($inputs['composerLockSha256'] ?? null)
-                !== $this->digest($project . '/composer.lock')
+                !== (is_file($project . '/composer.lock')
+                    ? $this->digest($project . '/composer.lock')
+                    : hash('sha256', ''))
             || ($inputs['compatibilityLockSha256'] ?? null)
                 !== $this->digest($compatibilityLockFile)
             || ($inputs['toolchainLockSha256'] ?? null)
@@ -79,12 +82,6 @@ final class DistributionAssembler
         ) {
             throw new ConfigurationException(
                 'distribution assembly inputs differ from locked project sources'
-            );
-        }
-        $profile = (new ProfileDetector($mirror))->detect();
-        if ($profile->name() !== ($inputs['profile'] ?? null)) {
-            throw new ConfigurationException(
-                'distribution assembly profile differs from the generated project'
             );
         }
         $sensitiveMarkers = array_values(array_unique(array_merge(
@@ -96,7 +93,6 @@ final class DistributionAssembler
         $beforeStage?->__invoke('coverage');
         $plan = (new GeneratedProjectCoveragePlanner())->plan(
             $mirror,
-            $profile,
             $compatibilityLockFile,
             $generatedMappings
         );
@@ -140,7 +136,8 @@ final class DistributionAssembler
             $plan['coverage'],
             $plan['resources'],
             $inputs,
-            $host
+            $host,
+            $interpreted
         );
         $beforeStage?->__invoke('verify');
         $verification = $this->verifier->verify($candidate, $sensitiveMarkers);
@@ -157,7 +154,14 @@ final class DistributionAssembler
                 $this->assertSourceUnchanged($project, $source);
             }
         );
-        return $published + ['verification' => $verification];
+        return $published + [
+            'verification' => $verification,
+            'coverage' => [
+                'direct' => $plan['compiled']['direct'] ?? 0,
+                'shadow' => $plan['compiled']['shadow'] ?? 0,
+                'interpreted' => $plan['compiled']['interpreted'] ?? count($interpreted),
+            ],
+        ];
     }
 
     /**

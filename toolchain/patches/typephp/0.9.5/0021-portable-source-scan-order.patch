@@ -1,0 +1,17 @@
+--- a/src/Build/FileScanner.php
++++ b/src/Build/FileScanner.php
+@@ -102,7 +102,13 @@
+         // which differs between a fresh checkout and a long-lived worktree.
+         // Preparation allocates symbol-cache IDs while visiting this list, so
+         // keep both generated code and cache classification deterministic.
+-        sort($files, SORT_STRING);
++        // Native separators sort differently on Windows and Unix: for example,
++        // "Command\Foo" follows "CommandLoader" but "Command/Foo" precedes it.
++        usort($files, static function (string $left, string $right): int {
++            $portableLeft = str_replace('\\', '/', $left);
++            $portableRight = str_replace('\\', '/', $right);
++            return strcmp($portableLeft, $portableRight) ?: strcmp($left, $right);
++        });
+ 
+         // Keep aliases until the project-level ignore rules have run. If two
+         // links reach the same file and only one is ignored, removing aliases

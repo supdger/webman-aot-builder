@@ -2,6 +2,15 @@
 
 本文按 GitHub 正式 Release 整理；日期采用 Release 的 UTC 发布日期。候选版草稿不列为正式版本。
 
+## [v0.5.10](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.10) — 2026-10-27
+
+- 编译链路升级为 TypePHP 0.9.5（自 0.9.2），配套补丁集同步迁移，新增补丁修复类常量与方法同名（仅大小写差异）时生成符号冲突导致的链接失败。
+- 新增"解释执行"兜底档位：单个源码文件无法 AOT 编译时不再中断构建，自动降级为内嵌 Zend 解释执行并重试，构建结束按"已编译 / 已处理 / 已解释"分档报告。任意 Webman 项目都应产出 `dist-aot/`。
+- 入口自动识别：标准 Webman 布局（根目录 `start.php`）无需再传 `--entry`。
+- 源码边界收紧：跳过 `runtime/`、`node_modules/`、vendor 测试与文档目录（test/fixture/spec/docs/benchmark 等）、所有隐藏目录及符号链接；非项目目录运行时给出明确提示而非扫描报错。
+- 隔离镜像内自动改写项目源码中硬编码的本机绝对路径字面量为 `runtime_path()`/`base_path()` 调用，防止开发机路径泄漏进产物，也不修改用户原文件。
+- 修复 Composer 安装器升级时 `Console`/`Uninstaller` 类未加载的问题。
+
 ## [v0.2.3](https://github.com/supdger/webman-aot-builder/releases/tag/v0.2.3) — 2026-09-28
 
 - 修复 Windows Git 将 SaiAdmin 的 `support/bootstrap.php` 检出为 CRLF 时，构建器误判启动源码不兼容的问题。构建过程只规范化隔离构建镜像中的锁定源码，不改项目文件；真实内容差异仍会被拒绝。无需调整项目文件或全局 Git 设置。

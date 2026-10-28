@@ -1,0 +1,195 @@
+--- a/src/Parser/FunctionCallTrait.php
++++ b/src/Parser/FunctionCallTrait.php
+@@ -126,6 +126,20 @@
+      * falling back to its global builtin. Resolve on the first execution and
+      * cache that target choice for the rest of the request.
+      */
++    protected function parseNamespacedFunctionPointer(array $target): string
++    {
++        $namespaced = strtolower($this->namespace . '\\' . ltrim($target['source'], '\\'));
++        $literal = $this->getLiteralString($namespaced);
++        $resolution = $this->getFunctionResolutionCache();
++        $namespacedPointer = $this->getFuncPtr($namespaced);
++        $globalPointer = $this->getFuncPtr($target['target']);
++        return '([&]() -> zend_function * { auto &resolution = ' . $resolution
++            . '; if (resolution == 0) { const bool namespaced = zend_hash_exists(EG(function_table), '
++            . $literal . '.str()); auto *function = namespaced ? ' . $namespacedPointer . ' : ' . $globalPointer
++            . '; resolution = namespaced ? 1 : 2; return function; } return resolution == 1 ? '
++            . $namespacedPointer . ' : ' . $globalPointer . '; })()';
++    }
++
+     protected function parseNamespacedGetCalledClassFallback(string $function): string
+     {
+         $function = $this->getLiteralString($function);
+@@ -194,6 +208,43 @@
+ 
+     protected function parseFuncCall(Expr\FuncCall $expr): string
+     {
++        if ($this->runtimeDeclarationsEnabled && $expr->getAttribute('typephpSourceConstantDeclaration', false)) {
++            $name = $expr->args[0]->value;
++            if (!$name instanceof Node\Scalar\String_) {
++                $this->fatalError($expr, 'Invalid source constant declaration name');
++            }
++            $value = $this->parseExprAsValue($expr->args[1]->value);
++            $lineGuard = $this->genTmpVarName();
++            $this->context->beforeStmtLines[] = 'TypephpNativeCallLine ' . $lineGuard
++                . '(' . $expr->getStartLine() . ');';
++            $this->context->afterStmtLines[] = $lineGuard . '.restore();';
++            $literal = '"' . $this->escapeString($name->value) . '"';
++            return '([&](php::Var value) { zend_constant constant; '
++                . 'ZVAL_COPY_DEREF(&constant.value, value.ptr()); '
++                . 'ZEND_CONSTANT_SET_FLAGS(&constant, 0, PHP_USER_CONSTANT); '
++                . 'constant.name = zend_string_init(' . $literal . ', sizeof(' . $literal . ') - 1, 0); '
++                . 'zend_register_constant(&constant); php::throwErrorIfOccurred(); return php::null; '
++                . '})(php::Var(' . $value . '))';
++        }
++        if ($this->runtimeDeclarationsEnabled && $expr->getAttribute('typephpFileReturnCall', false)) {
++            return 'typephp_finish_file(' . $this->parseExprAsValue($expr->args[0]->value) . ')';
++        }
++        if ($this->runtimeDeclarationsEnabled && $expr->name instanceof Node\Name\FullyQualified
++            && $expr->getAttribute('typephpParseErrorCall', false)
++            && $expr->name->toString() === '__typephp_parse_error') {
++            return 'typephp_parse_error("' . $this->escapeString($expr->args[0]->value->value)
++                . '", "' . $this->escapeString($expr->args[1]->value->value)
++                . '", ' . $expr->args[2]->value->value . ')';
++        }
++        if ($this->runtimeDeclarationsEnabled && $expr->name instanceof Node\Name\FullyQualified
++            && $expr->getAttribute('typephpDeclarationCall', false)
++            && $expr->name->toString() === \TypePhp\Transform\RuntimeDeclarationLowering::DECLARE_FUNCTION
++        ) {
++            if (!$expr->args[0]->value instanceof Node\Scalar\String_) {
++                $this->fatalError($expr, 'Invalid native declaration identity');
++            }
++            return 'typephp_declare_runtime("' . $expr->args[0]->value->value . '", false)';
++        }
+         $runtimeCallScope = null;
+         $runtimeResultType = null;
+         $this->validateImmutableCall($expr);
+@@ -238,6 +289,54 @@
+             $functionTarget = $this->resolveStaticFunctionCallTarget($expr->name);
+             $name = $functionTarget['target'];
+             $globalName = $functionTarget['lower'];
++            $definedVariables = $this->parseDynamicDefinedVariables($expr, $functionTarget);
++            if ($definedVariables !== null) {
++                return $definedVariables;
++            }
++            if ($this->runtimeDeclarationsEnabled && $this->hasDynamicVariableScope()
++                && ($functionTarget['definitelyGlobal'] || $functionTarget['namespacedFallback'])
++                && in_array($globalName, ['extract', 'compact'], true)
++                && !$expr->isFirstClassCallable()) {
++                foreach ($expr->args as $index => $argument) {
++                    if ($globalName === 'extract' && ($argument->name?->name === 'array'
++                        || ($index === 0 && $argument->name === null))
++                        && !$argument->unpack
++                        && ($argument->value instanceof Expr\Variable
++                            || $argument->value instanceof Expr\ArrayDimFetch
++                            || $argument->value instanceof Expr\PropertyFetch
++                            || $argument->value instanceof Expr\StaticPropertyFetch)) {
++                        $argument->setAttribute('typephpOwnedReferenceArgument', true);
++                        $this->prepareDynamicReferenceCallArgument($argument);
++                    }
++                }
++                $arguments = $this->parseCallArgs($expr->args, separateNamedArgs: false, forceArrayArgs: true);
++                $native = 'typephp_call_scope_builtin(' . $this->getFuncPtr($globalName)
++                    . ', ' . $this->getDynamicVariableScopeExpr() . ', ' . $arguments . ')';
++                if (!$functionTarget['namespacedFallback']) { return $native; }
++                $namespaced = $this->getLiteralString(strtolower($this->namespace . '\\' . $functionTarget['source']));
++                $resolution = $this->getFunctionResolutionCache();
++                return '([&]() -> php::Var { auto &resolution = ' . $resolution
++                    . '; if (resolution == 0) { resolution = zend_hash_exists(EG(function_table), '
++                    . $namespaced . '.str()) ? 1 : 2; } return resolution == 1 ? php::call('
++                    . $namespaced . ', ' . $arguments . ') : ' . $native . '; }())';
++            }
++            if ($this->runtimeDeclarationsEnabled
++                && ($functionTarget['definitelyGlobal'] || $functionTarget['namespacedFallback'])
++                && in_array($globalName, ['file_exists', 'is_file', 'realpath', 'chdir', 'getcwd'], true)
++                && ((count($expr->args) === 1 && !$expr->args[0]->unpack) || ($globalName === 'getcwd' && $expr->args === [])) && !$expr->isFirstClassCallable()
++            ) {
++                $argument = $globalName === 'getcwd' ? 'php::Var{}' : $this->parseIdentifier($expr->args[0]->value);
++                $native = 'typephp_source_file_query("' . $globalName . '", php::Var(' . $argument . '))';
++                if ($functionTarget['namespacedFallback']) {
++                    $namespaced = $this->getLiteralString(strtolower($this->namespace . '\\' . $functionTarget['source']));
++                    $resolution = $this->getFunctionResolutionCache();
++                    return '([&]() -> php::Var { auto &resolution = ' . $resolution
++                        . '; if (resolution == 0) { resolution = zend_hash_exists(EG(function_table), '
++                        . $namespaced . '.str()) ? 1 : 2; } return resolution == 1 ? '
++                        . 'php::call(' . $namespaced . ', {php::Var(' . $argument . ')}) : ' . $native . '; })()';
++                }
++                return $native;
++            }
+             $this->compilationStatistics->record(
+                 CompilationStatistics::FUNCTIONS,
+                 $globalName,
+@@ -300,7 +399,7 @@
+             if ($mayCallGlobalBuiltin) {
+                 $this->assertWasiFunctionSupported($expr, $globalName);
+                 $this->assertNanoFunctionSupported($expr, $globalName);
+-                if (!$isNamespacedGetCalledClassFallback && $this->isInternalFunction($globalName)) {
++                if (!$functionTarget['namespacedFallback'] && $this->isInternalFunction($globalName)) {
+                     $this->markInternalFunctionCallbackCall($globalName, $expr->args);
+                 }
+                 if (in_array($globalName, Constants::UNSUPPORTED_FUNCTIONS, true)) {
+@@ -335,7 +434,7 @@
+             if ($functionTarget['definitelyGlobal']) {
+                 $name = strtolower($name);
+             }
+-            if ($mayCallGlobalBuiltin && !$isNamespacedGetCalledClassFallback) {
++            if ($functionTarget['definitelyGlobal'] && !$isNamespacedGetCalledClassFallback) {
+                 $this->checkInternalFunctionArgCount($name, $expr);
+             }
+             if ($functionTarget['definitelyGlobal']
+@@ -358,8 +457,7 @@
+                     $this->namespace . '\\' . ltrim($functionTarget['source'], '\\'),
+                 );
+             }
+-            $canOptimizeBuiltinFallback = $functionTarget['definitelyGlobal']
+-                || ($functionTarget['namespacedFallback'] && $globalName !== 'get_called_class');
++            $canOptimizeBuiltinFallback = $functionTarget['definitelyGlobal'];
+             if ($canOptimizeBuiltinFallback && in_array($globalName, ['array_key_exists', 'key_exists'], true)) {
+                 $typedKeyExists = $this->parseTypedArrayKeyExistsCall($expr);
+                 if ($typedKeyExists !== null) {
+@@ -391,7 +489,13 @@
+                 }
+             }
+             $placeHolder = $this->getLiteralString($functionTarget['target']);
+-            $fn = $this->getFuncPtr($name);
++            if ($functionTarget['namespacedFallback']) {
++                $fn = $this->addTmpVar('zend_function *');
++                $this->context->beforeStmtLines[] = $fn . ' = '
++                    . $this->parseNamespacedFunctionPointer($functionTarget) . ';';
++            } else {
++                $fn = $this->getFuncPtr($name);
++            }
+             if ($this->debug) {
+                 $this->context->beforeStmtLines[] = $this->formatCppLineComment('Func Call: ', $name . '()');
+             }
+@@ -405,6 +509,12 @@
+             $placeHolder = $fn = $tmpVar;
+             $name = '';
+         }
++        if ($this->runtimeDeclarationsEnabled) {
++            $lineGuard = $this->genTmpVarName();
++            $this->context->beforeStmtLines[] = 'TypephpNativeCallLine ' . $lineGuard
++                . '(' . $expr->getStartLine() . ');';
++            $this->context->afterStmtLines[] = $lineGuard . '.restore();';
++        }
+         if (empty($expr->args)) {
+             if ($name === '' && $runtimeCallScope === null) {
+                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ')';
+@@ -417,8 +527,15 @@
+         }
+         try {
+             if ($name === '' && $runtimeCallScope === null) {
++                $runtimeFunction = '';
++                if ($this->runtimeDeclarationsEnabled) {
++                    $runtimeFunction = $this->addTmpVar('zend_function *');
++                    $scope = ($this->methodDef || $this->context->inClosure) ? '&' . $this->getCallableScopeExpr() : 'nullptr';
++                    $this->context->beforeStmtLines[] = $runtimeFunction . ' = typephp_runtime_callable_function('
++                        . $fn . ', ' . $scope . ');';
++                }
+                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
+-                    . $this->parseCallArgs($expr->args) . ')';
++                    . $this->parseCallArgs($expr->args, runtimeFunction: $runtimeFunction, requiresArgsContainer: true) . ')';
+             }
+             return $this->convertRuntimeCallResult(
+                 $runtimeResultType,

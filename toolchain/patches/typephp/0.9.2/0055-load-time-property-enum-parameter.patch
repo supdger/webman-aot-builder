@@ -1,0 +1,208 @@
+--- a/src/Transform/ConstantExpressionValidationVisitor.php
++++ b/src/Transform/ConstantExpressionValidationVisitor.php
+@@ -18,8 +18,9 @@
+ /**
+  * Applies the allow_dynamic values used by php-src at each declaration site.
+  *
+- * false: class constants, property defaults and enum cases.
+- * true: attributes, parameter defaults and global constants.
++ * Attributes stay on this prepare-time whitelist. Class constants, global
++ * constants, property defaults, enum cases, and parameter defaults are checked
++ * when their file is loaded. false rejects new; true allows it.
+  *
+  * PHP 8.4+ compiles static variable initializers as regular expressions and
+  * evaluates them only once, so they do not use the constant-expression path.
+@@ -79,14 +80,12 @@
+                         $property->default,
+                         'Closures in property default values are not supported by TypePHP',
+                     );
+-                    $this->validator->validate($property->default, allowDynamic: false);
+                 }
+             }
+             return null;
+         }
+ 
+-        if ($node instanceof Node\Stmt\EnumCase && $node->expr !== null) {
+-            $this->validator->validate($node->expr, allowDynamic: false);
++        if ($node instanceof Node\Stmt\EnumCase) {
+             return null;
+         }
+ 
+@@ -95,7 +94,6 @@
+                 $node->default,
+                 'Closures in parameter default values are not supported by TypePHP',
+             );
+-            $this->validator->validate($node->default, allowDynamic: true);
+             return null;
+         }
+ 
+--- a/src/Transform/RuntimeDeclarationLowering.php
++++ b/src/Transform/RuntimeDeclarationLowering.php
+@@ -132,40 +132,38 @@
+                         && $this->literalConstantValue($constant->value, $value)) {
+                         $ownConstants[$constant->name->toString()] = $value;
+                     }
+-                    $error = $this->constantExpressionError($constant->value);
+-                    if ($error === null) { continue; }
+-                    $line = $node->getStartLine();
+-                    if (!$error['conditional']) {
+-                        $this->compileErrors[] = ['line' => $line, 'message' => $error['message']];
+-                        continue;
+-                    }
+-                    $expression = $printer->prettyPrintExpr($constant->value);
+-                    $start = $constant->value->getStartFilePos();
+-                    $end = $constant->value->getEndFilePos();
+-                    if ($this->sourceCode !== '' && $start >= 0 && $end >= $start) {
+-                        $expression = substr($this->sourceCode, $start, $end - $start + 1);
+-                    }
+-                    $prefix = $namespace === '' ? '' : 'namespace ' . $namespace . '; ';
+-                    if ($uses !== []) {
+-                        foreach (token_get_all('<?php ' . $printer->prettyPrint($uses)) as $token) {
+-                            if (is_array($token)) {
+-                                if (in_array($token[0], [T_OPEN_TAG, T_COMMENT, T_DOC_COMMENT], true)) { continue; }
+-                                $prefix .= $token[0] === T_WHITESPACE ? ' ' : $token[1];
+-                            } else { $prefix .= $token; }
+-                        }
+-                        $prefix .= ' ';
+-                    }
+-                    $prefix .= str_repeat("\n", max(0, $line - 1));
+-                    $prototype = $prefix . 'const __typephp_check_' . substr(hash('sha256', $this->sourceIdentity . ':' . $line), 0, 24)
+-                        . ' = ' . str_repeat("\n", max(0, $constant->value->getStartLine() - $line)) . $expression . ';';
+-                    $this->compileChecks[] = ['line' => $line, 'context' => $node instanceof Node\Stmt\ClassConst ? 'class' : 'global',
+-                        'class' => $class, 'prototype' => $prototype, 'expression' => $expression];
++                    $this->noteConstantExpression($constant->value, $node->getStartLine(), false,
++                        $node instanceof Node\Stmt\ClassConst ? 'class' : 'global', $class, $namespace, $uses, $printer);
+                 }
+                 continue;
+             }
+-            // Parameter defaults use a different constant-expression context:
+-            // new is legal there. Only recurse into function bodies.
++            if ($node instanceof Node\Stmt\Property) {
++                foreach ($node->props as $property) {
++                    if ($property->default === null) { continue; }
++                    $property->default = $this->normalizeConstantExpression($property->default,
++                        $trait ? '' : $class, $ownConstants);
++                    $this->noteConstantExpression($property->default, $node->getStartLine(), false,
++                        'property', $class, $namespace, $uses, $printer);
++                }
++                $this->prepareConstantExpressions($node->hooks, $namespace, $uses, $class, $trait);
++                continue;
++            }
++            if ($node instanceof Node\Stmt\EnumCase && $node->expr !== null) {
++                $node->expr = $this->normalizeConstantExpression($node->expr, $trait ? '' : $class, $ownConstants);
++                $this->noteConstantExpression($node->expr, $node->getStartLine(), false,
++                    'enum', $class, $namespace, $uses, $printer);
++                continue;
++            }
++            // Parameter defaults allow new. Legality is still checked when the
++            // declaring file is loaded, not while preparing the rest of the project.
+             if ($node instanceof Node\FunctionLike) {
++                foreach ($node->getParams() as $param) {
++                    if ($param->default === null) { continue; }
++                    $param->default = $this->normalizeConstantExpression($param->default,
++                        $trait ? '' : $class, $ownConstants);
++                    $this->noteConstantExpression($param->default, $node->getStartLine(), true,
++                        'parameter', $class, $namespace, $uses, $printer);
++                }
+                 $this->prepareConstantExpressions($node->getStmts() ?? [], $namespace, $uses);
+                 continue;
+             }
+@@ -306,8 +304,57 @@
+         return $expression;
+     }
+ 
+-    private function constantExpressionError(Node\Expr $expression, bool $conditional = false): ?array
+-    {
++    private function noteConstantExpression(
++        Node\Expr $expression,
++        int $line,
++        bool $allowDynamic,
++        string $context,
++        string $class,
++        string $namespace,
++        array $uses,
++        \PhpParser\PrettyPrinter\Standard $printer,
++    ): void
++    {
++        $error = $this->constantExpressionError($expression, false, $allowDynamic);
++        if ($error === null) {
++            return;
++        }
++        if (!$error['conditional']) {
++            $this->compileErrors[] = ['line' => $line, 'message' => $error['message']];
++            return;
++        }
++        $text = $printer->prettyPrintExpr($expression);
++        $start = $expression->getStartFilePos();
++        $end = $expression->getEndFilePos();
++        if ($this->sourceCode !== '' && $start >= 0 && $end >= $start) {
++            $text = substr($this->sourceCode, $start, $end - $start + 1);
++        }
++        $prefix = $namespace === '' ? '' : 'namespace ' . $namespace . '; ';
++        if ($uses !== []) {
++            foreach (token_get_all('<?php ' . $printer->prettyPrint($uses)) as $token) {
++                if (is_array($token)) {
++                    if (in_array($token[0], [T_OPEN_TAG, T_COMMENT, T_DOC_COMMENT], true)) { continue; }
++                    $prefix .= $token[0] === T_WHITESPACE ? ' ' : $token[1];
++                } else { $prefix .= $token; }
++            }
++            $prefix .= ' ';
++        }
++        $prefix .= str_repeat("\n", max(0, $line - 1));
++        $padding = str_repeat("\n", max(0, $expression->getStartLine() - $line));
++        $hash = substr(hash('sha256', $this->sourceIdentity . ':' . $line
++            . ($context === 'class' || $context === 'global' ? '' : ':' . $context)), 0, 24);
++        $prototype = $context === 'parameter'
++            ? $prefix . 'return function ($__typephp_value = ' . $padding . $text . ') {};'
++            : $prefix . 'const __typephp_check_' . $hash . ' = ' . $padding . $text . ';';
++        $this->compileChecks[] = ['line' => $line, 'context' => $context, 'class' => $class,
++            'prototype' => $prototype, 'expression' => $text];
++    }
++
++    private function constantExpressionError(Node\Expr $expression, bool $conditional = false, bool $allowDynamic = false): ?array
++    {
++        if ($allowDynamic && $expression instanceof Node\Expr\New_) {
++            return $this->allowedNewConstantError($expression, $conditional);
++        }
+         $allowed = $expression instanceof Node\Scalar\Int_ || $expression instanceof Node\Scalar\Float_
+             || $expression instanceof Node\Scalar\String_ || $expression instanceof Node\Scalar\MagicConst
+             || $expression instanceof Node\Expr\ConstFetch || $expression instanceof Node\Expr\ClassConstFetch
+@@ -336,10 +383,37 @@
+                         || $expression instanceof Node\Expr\BinaryOp\Coalesce) && $key === 'right');
+                 foreach ($childrenToCheck as $operand) {
+                     if ($operand instanceof Node\Expr) {
+-                        $error = $this->constantExpressionError($operand, $conditional || $branch);
++                        $error = $this->constantExpressionError($operand, $conditional || $branch, $allowDynamic);
+                         if ($error !== null) { return $error; }
+                     }
+                 }
++            }
++        }
++        return null;
++    }
++
++    private function allowedNewConstantError(Node\Expr\New_ $expression, bool $conditional): ?array
++    {
++        $class = $expression->class;
++        if ($class instanceof Node\Stmt\Class_) {
++            return ['message' => 'Cannot use anonymous class in constant expression', 'conditional' => $conditional];
++        }
++        if (!$class instanceof Node\Name) {
++            return ['message' => 'Cannot use dynamic class name in constant expression', 'conditional' => $conditional];
++        }
++        if (strtolower($class->toString()) === 'static') {
++            return ['message' => '"static" is not allowed in compile-time constants', 'conditional' => $conditional];
++        }
++        if ($expression->isFirstClassCallable()) {
++            return ['message' => 'Cannot create Closure for new expression', 'conditional' => $conditional];
++        }
++        foreach ($expression->args as $argument) {
++            if (!$argument instanceof Node\Arg || $argument->unpack || $argument->byRef) {
++                return ['message' => 'Constant expression contains invalid operations', 'conditional' => $conditional];
++            }
++            $error = $this->constantExpressionError($argument->value, $conditional, true);
++            if ($error !== null) {
++                return $error;
+             }
+         }
+         return null;

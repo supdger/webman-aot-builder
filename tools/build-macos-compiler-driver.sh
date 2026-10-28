@@ -15,10 +15,10 @@ fi
 archive=$1
 output=$2
 workspace=$3
-expected=dc1ad8b4109898d9db49744450403874858c23efc685b1032a50bd1e83906848
+expected=32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1
 actual=$(shasum -a 256 "$archive" | awk '{print $1}')
 [ "$actual" = "$expected" ] || {
-    echo "Locked PHP 8.4.25 source digest mismatch." >&2
+    echo "Locked PHP 8.4.26 source digest mismatch." >&2
     exit 78
 }
 [ -d "$workspace" ] && [ -z "$(ls -A "$workspace")" ] || {
@@ -32,14 +32,14 @@ actual=$(shasum -a 256 "$archive" | awk '{print $1}')
 
 workspace=$(cd "$workspace" && pwd -P)
 /usr/bin/tar -xf "$archive" -C "$workspace"
-source_root="$workspace/php-8.4.25"
+source_root="$workspace/php-8.4.26"
 [ -f "$source_root/configure" ] || {
     echo "Locked PHP source archive has an unexpected root." >&2
     exit 78
 }
 sdk=$(xcrun --show-sdk-path)
 prefix=/opt/webman-aot-builder/compiler-php
-export CFLAGS="-O2 -ffile-prefix-map=$source_root=/usr/src/webman-aot-builder/php-8.4.25"
+export CFLAGS="-O2 -ffile-prefix-map=$source_root=/usr/src/webman-aot-builder/php-8.4.26"
 export SOURCE_DATE_EPOCH=0
 
 (
@@ -73,7 +73,7 @@ export SOURCE_DATE_EPOCH=0
 
 cp "$source_root/sapi/cli/php" "$output"
 chmod 700 "$output"
-[ "$("$output" -n -r 'echo PHP_VERSION;')" = 8.4.25 ] || {
+[ "$("$output" -n -r 'echo PHP_VERSION;')" = 8.4.26 ] || {
     echo "Compiler PHP driver version mismatch." >&2
     exit 78
 }

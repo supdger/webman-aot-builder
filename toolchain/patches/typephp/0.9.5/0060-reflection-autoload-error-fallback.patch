@@ -1,0 +1,15 @@
+--- a/src/Resolver/Reflection.php
++++ b/src/Resolver/Reflection.php
+@@ -158,6 +158,12 @@
+             try {
+                 $ref = new \ReflectionClass($className);
+             } catch (\ReflectionException $e) {
++                return null;
++            } catch (\Throwable $e) {
++                // Autoloading a class name that is only probed here may itself
++                // fail (e.g. a vendored file whose parent is absent). Such a
++                // class is simply not reflectable: callers already treat a
++                // null result as "fall back to the by-name path".
+                 return null;
+             }
+             self::$classes[$className] = $ref;

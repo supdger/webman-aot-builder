@@ -13,8 +13,6 @@ final class SourceTreeSnapshot
         '.webman-aot-builder',
         '.webman-aot',
         'dist-aot',
-        'runtime',
-        'node_modules',
     ];
 
     public function __construct(private readonly string $projectDirectory)
@@ -26,7 +24,17 @@ final class SourceTreeSnapshot
      */
     public function capture(): array
     {
-        RuntimeDataPaths::assertNoExcludedPhp($this->projectDirectory);
+        $snapshot = $this->captureWithFiles();
+
+        return ['sha256' => $snapshot['sha256'], 'files' => $snapshot['files']];
+    }
+
+    /**
+     * @return array{sha256:string,files:int,digests:array<string,string>}
+     */
+    public function captureWithFiles(): array
+    {
+        RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
         $files = [];
         $directory = new \RecursiveDirectoryIterator(
             $this->projectDirectory,
@@ -35,18 +43,25 @@ final class SourceTreeSnapshot
         $filter = new \RecursiveCallbackFilterIterator(
             $directory,
             function (\SplFileInfo $entry): bool {
+                if ($entry->isDir() && str_starts_with($entry->getFilename(), '.')) {
+                    return false;
+                }
                 $relative = $this->relative($entry->getPathname());
                 $root = explode('/', $relative, 2)[0];
                 if (in_array($root, self::EXCLUDED_ROOTS, true)
-                    || RuntimeDataPaths::isSourceExcluded($relative)
-                    || preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                    || (RuntimeDataPaths::isWritableDataPath($relative)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
+                    || $entry->getFilename() === '.DS_Store'
+                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                        && strtolower($entry->getExtension()) !== 'php')
+                    || (in_array($root, ['runtime', 'node_modules'], true)
+                        && !$entry->isDir())
+                    || RuntimeDataPaths::isDevFixturePath($relative)
                 ) {
                     return false;
                 }
                 if ($entry->isLink()) {
-                    throw new ConfigurationException(
-                        "source snapshot refuses symlink: {$relative}"
-                    );
+                    return false;
                 }
 
                 return true;
@@ -73,6 +88,7 @@ final class SourceTreeSnapshot
         return [
             'sha256' => hash_final($context),
             'files' => count($files),
+            'digests' => $files,
         ];
     }
 

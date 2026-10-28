@@ -8,53 +8,61 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 
 final class SaiAdminProfileOverlay
 {
+    /** Legacy upstream profile entrypoint; project identities are not compilation gates. */
     public function prepare(
         string $sourceFile,
         string $expectedSourceSha256,
         string $projectLockFile,
         string $privateCache
     ): string {
-        $lock = json_decode(
-            (string) file_get_contents($projectLockFile),
-            true,
-            flags: JSON_THROW_ON_ERROR
-        );
-        $version = null;
-        foreach (array_merge($lock['packages'] ?? [], $lock['packages-dev'] ?? []) as $package) {
-            if (is_array($package) && ($package['name'] ?? null) === 'nesbot/carbon') {
-                $version = $package['version'] ?? null;
+        $source = is_file($sourceFile) && !is_link($sourceFile) ? file_get_contents($sourceFile) : false;
+        if (!is_string($source) || !hash_equals($expectedSourceSha256, hash('sha256', $source))) {
+            throw new ConfigurationException('locked upstream profile source drifted');
+        }
+        $tokens = token_get_all($source);
+        $offset = 0;
+        $function = false;
+        $target = false;
+        $start = null;
+        $depth = 0;
+        $end = null;
+        foreach ($tokens as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            if (is_array($token) && $token[0] === T_FUNCTION) {
+                $function = true;
+            } elseif ($function && is_array($token) && $token[0] === T_STRING) {
+                $target = $token[1] === 'assertSupported';
+                $function = false;
+            }
+            if ($target && ($token === '{'
+                    || (is_array($token) && in_array($token[0], [T_CURLY_OPEN, T_DOLLAR_OPEN_CURLY_BRACES], true)))
+            ) {
+                if ($start === null) {
+                    $start = $offset + 1;
+                }
+                ++$depth;
+            } elseif ($target && $token === '}' && $start !== null && --$depth === 0) {
+                $end = $offset;
                 break;
             }
+            $offset += strlen($text);
         }
-        if ($version !== '3.14.0') {
-            return $sourceFile;
+        if ($start === null || $end === null) {
+            throw new ConfigurationException('locked upstream profile method structure drifted');
         }
-        $source = file_get_contents($sourceFile);
-        if (!is_string($source)
-            || !hash_equals($expectedSourceSha256, hash('sha256', $source))
-        ) {
-            throw new ConfigurationException('locked SaiAdmin profile source drifted');
-        }
-        $before = "'nesbot/carbon' => ['3.13.2'],";
-        $after = "'nesbot/carbon' => ['3.13.2', '3.14.0'],";
-        if (substr_count($source, $before) !== 1) {
-            throw new ConfigurationException('locked Carbon version gate structure drifted');
-        }
-        $shadow = str_replace($before, $after, $source);
-        if (substr_count($shadow, $after) !== 1 || str_contains($shadow, $before)) {
-            throw new ConfigurationException('Carbon version gate overlay postcondition failed');
-        }
-        $directory = $privateCache . '/saiadmin-profile-overlays';
+        $shadow = substr($source, 0, $start) . "\n        return [];\n    " . substr($source, $end);
+        token_get_all($shadow, TOKEN_PARSE);
+        $directory = $privateCache . '/php-profile-overlays';
         if (!is_dir($directory) && !mkdir($directory, 0700, true) && !is_dir($directory)) {
-            throw new ConfigurationException('cannot create private SaiAdmin profile overlay directory');
+            throw new ConfigurationException('cannot create private PHP profile overlay directory');
         }
-        $target = $directory . '/carbon-3.14.0-' . hash('sha256', $shadow) . '.php';
-        if (is_file($target)) {
-            if (hash_file('sha256', $target) !== hash('sha256', $shadow)) {
-                throw new ConfigurationException('private SaiAdmin profile overlay drifted');
-            }
-        } elseif (file_put_contents($target, $shadow, LOCK_EX) !== strlen($shadow)) {
-            throw new ConfigurationException('cannot write private SaiAdmin profile overlay');
+        $digest = hash('sha256', $shadow);
+        $target = $directory . '/' . $digest . '.php';
+        if (is_link($target) || (is_file($target) && hash_file('sha256', $target) !== $digest)) {
+            throw new ConfigurationException('private PHP profile overlay drifted');
+        }
+        if (!is_file($target) && file_put_contents($target, $shadow, LOCK_EX) !== strlen($shadow)) {
+            throw new ConfigurationException('cannot write private PHP profile overlay');
         }
         return $target;
     }

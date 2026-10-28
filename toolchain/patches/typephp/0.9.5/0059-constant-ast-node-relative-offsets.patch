@@ -1,0 +1,21 @@
+--- a/src/gen_stub.php
++++ b/src/gen_stub.php
+@@ -3121,10 +3121,14 @@
+         $code .= "\t\tGC_SET_REFCOUNT({$id}_ref, 1);\n";
+         $flags = $persistent ? 'GC_CONSTANT_AST | ((GC_PERSISTENT | GC_IMMUTABLE) << GC_FLAGS_SHIFT)' : 'GC_CONSTANT_AST';
+         $code .= "\t\tGC_TYPE_INFO({$id}_ref) = $flags;\n";
+-        $offset = "sizeof(zend_ast_ref)";
+-        foreach ($nodes as $index => $node) {
+-            $code .= "\t\tzend_ast *{$id}_node_$index = (zend_ast *) ({$id}_block + $offset);\n";
+-            $offset .= " + {$id}_size_$index";
++        foreach (array_keys($nodes) as $index) {
++            // Each node pointer is relative to its predecessor: accumulating
++            // the offset terms into the emitted expression would make the
++            // generated header grow quadratically with the constant size.
++            $code .= $index === 0
++                ? "\t\tzend_ast *{$id}_node_0 = (zend_ast *) ({$id}_block + sizeof(zend_ast_ref));\n"
++                : "\t\tzend_ast *{$id}_node_$index = (zend_ast *) ((char *) {$id}_node_" . ($index - 1)
++                    . " + {$id}_size_" . ($index - 1) . ");\n";
+         }
+         foreach ($nodes as $index => $node) {
+             $ptr = "{$id}_node_$index";

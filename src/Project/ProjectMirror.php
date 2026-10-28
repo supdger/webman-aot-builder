@@ -13,8 +13,6 @@ final class ProjectMirror
         '.webman-aot-builder',
         '.webman-aot',
         'dist-aot',
-        'runtime',
-        'node_modules',
     ];
 
     public function __construct(private readonly string $projectDirectory)
@@ -43,15 +41,20 @@ final class ProjectMirror
             throw new ConfigurationException('project build mirror already exists');
         }
         $sourceSnapshot = new SourceTreeSnapshot($project);
-        $before = $sourceSnapshot->capture();
+        $before = $sourceSnapshot->captureWithFiles();
         $candidate = $build . '/.project-' . bin2hex(random_bytes(8));
         if (!mkdir($candidate, 0700)) {
             throw new ConfigurationException('unable to create project build mirror');
         }
         try {
             $files = $this->copyProject($project, $candidate);
-            if ($sourceSnapshot->capture() !== $before) {
-                throw new ConfigurationException('project source changed while creating build mirror');
+            $after = $sourceSnapshot->captureWithFiles();
+            if ($after !== $before) {
+                throw new ConfigurationException(
+                    'project source changed while creating build mirror: '
+                    . $this->describeChanges($before['digests'], $after['digests'])
+                    . '; wait for source writes to finish and retry webman-aot build'
+                );
             }
             ksort($files, SORT_STRING);
             $context = hash_init('sha256');
@@ -86,6 +89,9 @@ final class ProjectMirror
         $filter = new \RecursiveCallbackFilterIterator(
             $directory,
             function (\SplFileInfo $entry) use ($project): bool {
+                if ($entry->isDir() && str_starts_with($entry->getFilename(), '.')) {
+                    return false;
+                }
                 $relative = str_replace(
                     '\\',
                     '/',
@@ -93,13 +99,19 @@ final class ProjectMirror
                 );
                 $root = explode('/', $relative, 2)[0];
                 if (in_array($root, self::EXCLUDED_ROOTS, true)
-                    || RuntimeDataPaths::isSourceExcluded($relative)
-                    || preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                    || (RuntimeDataPaths::isWritableDataPath($relative)
+                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
+                    || $entry->getFilename() === '.DS_Store'
+                    || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
+                        && strtolower($entry->getExtension()) !== 'php')
+                    || (in_array($root, ['runtime', 'node_modules'], true)
+                        && !$entry->isDir())
+                    || RuntimeDataPaths::isDevFixturePath($relative)
                 ) {
                     return false;
                 }
                 if ($entry->isLink()) {
-                    throw new ConfigurationException("project mirror refuses symlink: {$relative}");
+                    return false;
                 }
                 return true;
             }
@@ -145,5 +157,36 @@ final class ProjectMirror
             }
         }
         rmdir($candidate);
+    }
+
+    /**
+     * @param array<string,string> $before
+     * @param array<string,string> $after
+     */
+    private function describeChanges(array $before, array $after): string
+    {
+        $paths = array_unique(array_merge(array_keys($before), array_keys($after)));
+        sort($paths, SORT_STRING);
+        $changes = [];
+        $count = 0;
+        foreach ($paths as $path) {
+            if (($before[$path] ?? null) === ($after[$path] ?? null)) {
+                continue;
+            }
+            ++$count;
+            if (count($changes) >= 5) {
+                continue;
+            }
+            $kind = !isset($before[$path]) ? 'added' : (!isset($after[$path]) ? 'removed' : 'modified');
+            $displayPath = strlen($path) > 120 ? substr($path, 0, 120) . '...' : $path;
+            $changes[] = $kind . ' ' . json_encode(
+                $displayPath,
+                JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR
+            );
+        }
+        $remaining = $count - count($changes);
+
+        return implode(', ', $changes)
+            . ($remaining > 0 ? " (+{$remaining} more)" : '');
     }
 }

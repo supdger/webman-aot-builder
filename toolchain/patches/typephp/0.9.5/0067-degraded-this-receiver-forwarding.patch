@@ -1,0 +1,108 @@
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -7463,8 +7463,15 @@
+                     $scope = '(EG(current_execute_data) && EG(current_execute_data)->func->common.scope'
+                         . ' ? EG(current_execute_data)->func->common.scope : ' . $scope . ')';
+                 }
+-                if (!$v->isStatic()) { $object = 'this_.object()'; }
+-                $calledScope = 'typephp_get_called_ce(this_)';
++                // The execution frame is emitted before the degraded-argument
++                // locals, so a degraded `$this` must be referenced through its
++                // `php::Object &` captured-argument slot instead of the local
++                // Var copy that is declared afterwards.
++                $frameThis = isset($this->context->varTypeDegradations['this_'])
++                    ? $this->getDegradedArgumentStorageName('this_')
++                    : 'this_';
++                if (!$v->isStatic()) { $object = $frameThis . '.object()'; }
++                $calledScope = 'typephp_get_called_ce(' . $frameThis . ')';
+             }
+             $preamble .= $this->getIndent() . 'TypePhpNativeExecutionFrame __typephp_execution_frame("'
+                 . $this->escapeString($source) . '", "' . $this->escapeString($publicName) . '", '
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -6468,16 +6468,29 @@
+                     . '(execute_data->func, zend_get_called_scope(execute_data), '
+                     . '(this_.isObject() ? this_.object() : nullptr));' . PHP_EOL;
+             } else {
++                // A degraded `$this` local is a php::Var; the bound receiver
++                // stays available as `php::Object &` in the captured-argument
++                // slot expected by php::getCallableScope().
++                $callableReceiver = isset($this->context->varTypeDegradations['this_'])
++                    ? $this->getDegradedArgumentStorageName('this_')
++                    : 'this_';
+                 $code .= $this->getIndent() . 'php::CallableScope '
+                     . $this->context->callableScopeVar . ' = php::getCallableScope('
+                     . $this->getMethodPtr($this->getFullClassName(), $this->methodDef->name)
+-                    . ', this_);' . PHP_EOL;
++                    . ', ' . $callableReceiver . ');' . PHP_EOL;
+             }
+         }
+         if ($this->context->needsCalledCe) {
++            // Closures bind `this_` as a direct `php::Object &` lambda
++            // parameter without a captured-argument slot; only outer method
++            // scopes can carry the degraded receiver storage.
++            $calledCeReceiver = !$this->context->inClosure
++                && isset($this->context->varTypeDegradations['this_'])
++                ? $this->getDegradedArgumentStorageName('this_')
++                : 'this_';
+             $code .= $this->getIndent()
+                 . 'zend_class_entry *const _typephp_called_ce = '
+-                . ($this->context->inClosure ? 'zend_get_called_scope(execute_data)' : 'typephp_get_called_ce(this_)') . ';'
++                . ($this->context->inClosure ? 'zend_get_called_scope(execute_data)' : 'typephp_get_called_ce(' . $calledCeReceiver . ')') . ';'
+                 . PHP_EOL;
+         }
+         if ($this->context->needsCalledClass) {
+--- a/src/Parser/MethodCallTrait.php
++++ b/src/Parser/MethodCallTrait.php
+@@ -1297,7 +1297,12 @@
+         }
+ 
+         $calledCe = $this->getCalledCeExpr();
+-        $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(this_))';
++        // A degraded `$this` local is a php::Var while the direct callee still
++        // expects `php::Object &`; pass the captured-argument receiver slot.
++        $directReceiver = isset($this->context->varTypeDegradations['this_'])
++            ? $this->getDegradedArgumentStorageName('this_')
++            : 'this_';
++        $direct = 'php::Var(' . self::PREFIX . $nativeFunc . '(' . $directReceiver . '))';
+         // Keep the receiver and qualify the runtime class: a child private
+         // method must not resolve as the parent's lexical private method.
+         $fallback = ($this->methodDef->flags & Modifiers::STATIC)
+@@ -1492,7 +1497,12 @@
+                     }
+                     // When a method definition calls a current-class method via self::method(), the this_ pointer must still be passed
+                     if ($this->methodDef and $self) {
+-                        $object = 'this_';
++                        // A degraded `$this` local is a php::Var; the callee
++                        // ABI still takes `php::Object &`, so forward the
++                        // captured-argument receiver slot.
++                        $object = isset($this->context->varTypeDegradations['this_'])
++                            ? $this->getDegradedArgumentStorageName('this_')
++                            : 'this_';
+                     } else {
+                         $object = $this->getCeWrapper($class);
+                     }
+--- a/src/Generator/ClosureGenerator.php
++++ b/src/Generator/ClosureGenerator.php
+@@ -26,10 +26,19 @@
+ {
+     protected function genNewClosure(string $callback, string $uses, bool $hasThis, array $params = [], bool $static = false, bool $usesThis = false, bool $returnsByRef = false): string
+     {
+-        $thisArg = $hasThis && !$static ? 'this_' : '{}';
++        // A degraded `$this` local is a php::Var while these helpers expect
++        // `php::Object &`; forward the captured-argument receiver slot. Closure
++        // bodies bind `this_` directly without a captured slot.
++        $degradedThis = !$this->context->inClosure
++            && isset($this->context->varTypeDegradations['this_']);
++        $thisArg = $hasThis && !$static
++            ? ($degradedThis ? $this->getDegradedArgumentStorageName('this_') : 'this_')
++            : '{}';
+         $calledScope = $this->context->inClosure
+             ? 'zend_get_called_scope(execute_data)'
+-            : ($this->methodDef !== null ? 'typephp_get_called_ce(this_)' : 'nullptr');
++            : ($this->methodDef !== null
++                ? 'typephp_get_called_ce(' . ($degradedThis ? $this->getDegradedArgumentStorageName('this_') : 'this_') . ')'
++                : 'nullptr');
+         if ($this->context->inClosure) {
+             $scope = 'execute_data->func->common.scope';
+         } elseif ($this->classDef?->trait !== null) {

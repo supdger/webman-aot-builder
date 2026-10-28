@@ -15,7 +15,7 @@ final class ProjectBuilder
     /**
      * @param array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string} $tools
      * @param (\Closure(string):void)|null $beforeStage
-     * @return array{profile:string,sourceSha256:string,normalizedInputSha256:string,elfSha256:string,distribution:array<string,mixed>}
+     * @return array{sourceSha256:string,normalizedInputSha256:string,elfSha256:string,distribution:array<string,mixed>,interpreted:list<array{path:string,reason:string}>}
      */
     public function build(
         string $projectDirectory,
@@ -27,14 +27,12 @@ final class ProjectBuilder
         array $tools,
         string $host,
         ?\Closure $beforeStage = null,
-        ?string $explicitProfile = null
+        ?string $explicitEntry = null
     ): array {
         $project = realpath($projectDirectory);
         if (!is_string($project) || is_link($projectDirectory)) {
             throw new ConfigurationException('build requires a real project directory');
         }
-        $beforeStage?->__invoke('profile');
-        $profile = (new ProfileDetector($project))->detect($explicitProfile);
         $compatibilityLock = $this->readLock($compatibilityLockFile, 'compatibility');
         $toolchainLock = $this->readLock($toolchainLockFile, 'toolchain');
         $dynamicPhp = $compatibilityLock['dynamicPhp'] ?? null;
@@ -43,16 +41,17 @@ final class ProjectBuilder
             throw new ConfigurationException('build locks lack dynamic PHP or static extension policy');
         }
         $beforeStage?->__invoke('discovery');
-        $discovery = (new ProjectDiscovery($project, $dynamicPhp))->discover($profile);
+        $discovery = (new ProjectDiscovery($project, $dynamicPhp))->discover(explicitEntry: $explicitEntry);
         $coverage = (new CoveragePlanner($project))->plan($discovery);
         $source = (new SourceTreeSnapshot($project))->capture();
         $compatibilitySha256 = $this->digest($compatibilityLockFile);
         $toolchainSha256 = $this->digest($toolchainLockFile);
         $compilerPatchSha256 = (new TypePhpPatchManifestFingerprint())
             ->digest($compilerPatchManifestFile);
-        $composerSha256 = $this->digest($project . '/composer.lock');
+        $composerSha256 = is_file($project . '/composer.lock')
+            ? $this->digest($project . '/composer.lock')
+            : hash('sha256', '');
         $cacheKey = (new WorkspaceCacheKey())->create(
-            $profile,
             $coverage,
             $toolchainSha256,
             $compatibilitySha256,
@@ -74,19 +73,18 @@ final class ProjectBuilder
             $generatorArchive,
             $cache,
             $compatibilityLockFile,
-            $profile->name(),
-            'webman-server'
+            'webman-server',
+            $tools['phpx'] . '/full-static/sdk',
+            $explicitEntry
         );
         $beforeStage?->__invoke('overlay');
         (new FullStaticProjectOverlay())->apply(
             $generated['projectFile'],
-            $tools['sysroot'],
-            $profile->name()
+            $tools['sysroot']
         );
         $beforeStage?->__invoke('coverage');
         (new GeneratedProjectCoveragePlanner())->plan(
             $mirror,
-            $profile,
             $compatibilityLockFile,
             $generated['coverageMappings']
         );
@@ -96,12 +94,12 @@ final class ProjectBuilder
             'schema' => 'webman-aot-builder-project-normalized-input-v1',
             'sourceTreeSha256' => $source['sha256'],
             'composerLockSha256' => $composerSha256,
-            'profile' => $profile->name(),
             'compatibilityLockSha256' => $compatibilitySha256,
             'toolchainLockSha256' => $toolchainSha256,
             'compilerPatchManifestSha256' => $compilerPatchSha256,
             'sdkSha256' => $tools['sdkSha256'],
-            'generatedProjectSha256' => $generated['projectSha256'],
+            'generatedProjectSha256' => hash_file('sha256', $generated['projectFile']),
+            'nativeRuntimeDeclarations' => true,
             'generatedEntrypointSha256' => $generated['mainSha256'],
             'generatedAdaptations' => $generated['adaptations'],
             'extensions' => $extensionNames,
@@ -127,7 +125,6 @@ final class ProjectBuilder
             [
                 'sourceTreeSha256' => $source['sha256'],
                 'composerLockSha256' => $composerSha256,
-                'profile' => $profile->name(),
                 'compatibilityLockSha256' => $compatibilitySha256,
                 'toolchainLockSha256' => $toolchainSha256,
                 'normalizedInputSha256' => $normalizedInputSha256,
@@ -136,14 +133,15 @@ final class ProjectBuilder
             ],
             $host,
             beforeStage: $beforeStage,
-            generatedMappings: $generated['coverageMappings']
+            generatedMappings: $generated['coverageMappings'],
+            interpreted: $compiled['interpreted']
         );
         return [
-            'profile' => $profile->name(),
             'sourceSha256' => $source['sha256'],
             'normalizedInputSha256' => $normalizedInputSha256,
             'elfSha256' => $compiled['sha256'],
             'distribution' => $distribution,
+            'interpreted' => $compiled['interpreted'],
         ];
     }
 

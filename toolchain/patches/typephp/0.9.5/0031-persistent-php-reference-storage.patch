@@ -1,0 +1,254 @@
+--- a/src/Entity/ArgInfo.php
++++ b/src/Entity/ArgInfo.php
+@@ -45,6 +45,8 @@
+      */
+     public string $declaredClass = '';
+     public bool $byRef = false;
++    /** A PHP reference which may outlive the native call through a Closure capture. */
++    public bool $persistentReference = false;
+     public bool $variadic = false;
+     public bool $nullable = false;
+     public bool $undeclared = false;
+--- a/src/Entity/FunctionDef.php
++++ b/src/Entity/FunctionDef.php
+@@ -22,6 +22,9 @@
+     public array $argInfoList = [];
+     public int $argCountRequired = 0;
+     public string $params = '';
++    public bool $persistentReferenceEligible = false;
++    /** Known calls and their directly forwarded source variables. */
++    public array $persistentReferenceCalls = [];
+     public string $namespace;
+     public bool $method = false;
+     /** Abstract method contract; it has metadata/default helpers but no C++ body symbol. */
+@@ -58,10 +61,14 @@
+     public int $multiReturnCount = 0;
+     /** Source file containing this function definition. */
+     public string $sourceFile = '';
++    public bool $strictTypes = false;
+     /** First source line of this function definition. */
+     public int $startLine = 1;
+     /** PHP-level function or Class::method name used in diagnostics. */
+     public string $displayName = '';
++    /** Public PHP name bound by a native file declaration. */
++    public string $runtimePublicName = '';
++    public bool $runtimeFileInitializer = false;
+ 
+     /**
+      * @var string Must be a fully qualified class name including the namespace
+--- /dev/null
++++ b/src/Build/PersistentReferencesTrait.php
+@@ -0,0 +1,213 @@
++<?php
++
++namespace TypePhp\Build;
++
++use PhpParser\Modifiers;
++use PhpParser\Node;
++use PhpParser\Node\Expr;
++use TypePhp\Analysis\ReferenceCaptureAnalyzer;
++use TypePhp\Entity\ArgInfo;
++use TypePhp\Entity\FunctionDef;
++use TypePhp\Type;
++
++trait PersistentReferencesTrait
++{
++    protected bool $persistentReferenceDeclarationsFinalized = false;
++    private function markPersistentReference(ArgInfo $argument): bool
++    {
++        if ($argument->persistentReference || !$argument->byRef) { return false; }
++        if ($argument->typedArray !== null || $argument->stdContainer !== null) {
++            $this->error('Persistent Closure references cannot use typed arrays or std container parameters');
++        }
++        if (!Type::isTypedRefType($argument->type) && $argument->type !== Type::REF) {
++            $this->error('Persistent Closure references require PHP reference storage');
++        }
++        $argument->persistentReference = true;
++        if ($argument->typeNode !== null && Type::isTypedRefType($argument->type)) {
++            $check = $this->buildTypeCheckFromNode($argument->typeNode, true);
++            $argument->typeCheck = $check['check'];
++            $argument->typeStr = $check['typeStr'];
++        }
++        return true;
++    }
++
++    protected function recordPersistentReferences(Node\FunctionLike $node, FunctionDef $definition): void
++    {
++        $this->persistentReferenceDeclarationsFinalized = false;
++        $this->invalidateRuntimeCallStorageMetadata();
++        $definition->persistentReferenceEligible = !$definition->stub
++            && !($this->classDef?->nativeObject ?? false)
++            && !$this->functionUsesNativeObject($definition);
++        if (!$definition->persistentReferenceEligible) { return; }
++        $body = $node->getStmts();
++        $captures = (new ReferenceCaptureAnalyzer())->analyze($body)['captures'];
++        foreach ($definition->argInfoList as $argument) {
++            if ($argument->byRef && (($this->runtimeDeclarationsEnabled && !$argument->variadic
++                    && $argument->typedArray === null && $argument->stdContainer === null)
++                || ($definition->generator && !$argument->variadic)
++                || isset($captures[$argument->phpName ?: $argument->name]))) {
++                $this->markPersistentReference($argument);
++            }
++        }
++        $definition->persistentReferenceCalls = $this->collectPersistentReferenceCalls($body, $definition);
++    }
++
++    /** Store names, not method bodies, in the prepared-project snapshot. */
++    protected function collectPersistentReferenceCalls(Node|array|null $body, ?FunctionDef $definition = null): array
++    {
++        $calls = [];
++        $scan = function (mixed $value) use (&$scan, &$calls, $definition): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof Node) { continue; }
++                if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike) { continue; }
++                if ($node instanceof Expr\CallLike && !$node->isFirstClassCallable()) {
++                    $class = '';
++                    $function = '';
++                    if ($node instanceof Expr\StaticCall && $node->class instanceof Node\Name
++                        && $node->name instanceof Node\Identifier) {
++                        $keyword = strtolower($node->class->toString());
++                        $class = $keyword === 'self' ? $this->getFullClassName()
++                            : ($keyword === 'parent' ? ($this->classDef?->extends ?? '')
++                                : ($keyword === 'static' ? '' : $this->getNamespacedClassName($node->class->toString())));
++                        $function = $class === '' ? '' : $node->name->toString();
++                    } elseif ($node instanceof Expr\MethodCall && $node->name instanceof Node\Identifier) {
++                        $class = $this->runtimeDeclarationsEnabled ? self::DYNAMIC_CALLED_CLASS : '';
++                        if ($node->var instanceof Expr\Variable && $node->var->name === 'this') {
++                            $class = $this->getFullClassName();
++                        } elseif ($definition !== null && $node->var instanceof Expr\Variable && is_string($node->var->name)) {
++                            foreach ($definition->argInfoList as $argument) {
++                                if (($argument->phpName ?: $argument->name) === $node->var->name && ($argument->declaredClass !== '' || $argument->class !== '')) {
++                                    $class = $argument->declaredClass ?: $argument->class;
++                                }
++                            }
++                        }
++                        $function = $class === '' ? '' : $node->name->toString();
++                    } elseif ($node instanceof Expr\FuncCall && $node->name instanceof Node\Name) {
++                        $raw = $node->name->toString();
++                        $function = $node->name instanceof Node\Name\FullyQualified ? $raw
++                            : ($this->useFunctions[strtolower($raw)] ?? ltrim($this->namespace . '\\' . $raw, '\\'));
++                    } elseif ($node instanceof Expr\New_ && $node->class instanceof Node\Name) {
++                        $class = $this->resolveNewExprClass($node) ?? '';
++                        $function = $class === '' ? '' : '__construct';
++                    }
++                    if ($function !== '') {
++                        $arguments = [];
++                        foreach ($node->getArgs() as $index => $argument) {
++                            if (!$argument->unpack && $argument->value instanceof Expr\Variable
++                                && is_string($argument->value->name)) {
++                                $arguments[] = [$index, $argument->name?->toString(), $argument->value->name];
++                            }
++                        }
++                        $calls[] = [$class, $function, $arguments];
++                    }
++                }
++                foreach ($node->getSubNodeNames() as $field) { $scan($node->{$field}); }
++            }
++        };
++        $scan($body);
++        return $calls;
++    }
++
++    protected function persistentCallArgument(array $call, array $argument): ?ArgInfo
++    {
++        [$class, $function] = $call;
++        [$index, $name] = $argument;
++        return $name !== null ? $this->getAotCallArgInfoByName($function, $class, $name)
++            : $this->getAotCallArgInfo($function, $class, $index);
++    }
++
++    private function persistentReferenceOwnerExtends(string $class, string $expected): bool
++    {
++        $class = ltrim($class, '\\');
++        $expected = ltrim($expected, '\\');
++        if ((!$this->hasClass($class) && !$this->hasInterface($class))
++            || (!$this->hasClass($expected) && !$this->hasInterface($expected))) { return false; }
++        $pending = [$class];
++        $seen = [];
++        while ($pending !== []) {
++            $owner = ltrim(array_pop($pending), '\\');
++            $key = strtolower($owner);
++            if (isset($seen[$key])) { continue; }
++            $seen[$key] = true;
++            if (strcasecmp($owner, $expected) === 0) { return true; }
++            if ($this->hasClass($owner)) {
++                $definition = $this->getClass($owner);
++                if ($definition->extends !== '') { $pending[] = $definition->extends; }
++                array_push($pending, ...$definition->implements);
++            } elseif ($this->hasInterface($owner)) {
++                $definition = $this->getInterface($owner);
++                array_push($pending, ...($definition->extendsList ?: ($definition->extends ? [$definition->extends] : [])));
++            }
++            // Native and unknown ancestors have no PHP declaration ABI to propagate.
++        }
++        return false;
++    }
++
++    public function finalizePersistentReferences(): void
++    {
++        if ($this->persistentReferenceDeclarationsFinalized) { return; }
++        $this->indexRuntimeCallStorageMetadata();
++        $definitions = [];
++        foreach ($this->symbols->functions() as $definition) {
++            $definitions[spl_object_id($definition)] = $definition;
++        }
++        $methods = [];
++        foreach ([...array_values($this->symbols->classes()), ...array_values($this->symbols->interfaces())] as $owner) {
++            foreach ($owner->methods as $method) {
++                if ($method->functionDef === null) { continue; }
++                $definition = $method->functionDef;
++                $definitions[spl_object_id($definition)] = $definition;
++                $methods[strtolower($method->name)][] = [$owner->getNamespacedName(false), $method];
++            }
++        }
++        do {
++            $changed = false;
++            foreach ($definitions as $definition) {
++                foreach ($definition->persistentReferenceCalls as $call) {
++                    foreach ($call[2] as $source) {
++                        if (!$this->persistentCallArgument($call, $source)?->persistentReference) { continue; }
++                        foreach ($definition->argInfoList as $argument) {
++                            if (($argument->phpName ?: $argument->name) !== $source[2] || !$argument->byRef) { continue; }
++                            if (!$definition->persistentReferenceEligible) {
++                                $this->error('Persistent PHP references cannot be forwarded through a Native or stub ABI');
++                            }
++                            $changed = $this->markPersistentReference($argument) || $changed;
++                        }
++                    }
++                }
++            }
++            foreach ($methods as $group) {
++                foreach ($group as [$leftClass, $left]) {
++                    if ($left->flags & Modifiers::PRIVATE) { continue; }
++                    foreach ($group as [$rightClass, $right]) {
++                        if ($right->flags & Modifiers::PRIVATE || strcasecmp($left->name, $right->name) !== 0) { continue; }
++                        $pairs = [];
++                        foreach ($left->functionDef->argInfoList as $index => $argument) {
++                            $other = $right->functionDef->argInfoList[$index] ?? null;
++                            if ($argument->byRef && $other !== null && $other->byRef
++                                && ($argument->persistentReference || $other->persistentReference)) {
++                                $pairs[] = [$argument, $other];
++                            }
++                        }
++                        if ($pairs === [] || (!$this->persistentReferenceOwnerExtends($leftClass, $rightClass)
++                            && !$this->persistentReferenceOwnerExtends($rightClass, $leftClass))) { continue; }
++                        if (!$left->functionDef->persistentReferenceEligible || !$right->functionDef->persistentReferenceEligible) {
++                            $this->error('Persistent PHP references cannot change a Native or stub override ABI');
++                        }
++                        foreach ($pairs as [$argument, $other]) {
++                            $changed = $this->markPersistentReference($argument) || $changed;
++                            $changed = $this->markPersistentReference($other) || $changed;
++                        }
++                    }
++                }
++            }
++        } while ($changed);
++        foreach ($definitions as $definition) {
++            if (!array_filter($definition->argInfoList, static fn (ArgInfo $argument): bool => $argument->persistentReference)) { continue; }
++            $definition->params = implode(', ', array_map(fn (ArgInfo $argument): string =>
++                $argument->variadic ? Type::ARRAY . ' ' . $argument->name : $this->genArgumentDeclaration($argument),
++                $definition->argInfoList));
++        }
++        $this->persistentReferenceDeclarationsFinalized = true;
++    }
++}

@@ -1,0 +1,15 @@
+--- a/src/Generator/CallArgumentGenerator.php
++++ b/src/Generator/CallArgumentGenerator.php
+@@ -1077,7 +1077,11 @@
+                             $this->addPositionalCallArg($this->parseReferenceCallArgValue($arg), $arrayArgsVar, $list_args, $forceArrayArgs);
+                             continue;
+                         }
+-                        if ($this->isScalar($arg->value)) {
++                        if ($this->isScalar($arg->value)
++                            && $className !== self::DYNAMIC_CALLED_CLASS) {
++                            // For a dynamic callee the by-reference requirement is a
++                            // merged possibility, not a proven signature: materialize
++                            // the literal into a temporary reference cell instead.
+                             $this->fatalError($arg, 'The constants cannot be used as an argument for a reference-type parameter');
+                         }
+                         $tmpRef = $this->genTmpVarName();

@@ -1,0 +1,161 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -16,6 +16,8 @@
+ use TypePhp\Exception\Skip;
+ use TypePhp\Analysis\ReferenceCaptureAnalyzer;
+ use TypePhp\Type;
++
++require_once dirname(__DIR__) . "/Build/TargetFunctionReturnMetadata.php";
+ 
+ trait CompilationStateTrait
+ {
+@@ -49,6 +51,34 @@
+         }
+     }
+ 
++    private ?array $valueParameterFunctionReturns = null;
++
++    protected function valueParameterReturnFingerprint(): string
++    {
++        if (!$this->fullStatic || !is_dir($this->getPhpxDir() . '/full-static/sdk')) { return ''; }
++        $this->valueParameterFunctionReturns ??= \TypePhp\Build\TargetFunctionReturnMetadata::read($this->getFullStaticSdkDir());
++        return $this->valueParameterFunctionReturns['sha256'];
++    }
++
++    /** Possible target return evidence never selects a runtime function. */
++    private function valueParameterCallType(\PhpParser\Node\Expr\FuncCall $call): ?string
++    {
++        if (!$call->name instanceof \PhpParser\Node\Name) { return null; }
++        $target = $this->resolveStaticFunctionCallTarget($call->name);
++        $function = $this->findNativeFunction($target['nativeLookup']);
++        if ($function !== false) {
++            $declaration = $this->getFunction($function);
++            return !$declaration->stub && !$this->functionUsesNativeObject($declaration)
++                && in_array($declaration->returnType, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)
++                ? $declaration->returnType : null;
++        }
++        if ($this->valueParameterReturnFingerprint() === '') { return null; }
++        $type = $this->valueParameterFunctionReturns['returns'][$target['lower']] ?? null;
++        // Namespace shadows can return any PHP value; the evidence only permits
++        // body Var storage and leaves the original call/fallback untouched.
++        return $type === null ? null : ($target['namespacedFallback'] ? Type::VAR : $type);
++    }
++
+     /** Keep the entry ABI while allowing a PHP value parameter to change type in its body. */
+     protected function prepareValueParameterStorage(NodeAbstract|array|null $body): void
+     {
+@@ -81,6 +111,10 @@
+                 return null;
+             }
+             $type = $this->detectTypeOfExpr($expression);
++            if ($type === Type::VAR && $expression instanceof \PhpParser\Node\Expr\FuncCall) {
++                $type = $this->valueParameterCallType($expression);
++                if ($type === Type::VAR) { return [Type::VAR => true]; }
++            }
+             if (!in_array($type, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)) {
+                 return null;
+             }
+--- a/src/Build/PreparedProjectCacheTrait.php
++++ b/src/Build/PreparedProjectCacheTrait.php
+@@ -31,7 +31,7 @@
+             $initialState[$field] = $this->{$field};
+         }
+         return hash('sha256', serialize([
+-            2, $this->getIncrementalGeneratorFingerprint(), $sources, PHP_VERSION,
++            2, $this->getIncrementalGeneratorFingerprint(), $this->valueParameterReturnFingerprint(), $sources, PHP_VERSION,
+             $extensions, get_defined_constants(), $this->linkLibs,
+             $this->varIntTypes, $this->decimalTypes, $this->bigintTypes, $initialState,
+         ]));
+--- /dev/null
++++ b/src/Build/TargetFunctionReturnMetadata.php
+@@ -0,0 +1,90 @@
++<?php
++/**
++ * This file is part of TypePHP.
++ *
++ * Target header evidence for ordinary PHP value-parameter storage only.
++ * Registration candidates do not prove activation or change call resolution.
++ */
++
++namespace TypePhp\Build;
++
++use TypePhp\Type;
++
++final class TargetFunctionReturnMetadata
++{
++    private static array $cache = [];
++
++    /** @return array{returns: array<string, string>, sha256: string} */
++    public static function read(?string $sdk): array
++    {
++        $empty = ['returns' => [], 'sha256' => ''];
++        if ($sdk === null || !is_dir($sdk . '/include/php')) { return $empty; }
++        $headers = [];
++        try {
++            $files = new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(
++                $sdk . '/include/php', \FilesystemIterator::SKIP_DOTS
++            ));
++            foreach ($files as $file) {
++                if (!$file->isFile() || !str_ends_with($file->getFilename(), '_arginfo.h')) { continue; }
++                $source = @file_get_contents($file->getPathname());
++                if ($source === false) { return $empty; }
++                $headers[substr($file->getPathname(), strlen($sdk) + 1)] = $source;
++            }
++        } catch (\Throwable) { return $empty; }
++        ksort($headers);
++        $digest = hash('sha256', serialize($headers));
++        if (isset(self::$cache[$digest])) { return self::$cache[$digest]; }
++        $counts = [];
++        $returns = [];
++        foreach ($headers as $path => $source) {
++            // C preprocessing joins physical lines before recognizing comments.
++            $source = preg_replace('/\\\\\\r?\\n/', '', $source);
++            // Strip C comments and literals together so quoted comment markers
++            // cannot expose a fake registration. ZEND_FE uses identifiers only.
++            $source = preg_replace_callback('~"(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\'|/\*.*?\*/|//[^\n]*~s',
++                static fn(array $match): string => preg_replace('/[^\n]/', ' ', $match[0]), $source);
++            // Count conditional registrations and aliases too: neither can
++            // establish unique single-return evidence for a standard candidate.
++            preg_match_all('/static\s+const\s+zend_function_entry\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\]\s*=\s*\{([^}]+)\}/s', $source, $allTables, PREG_SET_ORDER);
++            foreach ($allTables as $table) {
++                if (str_starts_with($table[1], 'class_') || str_ends_with($table[1], '_methods')) { continue; }
++                preg_match_all('/\bZEND_(?:FE|FALIAS|NAMED_FE)\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,/', $table[2], $registrations, PREG_SET_ORDER);
++                foreach ($registrations as $registration) {
++                    $name = strtolower($registration[1]);
++                    $counts[$name] = ($counts[$name] ?? 0) + 1;
++                }
++            }
++            $depth = 0;
++            $unconditional = '';
++            $continuedDirective = false;
++            foreach (explode("\n", $source) as $line) {
++                if ($continuedDirective) { $continuedDirective = str_ends_with(rtrim($line), '\\'); continue; }
++                $continuedDirective = preg_match('/^\s*#/', $line) && str_ends_with(rtrim($line), '\\');
++                if (preg_match('/^\s*#\s*(if|ifdef|ifndef)\b/', $line)) { ++$depth; continue; }
++                if (preg_match('/^\s*#\s*endif\b/', $line)) { if ($depth === 0) { return $empty; } --$depth; continue; }
++                if (preg_match('/^\s*#/', $line)) { continue; }
++                if ($depth === 0) { $unconditional .= $line . "\n"; }
++            }
++            if ($depth !== 0) { return $empty; }
++            preg_match_all('/static\s+const\s+zend_function_entry\s+([a-zA-Z_][a-zA-Z0-9_]*)\s*\[\]\s*=\s*\{([^}]+)\}/s', $unconditional, $tables, PREG_SET_ORDER);
++            foreach ($tables as $table) {
++                if (str_starts_with($table[1], 'class_') || str_ends_with($table[1], '_methods')) { continue; }
++                preg_match_all('/\bZEND_FE\s*\(\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*,\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\)/', $table[2], $entries, PREG_SET_ORDER);
++                foreach ($entries as $entry) {
++                    $name = strtolower($entry[1]);
++                    if ($path !== 'include/php/ext/standard/basic_functions_arginfo.h' || $table[1] !== 'ext_functions') { continue; }
++                    if (preg_match_all('/\bZEND_BEGIN_ARG_[A-Z_]+\s*\(\s*' . preg_quote($entry[2], '/') . '\s*,/', $source) !== 1) { continue; }
++                    $pattern = '/\bZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX\s*\(\s*' . preg_quote($entry[2], '/')
++                        . '\s*,\s*0\s*,\s*\d+\s*,\s*(IS_LONG|IS_DOUBLE|IS_STRING|_IS_BOOL|IS_ARRAY)\s*,\s*0\s*\)/';
++                    if (preg_match_all($pattern, $unconditional, $declarations, PREG_SET_ORDER) !== 1) { continue; }
++                    $returns[$name] = match ($declarations[0][1]) {
++                        'IS_LONG' => Type::INT, 'IS_DOUBLE' => Type::FLOAT,
++                        'IS_STRING' => Type::STR, '_IS_BOOL' => Type::BOOL, 'IS_ARRAY' => Type::ARRAY,
++                    };
++                }
++            }
++        }
++        foreach ($returns as $name => $type) { if (($counts[$name] ?? 0) !== 1) { unset($returns[$name]); } }
++        return self::$cache[$digest] = ['returns' => $returns, 'sha256' => $digest];
++    }
++}

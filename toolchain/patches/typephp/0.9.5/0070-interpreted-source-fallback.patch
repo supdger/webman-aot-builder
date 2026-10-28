@@ -1,0 +1,233 @@
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -4856,6 +4856,34 @@
+             $list = array_values(array_unique($list));
+         }
+ 
++        // Sources that cannot be translated to native code keep their original
++        // PHP text inside the artifact and are executed by the embedded Zend
++        // engine when included. They never reach the native code generator.
++        if (array_key_exists('interpreted-sources', $cfg)) {
++            if (!is_array($cfg['interpreted-sources'])) {
++                $this->error('`interpreted-sources` must be an array');
++            }
++            foreach ($cfg['interpreted-sources'] as $source) {
++                if (!is_string($source) || $source === '' || str_contains($source, "\0")) {
++                    $this->error('`interpreted-sources` entries must be PHP file paths');
++                }
++                $sourcePath = $this->resolvePath($source, $projectDir, 'Interpreted source path');
++                $resolved = realpath($sourcePath);
++                if (!$resolved || !is_file($resolved)) {
++                    $this->error('Interpreted source file not exists: `' . $source . '`');
++                }
++                if (!FileScanner::isPhpFile($resolved) || str_ends_with($resolved, '.stub.php')) {
++                    $this->error('`interpreted-sources` must select executable PHP files: `' . $source . '`');
++                }
++                $text = file_get_contents($resolved);
++                if (!is_string($text)) {
++                    $this->error('Unable to read interpreted source: `' . $source . '`');
++                }
++                $this->runtimeInterpretedSources[$resolved] = $text;
++                $this->sourceDirs[] = dirname($resolved);
++            }
++        }
++
+         // Raw files are embedded; PHP files not emitted by `sources` are also
+         // compiled into OPcache blobs for ZendVM execution at runtime.
+         if (array_key_exists('opcode-sources', $cfg)) {
+@@ -5182,7 +5210,30 @@
+             $this->resourceConfig['manifest'] = $manifest;
+         }
+ 
+-        return $this->filterIgnoredFiles($list);
++        return $this->filterIgnoredFiles($this->filterInterpretedSources($list));
++    }
++
++    /**
++     * Remove interpreted sources from the native code generator input.
++     *
++     * `sources` may select a whole directory, so an interpreted file can still
++     * appear in the scanned list. The runtime include dispatcher owns these
++     * files; emitting native code for them would duplicate their declarations.
++     *
++     * @param list<string> $files
++     * @return list<string>
++     */
++    private function filterInterpretedSources(array $files): array
++    {
++        if ($this->runtimeInterpretedSources === []) {
++            return $files;
++        }
++        return array_values(array_filter(
++            $files,
++            fn (string $file): bool => !isset(
++                $this->runtimeInterpretedSources[realpath($file) ?: $file]
++            ),
++        ));
+     }
+ 
+     private function configurePhpBuilder(PhpBuilderConfiguration $configuration): void
+--- a/src/Build/RuntimeDeclarationsTrait.php
++++ b/src/Build/RuntimeDeclarationsTrait.php
+@@ -18,6 +18,12 @@
+     protected ?string $runtimeEntrySource = null;
+     protected array $runtimeFileVariables = [];
+     protected array $runtimeExplicitPhpSources = [];
++    /**
++     * Sources kept as PHP text and executed by the embedded Zend engine.
++     *
++     * @var array<string, string> Absolute input path => original PHP source.
++     */
++    protected array $runtimeInterpretedSources = [];
+     /** @var array<string, array{name:string,native:string,source:string,line:int,parent:string}> */
+     protected array $runtimeDeclarations = [];
+     /** Derived native identity lookup; never persisted with the prepared AST. */
+@@ -1037,14 +1043,16 @@
+     php::throwErrorIfOccurred();
+     return result;
+ }
+-// This path executes only an explicit source eval() operand, never a
+-// compiled file or function body. Its symbol table is the caller's table.
+-php::Var typephp_eval_native(const php::Var &input, const php::Array &scope, const char *source, uint32_t line) {
+-    php::Str script = input.toString();
+-    std::string description = std::string(source) + "(" + std::to_string(line) + ") : eval()'d code";
++// This path executes an explicit eval() operand or an interpreted source
++// file, never a compiled file or function body. Both are PHP text that the
++// embedded Zend engine compiles on demand; the symbol table is the caller's.
++// Delayed binding stays disabled so a declaration can extend a native class
++// that is only registered once the artifact is running.
++static php::Var typephp_execute_native_program(const php::Str &script, const char *description,
++                                               zend_compile_position position, const php::Array &scope) {
+     uint32_t options = CG(compiler_options);
+     CG(compiler_options) = ZEND_COMPILE_DEFAULT_FOR_EVAL;
+-    zend_op_array *program = zend_compile_string(script.str(), description.c_str(), ZEND_COMPILE_POSITION_AFTER_OPEN_TAG);
++    zend_op_array *program = zend_compile_string(script.str(), description, position);
+     CG(compiler_options) = options;
+     if (program == nullptr) {
+         php::throwErrorIfOccurred();
+@@ -1111,6 +1119,18 @@
+     efree_size(program, sizeof(zend_op_array));
+     php::throwErrorIfOccurred();
+     return result;
++}
++php::Var typephp_eval_native(const php::Var &input, const php::Array &scope, const char *source, uint32_t line) {
++    std::string description = std::string(source) + "(" + std::to_string(line) + ") : eval()'d code";
++    return typephp_execute_native_program(input.toString(), description.c_str(),
++                                          ZEND_COMPILE_POSITION_AFTER_OPEN_TAG, scope);
++}
++// An interpreted source keeps its own identity: __FILE__, __DIR__ and
++// backtraces must report the project path, not a generated description.
++php::Var typephp_interpret_native_file(const char *path, const char *script, size_t script_length,
++                                       php::Array &scope) {
++    return typephp_execute_native_program(php::Str(script, script_length), path,
++                                          ZEND_COMPILE_POSITION_AT_OPEN_TAG, scope);
+ }
+ TypePhpNativeExecutionFrame::TypePhpNativeExecutionFrame(const char *source, const char *name, uint32_t line, zend_class_entry *scope, zend_object *object, zend_class_entry *called_scope, bool strict_types) {
+     auto *state = new TypePhpNativeExecutionState();
+@@ -1670,6 +1690,12 @@
+             $source = $this->getSourceIdentity($file);
+             $manifestBranches[] = 'if (path == "' . $this->escapeString($source) . '") { matched = true; return "' . $this->escapeString($source) . '"; }' . PHP_EOL;
+         }
++        // Interpreted sources are part of the artifact, so path resolution,
++        // realpath() and file existence must report them like compiled files.
++        foreach ($this->runtimeInterpretedSources as $file => $_) {
++            $source = $this->getSourceIdentity($file);
++            $manifestBranches[] = 'if (path == "' . $this->escapeString($source) . '") { matched = true; return "' . $this->escapeString($source) . '"; }' . PHP_EOL;
++        }
+         foreach ($this->runtimeFileInitializers as $file => $_) {
+             $source = $this->getSourceIdentity($file);
+             $paths = [$source, ...($this->runtimeFileAliases[$file] ?? [])];
+@@ -1740,7 +1766,11 @@
+     auto path = typephp_asset_absolute_path(std::string(input.data(), input.length()));
+ CPP;
+         $directories = [];
+-        foreach ($this->runtimeFileInitializers as $file => $_) {
++        $sourceOwners = array_merge(
++            array_fill_keys(array_keys($this->runtimeFileInitializers), true),
++            array_fill_keys(array_keys($this->runtimeInterpretedSources), true),
++        );
++        foreach ($sourceOwners as $file => $_) {
+             foreach ([$this->getSourceIdentity($file), ...($this->runtimeFileAliases[$file] ?? [])] as $source) {
+                 for ($dir = dirname($source); $dir !== '.'; $dir = dirname($dir)) {
+                     $directories[$dir] = true;
+@@ -1983,6 +2013,22 @@
+             $branchCode .= "return result;\n}\n";
+             $includeBranches[] = $branchCode;
+         }
++        // An interpreted source was not translated to native code, so its PHP
++        // text travels inside the artifact and the embedded Zend engine
++        // compiles it when the file is first included.
++        foreach ($this->runtimeInterpretedSources as $file => $text) {
++            $source = $this->getSourceIdentity($file);
++            $literal = '"' . $this->escapeString($source) . '"';
++            $length = strlen($source);
++            $branchCode = 'if (path == ' . $literal . ") {\nmatched = true;\n";
++            $branchCode .= "if ((mode == php::INCLUDE_ONCE || mode == php::REQUIRE_ONCE)\n"
++                . " && zend_hash_str_exists(&EG(included_files), {$literal}, {$length}"
++                . ")) { return php::Var(true); }\n";
++            $branchCode .= "zend_hash_str_add_empty_element(&EG(included_files), {$literal}, {$length});\n";
++            $branchCode .= 'return typephp_interpret_native_file(' . $literal . ', '
++                . $this->genNativeSourceTextLiteral($text) . ', ' . strlen($text) . ", scope);\n}\n";
++            $includeBranches[] = $branchCode;
++        }
+         [$includeHelpers, $includeCalls] = $this->genBoundedRuntimeDispatch(
+             'typephp_include_chunk', 'php::Var',
+             'const std::string &path, int mode, php::Array &scope, const php::Var &receiver',
+@@ -1994,6 +2040,26 @@
+         return $code;
+     }
+ 
++    /**
++     * Emit PHP source text as adjacent C++ string literals.
++     *
++     * A single literal would exceed the minimum translation limit that
++     * compilers are required to support, so the bytes are split into chunks
++     * that the compiler concatenates back into one array. Escaping is
++     * byte-wise, so a chunk boundary never splits an escape sequence.
++     */
++    private function genNativeSourceTextLiteral(string $text): string
++    {
++        if ($text === '') {
++            return '""';
++        }
++        $literals = [];
++        foreach (str_split($text, 4000) as $chunk) {
++            $literals[] = '"' . $this->escapeString($chunk) . '"';
++        }
++        return implode(PHP_EOL, $literals);
++    }
++
+     protected function prepareNativeIncludeStorage(array $body): void
+     {
+         $this->prepareDynamicVariableStorage($body);
+--- a/src/Build/PreparedProjectCacheTrait.php
++++ b/src/Build/PreparedProjectCacheTrait.php
+@@ -16,6 +16,7 @@
+         'runtimeDeclarationsEnabled', 'runtimeDeclarations', 'runtimeFileInitializers', 'runtimeFileAliases',
+         'runtimeParseErrors', 'runtimeCompileErrors', 'runtimeFileDiagnostics', 'runtimeConstantCompileChecks',
+         'runtimeEntrySource', 'runtimeFileVariables', 'runtimeExplicitPhpSources',
++        'runtimeInterpretedSources',
+     ];
+ 
+     private function preparedProjectKey(array $files): string
+--- a/src/Build/IncrementalCompilationTrait.php
++++ b/src/Build/IncrementalCompilationTrait.php
+@@ -385,10 +385,18 @@
+             unset($paths);
+             $phpSources = array_map($this->getSourceIdentity(...), array_keys($this->runtimeExplicitPhpSources));
+             sort($phpSources, SORT_STRING);
++            // Moving a file between the native and interpreted tier changes the
++            // generated include dispatcher, so it must invalidate the cache.
++            $interpreted = [];
++            foreach ($this->runtimeInterpretedSources as $file => $text) {
++                $interpreted[$this->getSourceIdentity($file)] = hash('sha256', $text);
++            }
++            ksort($interpreted, SORT_STRING);
+             hash_update($context, serialize([
+                 'runtimeDeclarations' => $this->conditionalDeclarationFingerprint,
+                 'runtimeAliases' => $aliases,
+                 'phpSources' => $phpSources,
++                'interpretedSources' => $interpreted,
+             ]));
+         }
+ 

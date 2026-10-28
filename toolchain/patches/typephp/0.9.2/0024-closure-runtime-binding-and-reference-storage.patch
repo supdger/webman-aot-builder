@@ -1,0 +1,1185 @@
+--- a/src/Build/SourcePipelineTrait.php
++++ b/src/Build/SourcePipelineTrait.php
+@@ -104,6 +104,10 @@
+             try {
+                 $this->prepareFile($file);
+             } catch (Unsupported $exception) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $exception->getMessage(), previous: $exception);
++                }
+                 $this->output(
+                     ' unsupported syntax: ' . $exception->getMessage()
+                     . "\n skip: {$file}\n",
+@@ -111,6 +115,10 @@
+                 );
+                 unset($resolvedFiles[$key]);
+             } catch (SyntaxError $exception) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $exception->getMessage(), previous: $exception);
++                }
+                 $this->output(
+                     ' syntax error: ' . $exception->getMessage()
+                     . "\n skip: {$file}\n",
+@@ -639,9 +647,17 @@
+                 try {
+                     $this->prepareFile($file);
+                 } catch (Unsupported $e) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $e->getMessage(), previous: $e);
++                }
+                     $this->output(' unsupported syntax: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
+                     unset($files[$k]);
+                 } catch (SyntaxError $e) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $e->getMessage(), previous: $e);
++                }
+                     $this->output(' syntax error: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
+                     unset($files[$k]);
+                 }
+@@ -822,6 +838,10 @@
+                 ++$validSourceCount;
+                 array_push($sourceFiles, ...$generated);
+             } catch (Unsupported $error) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $error->getMessage(), previous: $error);
++                }
+                 $this->reportUnsupportedProjectFile($file, $error);
+                 unset($files[$key]);
+             }
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -1803,7 +1803,7 @@
+     /** The declaring class controls visibility; the runtime called class does not. */
+     protected function getCallableScopeExpr(): string
+     {
+-        if (!$this->classDef || !$this->methodDef) {
++        if (!$this->context->inClosure && (!$this->classDef || !$this->methodDef)) {
+             return 'php::CallableScope(nullptr, nullptr, nullptr)';
+         }
+         if ($this->context->callableScopeVar === null) {
+@@ -2315,6 +2315,13 @@
+                     $this->unsupportedSyntax($v);
+                     break;
+             }
++            // A typed reference bridge lives for this statement only. Keep
++            // its initialization and commit in a local block so a PHP goto
++            // cannot bypass its C++ initialization in the surrounding scope.
++            $hasReferenceBridge = preg_grep('/^php::RefWrap</', $this->context->beforeStmtLines) !== [];
++            if ($hasReferenceBridge) {
++                $lines[] = '{';
++            }
+             $lines                 = array_merge($lines, $this->context->beforeStmtLines);
+             $this->context->beforeStmtLines = [];
+             if ($result) {
+@@ -2323,6 +2330,9 @@
+             if ($this->context->afterStmtLines) {
+                 $lines                = array_merge($lines, $this->context->afterStmtLines);
+                 $this->context->afterStmtLines = [];
++            }
++            if ($hasReferenceBridge) {
++                $lines[] = '}';
+             }
+         }
+ 
+@@ -4013,6 +4023,17 @@
+             . $this->parseCallArgs($args, $funcName, $className, $separateNamedArgs) . ')';
+     }
+ 
++    protected function genClosureMethodDispatch(string $scoped, string $unscoped): string
++    {
++        if (!$this->context->inClosure) {
++            return $scoped;
++        }
++        // A global or explicitly unscoped Closure still has ordinary public
++        // method access. Zend's unscoped resolver continues to reject private
++        // methods; scoped bindings use the closure's actual lexical context.
++        return '(' . $this->getCallableScopeExpr() . '.isValid() ? ' . $scoped . ' : ' . $unscoped . ')';
++    }
++
+     protected function genRuntimeObjectMethodCall(
+         string $object,
+         string $method,
+@@ -4022,8 +4043,11 @@
+         bool $requiresDynamicScope = true,
+     ): string {
+         $callArgs = $this->parseCallArgs($args, $funcName, $className);
+-        if ($requiresDynamicScope && $this->methodDef) {
+-            return 'php::callScoped(' . $object . ', ' . $method . ', ' . $this->getCallableScopeExpr() . ', ' . $callArgs . ')';
++        if ($requiresDynamicScope && ($this->methodDef || $this->context->inClosure)) {
++            return $this->genClosureMethodDispatch(
++                'php::callScoped(' . $object . ', ' . $method . ', ' . $this->getCallableScopeExpr() . ', ' . $callArgs . ')',
++                $object . '.call(' . $method . ', ' . $callArgs . ')',
++            );
+         }
+         return $object . '.call(' . $method . ', ' . $callArgs . ')';
+     }
+@@ -5853,14 +5877,21 @@
+             $code .= $this->getIndent() . 'int _cnt_flag = 0;' . PHP_EOL;
+         }
+         if ($this->context->callableScopeVar !== null) {
+-            $code .= $this->getIndent() . 'php::CallableScope '
+-                . $this->context->callableScopeVar . ' = php::getCallableScope('
+-                . $this->getMethodPtr($this->getFullClassName(), $this->methodDef->name)
+-                . ', this_);' . PHP_EOL;
++            if ($this->context->inClosure) {
++                $code .= $this->getIndent() . 'php::CallableScope ' . $this->context->callableScopeVar
++                    . '(execute_data->func, zend_get_called_scope(execute_data), '
++                    . '(this_.isObject() ? this_.object() : nullptr));' . PHP_EOL;
++            } else {
++                $code .= $this->getIndent() . 'php::CallableScope '
++                    . $this->context->callableScopeVar . ' = php::getCallableScope('
++                    . $this->getMethodPtr($this->getFullClassName(), $this->methodDef->name)
++                    . ', this_);' . PHP_EOL;
++            }
+         }
+         if ($this->context->needsCalledCe) {
+             $code .= $this->getIndent()
+-                . 'zend_class_entry *const _typephp_called_ce = typephp_get_called_ce(this_);'
++                . 'zend_class_entry *const _typephp_called_ce = '
++                . ($this->context->inClosure ? 'zend_get_called_scope(execute_data)' : 'typephp_get_called_ce(this_)') . ';'
+                 . PHP_EOL;
+         }
+         if ($this->context->needsCalledClass) {
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -37,6 +37,7 @@
+     ): void
+     {
+         $analysis = (new ReferenceCaptureAnalyzer())->analyze($body);
++        $analysis['captures'] += $this->preparePersistentCallableReferences($body);
+         foreach ($analysis['captures'] as $sourceName => $_) {
+             $name = $this->escapeVarName($sourceName);
+             if (isset($this->context->arguments[$name])) {
+@@ -78,6 +79,95 @@
+                 $this->context->localVars[$name] = Type::VAR;
+             }
+         }
++    }
++
++    /** Preserve owned Zend storage for known by-reference constructor/Closure calls. */
++    private function preparePersistentCallableReferences(NodeAbstract|array|null $body): array
++    {
++        $captures = [];
++        $closures = [];
++        $signature = function ($expression) use (&$signature, &$closures): ?array {
++            if ($expression instanceof \PhpParser\Node\Expr\Closure
++                || $expression instanceof \PhpParser\Node\Expr\ArrowFunction) {
++                return $expression->params;
++            }
++            if ($expression instanceof Variable && is_string($expression->name)) {
++                return $closures[$expression->name] ?? null;
++            }
++            if ($expression instanceof \PhpParser\Node\Expr\Clone_) {
++                return $signature($expression->expr);
++            }
++            if ($expression instanceof \PhpParser\Node\Expr\StaticCall
++                && $expression->class instanceof \PhpParser\Node\Name
++                && strcasecmp(ltrim($expression->class->toString(), '\\'), 'Closure') === 0
++                && $expression->name instanceof \PhpParser\Node\Identifier
++                && strcasecmp($expression->name->toString(), 'bind') === 0) {
++                return isset($expression->args[0]) ? $signature($expression->args[0]->value) : null;
++            }
++            if ($expression instanceof \PhpParser\Node\Expr\MethodCall
++                && $expression->name instanceof \PhpParser\Node\Identifier
++                && strcasecmp($expression->name->toString(), 'bindTo') === 0) {
++                return $signature($expression->var);
++            }
++            return null;
++        };
++        $scan = function ($nodes) use (&$scan, &$closures, &$captures, $signature): void {
++            foreach (is_array($nodes) ? $nodes : [$nodes] as $node) {
++                if (!$node instanceof \PhpParser\Node) {
++                    continue;
++                }
++                if ($node instanceof \PhpParser\Node\Expr\Assign
++                    && $node->var instanceof Variable && is_string($node->var->name)) {
++                    $params = $signature($node->expr);
++                    unset($closures[$node->var->name]);
++                    if ($params !== null) {
++                        $closures[$node->var->name] = $params;
++                    }
++                }
++                $params = $node instanceof \PhpParser\Node\Expr\FuncCall
++                    ? $signature($node->name) : null;
++                $constructor = $node instanceof \PhpParser\Node\Expr\New_
++                    && $node->class instanceof \PhpParser\Node\Name
++                    ? $this->parseIdentifier($node->class) : null;
++                if ($params !== null || $constructor !== null) {
++                    foreach ($node->args as $index => $arg) {
++                        if (!$arg instanceof \PhpParser\Node\Arg || $arg->unpack) {
++                            continue;
++                        }
++                        $byRef = false;
++                        if ($constructor !== null) {
++                            $byRef = $arg->name !== null
++                                ? $this->isReferenceNamedArgument('__construct', $constructor, $arg->name->name)
++                                : $this->isReferenceArgument('__construct', $constructor, $index);
++                        } else {
++                            foreach ($params as $position => $param) {
++                                if (($arg->name !== null && $param->var->name === $arg->name->name)
++                                    || ($arg->name === null && ($position === $index || ($param->variadic && $position <= $index)))) {
++                                    $byRef = $param->byRef;
++                                    break;
++                                }
++                            }
++                        }
++                        if ($byRef) {
++                            $arg->setAttribute('typephpOwnedReferenceArgument', true);
++                            if ($arg->value instanceof Variable && is_string($arg->value->name)) {
++                                $captures[$arg->value->name] = true;
++                            }
++                        }
++                    }
++                }
++                // Nested declarations have their own variable and callable scopes.
++                if ($node instanceof \PhpParser\Node\FunctionLike
++                    || $node instanceof \PhpParser\Node\Stmt\ClassLike) {
++                    continue;
++                }
++                foreach ($node->getSubNodeNames() as $field) {
++                    $scan($node->{$field});
++                }
++            }
++        };
++        $scan($body);
++        return $captures;
+     }
+ 
+     protected function getDegradedArgumentStorageName(string $name): string
+--- a/src/Generator/CallArgumentGenerator.php
++++ b/src/Generator/CallArgumentGenerator.php
+@@ -670,7 +670,7 @@
+                         $this->fatalError($arg, "Duplicate named argument `{$arg->name->name}`");
+                     }
+                     $namedArgs[$arg->name->name] = true;
+-                    $byRef = ($funcName && $this->isReferenceNamedArgument($funcName, $className, $arg->name->name))
++                    $byRef = $arg->getAttribute('typephpOwnedReferenceArgument', false) || ($funcName && $this->isReferenceNamedArgument($funcName, $className, $arg->name->name))
+                         || ($preserveExistingReferences && $this->isExistingReferenceCallArg($arg));
+                     if ($byRef) {
+                         $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
+@@ -696,7 +696,7 @@
+                 if ($hasUnpack) {
+                     $this->fatalError($arg, 'Cannot use positional argument after argument unpacking');
+                 }
+-                $byRef = ($funcName && $this->isReferenceArgument($funcName, $className, $i))
++                $byRef = $arg->getAttribute('typephpOwnedReferenceArgument', false) || ($funcName && $this->isReferenceArgument($funcName, $className, $i))
+                     || ($preserveExistingReferences && $this->isExistingReferenceCallArg($arg));
+                 if ($byRef) {
+                     $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
+--- a/src/Generator/ClosureGenerator.php
++++ b/src/Generator/ClosureGenerator.php
+@@ -24,14 +24,19 @@
+ 
+ trait ClosureGenerator
+ {
+-    protected function genNewClosure(string $callback, string $uses, bool $hasThis, array $params = []): string
+-    {
+-        $thisArg = $hasThis ? 'this_' : '{}';
+-        if ($this->classDef?->trait !== null) {
++    protected function genNewClosure(string $callback, string $uses, bool $hasThis, array $params = [], bool $static = false, bool $usesThis = false): string
++    {
++        $thisArg = $hasThis && !$static ? 'this_' : '{}';
++        $calledScope = $this->context->inClosure
++            ? 'zend_get_called_scope(execute_data)'
++            : ($this->methodDef !== null ? 'typephp_get_called_ce(this_)' : 'nullptr');
++        if ($this->context->inClosure) {
++            $scope = 'execute_data->func->common.scope';
++        } elseif ($this->classDef?->trait !== null) {
+             // PHP flattens a trait method into the consuming class. A closure
+             // declared in that method therefore uses the consuming class as
+             // its lexical scope, never the trait's own class entry.
+-            $scope = $this->getCalledCeExpr();
++            $scope = $calledScope;
+         } else {
+             $scope = $this->class
+                 ? $this->getClassEntryPtr($this->getFullClassName())
+@@ -49,7 +54,9 @@
+                 . $this->escapeBool(!$param->variadic && $param->default === null) . '}';
+         }
+         return 'php::newClosureWithParameters(' . $callback . ', ' . $uses . ', ' . $thisArg . ', ' . $scope
+-            . ', { ' . implode(', ', $parameterDescriptors) . ' }, php::ClosureStrictTypes::Enabled)';
++             . ', { ' . implode(', ', $parameterDescriptors) . ' }, php::ClosureStrictTypes::Enabled, '
++            . ($static ? 'ZEND_ACC_STATIC' : ($usesThis ? 'ZEND_ACC_USES_THIS' : '0'))
++            . ', ' . $calledScope . ')';
+     }
+ 
+     protected function parseArrowFunction(Expr\ArrowFunction $expr): string
+@@ -107,6 +114,16 @@
+         }
+ 
+         $expr = $candidate['closure'];
++        // Scope-sensitive PHP operations require the executing Zend closure
++        // frame, including its runtime binding. A plain local C++ lambda has
++        // no such frame and cannot preserve that observable behavior.
++        if ((new NodeFinder())->findFirst($expr, static fn (Node $node): bool =>
++            $node instanceof Expr\MethodCall || $node instanceof Expr\PropertyFetch
++            || $node instanceof Expr\NullsafeMethodCall || $node instanceof Expr\NullsafePropertyFetch
++            || $node instanceof Expr\StaticCall || $node instanceof Expr\StaticPropertyFetch
++            || $node instanceof Expr\ClassConstFetch) !== null) {
++            return null;
++        }
+         $uses = $expr instanceof Expr\ArrowFunction
+             ? $this->collectArrowFunctionUses($expr)
+             : $expr->uses;
+@@ -579,7 +596,9 @@
+             }
+         }
+ 
+-        if ($this->methodDef && !$expr->static) {
++        if (!$expr->static && ($this->methodDef || (new NodeFinder())->findFirst(
++            $expr instanceof Expr\Closure ? $expr->stmts : [$expr->expr],
++            static fn ($node): bool => $node instanceof Variable && $node->name === 'this') !== null)) {
+             $this->addArgument('this_', Type::OBJECT);
+             if (isset($oriContext->immutableVars['this_'])) {
+                 $this->context->immutableVars['this_'] = true;
+@@ -635,7 +654,8 @@
+             $tmpVar,
+             '{ ' . implode(', ', $useVars) . ' }',
+             $this->methodDef !== null,
+-            $params
++            $params, $expr->static,
++            (new NodeFinder())->findFirst($expr instanceof Expr\Closure ? $expr->stmts : [$expr->expr], static fn ($node): bool => $node instanceof Variable && $node->name === 'this') !== null
+         );
+     }
+ 
+--- a/src/Parser/AssignOpTrait.php
++++ b/src/Parser/AssignOpTrait.php
+@@ -1644,9 +1644,10 @@
+             $member = $this->isIdExpr($expr->var->name)
+                 ? $this->propertyNameToStr($expr->var->name, literal: true)
+                 : $this->parseOrderedOperand($expr->var->name, false, true);
+-            $scope = $this->usesTraitPropertyScope($object)
++            $scope = $this->context->inClosure ? $this->getCallableScopeExpr() . '.lexicalScope()'
++                : ($this->usesTraitPropertyScope($object)
+                 ? 'php::FakeScopeGuard::current()'
+-                : ($this->class ? $this->getClassEntryPtr($this->getFullClassName()) : 'nullptr');
++                : ($this->class ? $this->getClassEntryPtr($this->getFullClassName()) : 'nullptr'));
+             $propertyReferenceTarget = [$object, $member, $scope];
+             $left = '';
+         } else {
+--- a/src/Parser/ClassConstantFetchTrait.php
++++ b/src/Parser/ClassConstantFetchTrait.php
+@@ -107,6 +107,13 @@
+         }
+ 
+         $class = $this->parseIdentifier($expr->class);
++        if ($this->context->inClosure && in_array($class, ['self', 'parent', 'static'], true)) {
++            $ce = $class === 'static' ? 'php::getClosureCalledScope(execute_data)'
++                : 'php::getClosureLexicalScope(execute_data, ' . ($class === 'parent' ? 'true' : 'false') . ')';
++            $name = $this->escapeString($this->parseIdentifier($expr->name));
++            return $name === 'class' ? 'php::Str(' . $ce . '->name)'
++                : Symbol::constant() . '(' . $ce . ', ' . $this->getLiteralString($name) . ')';
++        }
+         $self = false;
+         if ($class === 'self' or $class === 'this_') {
+             $self = true;
+--- a/src/Parser/MethodCallTrait.php
++++ b/src/Parser/MethodCallTrait.php
+@@ -692,7 +692,7 @@
+         }
+ 
+         if ($this->isNamedMethod($expr->name)
+-            && in_array(strtolower($expr->name->toString()), ['call', 'bind', 'bindto'], true)
++            && in_array(strtolower($expr->name->toString()), ['call'], true)
+             && strtolower(ltrim($class, '\\')) === 'closure') {
+             $closureMethod = $expr->name->toString();
+             $this->fatalError(
+@@ -1023,7 +1023,7 @@
+             $funcName,
+             $magicMethod,
+             $this->isVarExpr($expr->var) && $this->parseIdentifier($expr->var) === 'this_',
+-        ) || $typedPropertyLexicalPrivateClass !== '';
++        ) || $typedPropertyLexicalPrivateClass !== '' || $this->context->inClosure;
+         $resolvedMethodPtr = false;
+         if ($class && $funcName && !$magicMethod) {
+             if ($this->isInternalClass($class)) {
+@@ -1037,19 +1037,27 @@
+         }
+ 
+         if (empty($expr->args)) {
+-            if ($requiresDynamicScope && $this->methodDef) {
++            if ($requiresDynamicScope && ($this->methodDef || $this->context->inClosure)) {
+                 if (!$resolvedMethodPtr) {
+                     if (!$cacheMethod) {
+-                        return 'php::callScoped(' . $object . ', ' . $methodPtr . ', '
+-                            . $this->getCallableScopeExpr() . ')';
++                        return $this->genClosureMethodDispatch(
++                            'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')',
++                            $object . '.call(' . $methodPtr . ')',
++                        );
+                     }
+-                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+-                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ')';
++                    $cache = $this->getMethodCallCache();
++                    return $this->genClosureMethodDispatch(
++                        'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $cache . ')',
++                        'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', ' . $cache . ')',
++                    );
+                 }
+                 // The method is already a stable zend_function* from the
+                 // project symbol cache. A second callable cache would only
+                 // add guards before the same direct call.
+-                return 'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')';
++                return $this->genClosureMethodDispatch(
++                    'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')',
++                    $object . '.call(' . $methodPtr . ')',
++                );
+             }
+             if (!$resolvedMethodPtr) {
+                 if (!$cacheMethod) {
+@@ -1073,14 +1081,18 @@
+                     $funcName,
+                     $callArgClass,
+                 );
+-                if ($requiresDynamicScope && $this->methodDef) {
++                if ($requiresDynamicScope && ($this->methodDef || $this->context->inClosure)) {
+                     if (!$cacheMethod) {
+-                        return 'php::callScoped(' . $object . ', ' . $methodPtr . ', '
+-                            . $this->getCallableScopeExpr() . ', ' . $callArgs . ')';
++                        return $this->genClosureMethodDispatch(
++                            'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $callArgs . ')',
++                            $object . '.call(' . $methodPtr . ', ' . $callArgs . ')',
++                        );
+                     }
+-                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+-                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ', '
+-                        . $callArgs . ')';
++                    $cache = $this->getMethodCallCache();
++                    return $this->genClosureMethodDispatch(
++                        'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $cache . ', ' . $callArgs . ')',
++                        'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', ' . $cache . ', ' . $callArgs . ')',
++                    );
+                 }
+                 if (!$cacheMethod) {
+                     return $object . '.call(' . $methodPtr . ', ' . $callArgs . ')';
+@@ -1262,7 +1274,7 @@
+         if ($this->isNameExpr($expr->class)
+             && $this->isIdExpr($expr->name)
+             && strtolower(ltrim($expr->class->toString(), '\\')) === 'closure'
+-            && in_array(strtolower($expr->name->toString()), ['bind', 'bindto', 'call'], true)) {
++            && in_array(strtolower($expr->name->toString()), ['call'], true)) {
+             $closureMethod = $expr->name->toString();
+             $this->fatalError(
+                 $expr,
+--- a/src/Parser/PropertyAccessTrait.php
++++ b/src/Parser/PropertyAccessTrait.php
+@@ -105,6 +105,10 @@
+ 
+     protected function emitDynamicPropertyRead(string $object, string $property, ?string $cache = null): string
+     {
++        if ($this->context->inClosure) {
++            return 'typephp_read_property_scoped(' . $object . ', ' . $property . ', '
++                . $this->getCallableScopeExpr() . '.lexicalScope(), php::AttrMode::Get)';
++        }
+         if ($this->usesTraitPropertyScope($object)) {
+             return 'typephp_read_property_scoped('
+                 . $object . ', ' . $property . ', php::FakeScopeGuard::current(), php::AttrMode::Get)';
+@@ -123,10 +127,11 @@
+         ?string $cache = null,
+     ): string
+     {
+-        $scope = $this->usesTraitPropertyScope($object)
++        $scope = $this->context->inClosure ? $this->getCallableScopeExpr() . '.lexicalScope()'
++            : ($this->usesTraitPropertyScope($object)
+             ? 'php::FakeScopeGuard::current()'
+-            : ($this->class ? $this->getLocalClassEntryPtr($this->getFullClassName()) : 'nullptr');
+-        if ($cache !== null && !$this->usesTraitPropertyScope($object)) {
++            : ($this->class ? $this->getLocalClassEntryPtr($this->getFullClassName()) : 'nullptr'));
++        if ($cache !== null && !$this->context->inClosure && !$this->usesTraitPropertyScope($object)) {
+             return 'typephp_write_property_cached('
+                 . $object . ', ' . $property . ', ' . $value . ', ' . $scope . ', ' . $cache . ')';
+         }
+@@ -165,6 +170,10 @@
+     {
+         $this->assertDynamicPropertyTarget($target);
+ 
++        if ($this->context->inClosure) {
++            return 'typephp_unset_property_scoped(' . $target->getDynamicObjectExpr() . ', '
++                . $target->getDynamicPropertyExpr() . ', ' . $this->getCallableScopeExpr() . '.lexicalScope())';
++        }
+         return $target->getDynamicObjectExpr() . '.unsetProperty(' . $target->getDynamicPropertyExpr() . ')';
+     }
+ 
+@@ -172,6 +181,10 @@
+     {
+         $this->assertDynamicPropertyTarget($target);
+ 
++        if ($this->context->inClosure) {
++            return 'typephp_property_ref_scoped(' . $target->getDynamicObjectExpr() . ', '
++                . $target->getDynamicPropertyExpr() . ', ' . $this->getCallableScopeExpr() . '.lexicalScope())';
++        }
+         return $target->getDynamicObjectExpr() . '.attrRef(' . $target->getDynamicPropertyExpr() . ')';
+     }
+ 
+@@ -278,6 +291,11 @@
+             return $this->emitDynamicPropertyTargetUnset($target);
+         }
+ 
++        if ($this->context->inClosure) {
++            return 'typephp_unset_property_scoped(' . $this->parseIdentifier($expr->var) . ', '
++                . $this->propertyNameToStr($expr->name, literal: true) . ', '
++                . $this->getCallableScopeExpr() . '.lexicalScope())';
++        }
+         return $this->parseIdentifier($expr->var) . '.unsetProperty(' . $this->propertyNameToStr($expr->name, literal: true) . ')';
+     }
+ 
+@@ -461,6 +479,12 @@
+ 
+         $class = $this->parseIdentifier($expr->class);
+         $propertyName = $this->parseIdentifier($expr->name);
++        if ($this->context->inClosure && in_array($class, ['self', 'parent', 'static'], true)) {
++            $ce = $class === 'static' ? 'php::getClosureCalledScope(execute_data)'
++                : 'php::getClosureLexicalScope(execute_data, ' . ($class === 'parent' ? 'true' : 'false') . ')';
++            return new StaticPropertyFetchTarget($propertyName, null,
++                Symbol::getStaticProperty() . '(' . $ce . ', ' . $this->getLiteralString($propertyName) . ')');
++        }
+         if ($class === 'static') {
+             return null;
+         }
+@@ -591,6 +615,14 @@
+ 
+     protected function parseStaticPropertyFetch(Expr\StaticPropertyFetch $expr): string
+     {
++        if ($this->context->inClosure && $this->isNameExpr($expr->class)) {
++            $relative = $this->parseIdentifier($expr->class);
++            if (in_array($relative, ['self', 'parent', 'static'], true)) {
++                $ce = $relative === 'static' ? 'php::getClosureCalledScope(execute_data)'
++                    : 'php::getClosureLexicalScope(execute_data, ' . ($relative === 'parent' ? 'true' : 'false') . ')';
++                return Symbol::getStaticProperty() . '(' . $ce . ', ' . $this->propertyNameToStr($expr->name, literal: true) . ')';
++            }
++        }
+         $pythonProperty = $this->parsePythonModuleStaticPropertyFetch($expr);
+         if ($pythonProperty !== null) {
+             return $pythonProperty;
+@@ -1164,6 +1196,9 @@
+ 
+     protected function getPropertyIdentifier(Expr\PropertyFetch $expr, NodeAbstract $object, NodeAbstract $property): ?string
+     {
++        if ($this->context->inClosure && !$this->isNativePropertyAccess($expr)) {
++            return $this->propertyNameToStr($property, literal: true);
++        }
+         $target = $this->resolveInstancePropertyFetchTarget($object, $property);
+         if ($target !== null) {
+             $result = $this->resolveNativeInstanceProperty($expr, $target->property, $target->class);
+@@ -1289,7 +1324,10 @@
+         $directMagic = !$update && !$this->isNativePropertyAccess($expr)
+             ? $this->resolveDirectMagicPropertyAccess($expr, $objectVar, '__get')
+             : null;
+-        if ($directMagic !== null) {
++        if ($this->context->inClosure) {
++            $getProperty = 'typephp_read_property_scoped(' . $objectVar . ', ' . $id . ', '
++                . $this->getCallableScopeExpr() . '.lexicalScope(), ' . $this->escapeAttrMode($update) . ')';
++        } elseif ($directMagic !== null) {
+             $getProperty = 'typephp_read_magic_property_direct('
+                 . $objectVar . ', ' . $id . ', ' . $directMagic['classEntry'] . ', '
+                 . $this->getPropertyAccessCache() . ', [&]() {'
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -1636,6 +1636,7 @@
+         // minit end
+ 
+         $code .= 'PHP_MSHUTDOWN_FUNCTION(' . $this->getModuleName() . ') {' . PHP_EOL;
++        $code .= 'php::unmarkCompiledUserClasses(module_number);' . PHP_EOL;
+         // Persistent AST class constants must be restored before Zend's
+         // class teardown runs (its debug assertion only tolerates
+         // CONST_ENUM_INIT there), and their contiguous blocks freed.
+@@ -3565,6 +3566,9 @@
+         foreach ($this->classCeList as $ce) {
+             $info = $this->classCeInfo[$ce] ?? $this->getInternalCeInfo($ce);
+             $code .= "{$ce} = {$info['func']}({$info['args']});\n";
++            if (isset($this->classCeInfo[$ce])) {
++                $code .= "php::markCompiledUserClass({$ce}, module_number);\n";
++            }
+             $classDef = !empty($info['classDef']) ? $info['classDef'] : null;
+ 
+             /**
+@@ -7972,11 +7976,17 @@
+             foreach ($this->classDef->properties as $name => $childProp) {
+                 if ($chainNode->hasProperty($name)) {
+                     $parentProp = $chainNode->getProperty($name);
+-                    // TypePHP deliberately forbids the two independent slots
+-                    // PHP would create when a child hides a parent private
+-                    // property. This applies equally to Zend-backed and Native
+-                    // classes, even though Native storage could represent it.
++                    // Final properties retain their inheritance restriction
++                    // even when the parent's visibility is private.
++                    if ($parentProp->flags & (Modifiers::FINAL | Modifiers::PRIVATE_SET)) {
++                        $this->fatalError($classStmt, "Cannot override final property {$parentClass}::\${$name}");
++                    }
+                     if ($parentProp->flags & Modifiers::PRIVATE) {
++                        // Zend-backed classes keep distinct mangled private
++                        // slots for each declaring class, just as PHP does.
++                        if (!$classDef->nativeObject && !$chainNode->nativeObject) {
++                            continue;
++                        }
+                         $this->fatalError($classStmt,
+                             "Declaration of `{$className}::\${$name}` conflicts with private property " .
+                             "`{$parentClass}::\${$name}`; property shadowing across inheritance is not allowed");
+@@ -7995,14 +8005,6 @@
+                     // without hooks while retaining both parent hooks.
+                     $childProp->getter ??= $parentProp->getter;
+                     $childProp->setter ??= $parentProp->setter;
+-                    // PHP 8.4 treats private(set) properties as implicitly
+-                    // final because a child cannot widen their write scope.
+-                    if ($parentProp->flags & (Modifiers::FINAL | Modifiers::PRIVATE_SET)) {
+-                        $this->fatalError(
+-                            $classStmt,
+-                            "Cannot override final property {$parentClass}::\${$name}"
+-                        );
+-                    }
+                     if ($childProp->type !== $parentProp->type
+                         || $childProp->class !== $parentProp->class
+                         || $childProp->nativeStorageType !== $parentProp->nativeStorageType
+--- a/vendor/swoole/phpx/include/phpx.h
++++ b/vendor/swoole/phpx/include/phpx.h
+@@ -3004,6 +3004,11 @@
+     Enabled,
+ };
+ 
++extern zend_class_entry *getClosureCalledScope(zend_execute_data *execute_data);
++extern zend_class_entry *getClosureLexicalScope(zend_execute_data *execute_data, bool parent = false);
++extern void markCompiledUserClass(zend_class_entry *ce, int module_number);
++extern void unmarkCompiledUserClasses(int module_number);
++
+ extern Object newClosure(const ClosureFn &fn,
+                          const ArgList &uses = {},
+                          const Object &_this = {},
+@@ -3019,7 +3024,9 @@
+                                        const Object &_this,
+                                        zend_class_entry *scope,
+                                        std::initializer_list<ClosureParameter> parameters,
+-                                       ClosureStrictTypes strict_types);
++                                       ClosureStrictTypes strict_types,
++                                       uint32_t binding_flags = 0,
++                                       zend_class_entry *called_scope = nullptr);
+ extern PHPX_API Variant prepareScopedCallback(const Variant &callable, const CallableScope &scope);
+ extern PHPX_API Object makeScopedCallable(const Variant &callable, const CallableScope &scope);
+ extern PHPX_API Variant normalizeCallableClass(const Variant &callable, const CallableScope &scope);
+--- a/vendor/swoole/phpx/include/typephp_helper.h
++++ b/vendor/swoole/phpx/include/typephp_helper.h
+@@ -1276,3 +1276,10 @@
+ static inline php::Float &typephp_static_float_ref(zval *slot) {
+     return Z_DVAL_P(Z_ISREF_P(slot) ? Z_REFVAL_P(slot) : slot);
+ }
++
++PHPX_API php::Reference typephp_property_ref_scoped(const php::Variant &object,
++                                                   const php::Variant &member,
++                                                   zend_class_entry *scope);
++PHPX_API void typephp_unset_property_scoped(const php::Variant &object,
++                                            const php::Variant &member,
++                                            zend_class_entry *scope);
+--- a/vendor/swoole/phpx/src/core/closure.cc
++++ b/vendor/swoole/phpx/src/core/closure.cc
+@@ -20,6 +20,8 @@
+ #include "zend_closures.h"
+ 
+ #include <new>
++#include <unordered_map>
++#include <mutex>
+ 
+ namespace php {
+ 
+@@ -35,13 +37,12 @@
+ }
+ 
+ struct ClosureState {
+-    Object this_;
+     ClosureFn fn_;
+     Args vars_;
+     zend_function *zf_;
+ 
+     ClosureState(const ClosureFn &fn, const Object &_this, const ArgList &uses, zend_function *zf)
+-        : this_(_this), fn_(fn), vars_(uses), zf_(zf) {}
++        : fn_(fn), vars_(uses), zf_(zf) {}
+ 
+     ~ClosureState() {
+         freeClosureFunction(zf_);
+@@ -62,7 +63,269 @@
+ static HashTable *closure_carrier_get_gc(zend_object *object, zval **table, int *n);
+ static void closure_carrier_free(zend_object *object);
+ 
++static inline ClosureCarrier *closure_carrier_from_obj(zend_object *object);
++
+ static zend_object_handlers closure_carrier_handlers;
++static zend_object_handlers compiled_closure_handlers;
++static const zend_object_handlers *native_closure_handlers;
++static zif_handler native_closure_bind;
++static zif_handler native_closure_bind_to;
++static zif_handler native_closure_call;
++static zend_class_entry *reflection_class_entry;
++static void installReflectionIdentityHandlers(zend_class_entry *ce);
++static zif_handler native_reflection_class_name;
++static zif_handler native_reflection_is_internal;
++static zif_handler native_reflection_is_user_defined;
++// No registry key owns its Closure. The only extra edge is its carrier,
++// reported by get_gc, and erased by free_obj before native destruction.
++static thread_local std::unordered_map<zend_object *, Object> compiled_closures;
++// AOT PHP classes use Zend's internal registration API for native methods.
++// Only the compiler's MINIT registration records their user-code identity.
++static std::mutex compiled_class_mutex;
++static std::unordered_map<zend_class_entry *, int> compiled_user_classes;
++
++zend_class_entry *getClosureCalledScope(zend_execute_data *execute_data) {
++    auto *scope = zend_get_called_scope(execute_data);
++    if (scope == nullptr) {
++        throwError("Cannot access static:: when no class scope is active");
++        return nullptr;
++    }
++    return scope;
++}
++
++zend_class_entry *getClosureLexicalScope(zend_execute_data *execute_data, bool parent) {
++    auto *scope = execute_data->func->common.scope;
++    if (scope == nullptr) {
++        throwError("Cannot access %s when no class scope is active", parent ? "parent::" : "self::");
++        return nullptr;
++    }
++    if (parent) {
++        if (scope->parent == nullptr) {
++            throwError("Cannot access parent:: when current class scope has no parent");
++            return nullptr;
++        }
++        scope = scope->parent;
++    }
++    return scope;
++}
++
++void markCompiledUserClass(zend_class_entry *ce, int module_number) {
++    std::lock_guard<std::mutex> guard(compiled_class_mutex);
++    compiled_user_classes.emplace(ce, module_number);
++    installReflectionIdentityHandlers(ce);
++}
++
++void unmarkCompiledUserClasses(int module_number) {
++    std::lock_guard<std::mutex> guard(compiled_class_mutex);
++    for (auto entry = compiled_user_classes.begin(); entry != compiled_user_classes.end();) {
++        if (entry->second == module_number) entry = compiled_user_classes.erase(entry);
++        else ++entry;
++    }
++}
++
++static bool isCompiledUserClass(zend_class_entry *ce) {
++    std::lock_guard<std::mutex> guard(compiled_class_mutex);
++    return compiled_user_classes.find(ce) != compiled_user_classes.end();
++}
++
++// PHP 8.4.25's native validation is retained, except for its "internal
++// scope" restriction when the compiler explicitly registered a PHP source
++// class. Never change CE type or function scope globally to bypass it.
++static bool bindCompiledUserScope(zval *result, zval *source, zval *new_this,
++                                  zend_object *scope_object, zend_string *scope_name,
++                                  const Object &carrier) {
++    zend_class_entry *scope = nullptr;
++    const auto *function = zend_get_closure_method_def(Z_OBJ_P(source));
++    if (scope_object) scope = scope_object->ce;
++    else if (scope_name) {
++        if (zend_string_equals_literal(scope_name, "static")) scope = function->common.scope;
++        else {
++            scope = zend_lookup_class(scope_name);
++            if (scope == nullptr) {
++                zend_error(E_WARNING, "Class \"%s\" not found", ZSTR_VAL(scope_name));
++                ZVAL_NULL(result);
++                return true;
++            }
++        }
++    }
++    if (new_this && function->common.fn_flags & ZEND_ACC_STATIC) {
++        zend_error(E_WARNING, "Cannot bind an instance to a static closure");
++        ZVAL_NULL(result);
++        return true;
++    }
++    if (!new_this && Z_TYPE_P(zend_get_closure_this_ptr(source)) != IS_UNDEF
++        && function->common.fn_flags & ZEND_ACC_USES_THIS) {
++        zend_error(E_WARNING, "Cannot unbind $this of closure using $this");
++        ZVAL_NULL(result);
++        return true;
++    }
++    if (scope && scope != function->common.scope && scope->type == ZEND_INTERNAL_CLASS
++        && !isCompiledUserClass(scope)) {
++        zend_error(E_WARNING, "Cannot bind closure to scope of internal class %s", ZSTR_VAL(scope->name));
++        ZVAL_NULL(result);
++        return true;
++    }
++    auto *state = closure_carrier_from_obj(carrier.object())->state();
++    // A Zend internal closure with an explicitly null scope cannot be rebound
++    // using its wrapped function: create_closure treats that as a free native
++    // function. Copy the owned original callback metadata locally instead.
++    zend_internal_function rebound_function = state->zf_->internal_function;
++    rebound_function.scope = scope ? scope : state->zf_->common.scope;
++    zend_create_closure(result, reinterpret_cast<zend_function *>(&rebound_function), scope,
++                        new_this ? Z_OBJCE_P(new_this) : scope, new_this);
++    // attachCompiledClosure is applied by the outer wrapper on success.
++    return true;
++}
++
++
++static bool reflectionIsCompiledClass(INTERNAL_FUNCTION_PARAMETERS) {
++    zval name;
++    ZVAL_UNDEF(&name);
++    // Call the saved native handler directly: a ReflectionClass subclass may
++    // override getName(), but cannot change the class actually reflected.
++    native_reflection_class_name(execute_data, &name);
++    if (EG(exception) != nullptr || Z_TYPE(name) != IS_STRING) {
++        if (!Z_ISUNDEF(name)) zval_ptr_dtor(&name);
++        return false;
++    }
++    auto *ce = zend_lookup_class(Z_STR(name));
++    bool compiled = ce != nullptr && isCompiledUserClass(ce);
++    zval_ptr_dtor(&name);
++    return compiled;
++}
++
++static void compiled_reflection_is_internal(INTERNAL_FUNCTION_PARAMETERS) {
++    ZEND_PARSE_PARAMETERS_NONE();
++    if (reflectionIsCompiledClass(INTERNAL_FUNCTION_PARAM_PASSTHRU)) {
++        RETURN_FALSE;
++    }
++    if (EG(exception) != nullptr) return;
++    native_reflection_is_internal(INTERNAL_FUNCTION_PARAM_PASSTHRU);
++}
++
++static void compiled_reflection_is_user_defined(INTERNAL_FUNCTION_PARAMETERS) {
++    ZEND_PARSE_PARAMETERS_NONE();
++    if (reflectionIsCompiledClass(INTERNAL_FUNCTION_PARAM_PASSTHRU)) {
++        RETURN_TRUE;
++    }
++    if (EG(exception) != nullptr) return;
++    native_reflection_is_user_defined(INTERNAL_FUNCTION_PARAM_PASSTHRU);
++}
++
++static void installReflectionIdentityHandlers(zend_class_entry *ce) {
++    if (reflection_class_entry == nullptr || !instanceof_function(ce, reflection_class_entry)) return;
++    auto *internal = static_cast<zend_function *>(zend_hash_str_find_ptr(&ce->function_table, "isinternal", 10));
++    auto *user_defined = static_cast<zend_function *>(zend_hash_str_find_ptr(&ce->function_table, "isuserdefined", 13));
++    // Inherited internal methods may already have been copied during MINIT.
++    // Replace only the exact saved native implementation, never an override.
++    if (internal != nullptr && internal->type == ZEND_INTERNAL_FUNCTION
++        && internal->internal_function.handler == native_reflection_is_internal) {
++        internal->internal_function.handler = compiled_reflection_is_internal;
++    }
++    if (user_defined != nullptr && user_defined->type == ZEND_INTERNAL_FUNCTION
++        && user_defined->internal_function.handler == native_reflection_is_user_defined) {
++        user_defined->internal_function.handler = compiled_reflection_is_user_defined;
++    }
++}
++
++static void attachCompiledClosure(zend_object *closure, const Object &carrier) {
++    compiled_closures.emplace(closure, carrier);
++    closure->handlers = &compiled_closure_handlers;
++}
++
++static HashTable *compiled_closure_get_gc(zend_object *object, zval **table, int *n) {
++    zval *native_table;
++    int native_count;
++    HashTable *properties = native_closure_handlers->get_gc(object, &native_table, &native_count);
++    auto *buffer = zend_get_gc_buffer_create();
++    for (int i = 0; i < native_count; i++) {
++        zend_get_gc_buffer_add_zval(buffer, native_table + i);
++    }
++    auto state = compiled_closures.find(object);
++    if (state != compiled_closures.end()) {
++        zend_get_gc_buffer_add_zval(buffer, state->second.ptr());
++    }
++    zend_get_gc_buffer_use(buffer, table, n);
++    return properties;
++}
++
++static void compiled_closure_free(zend_object *object) {
++    Object carrier;
++    auto state = compiled_closures.find(object);
++    if (state != compiled_closures.end()) {
++        carrier = state->second;
++        compiled_closures.erase(state);
++    }
++    // Native closure destruction may inspect its borrowed function metadata.
++    // Keep the carrier alive until that destruction has completed.
++    native_closure_handlers->free_obj(object);
++}
++
++static zend_object *compiled_closure_clone(zend_object *object) {
++    Object carrier = compiled_closures.at(object);
++    zend_object *clone = native_closure_handlers->clone_obj(object);
++    attachCompiledClosure(clone, carrier);
++    return clone;
++}
++
++static void compiled_closure_bind(INTERNAL_FUNCTION_PARAMETERS) {
++    Object carrier;
++    if (ZEND_NUM_ARGS() >= 1) {
++        zval *source = ZEND_CALL_ARG(execute_data, 1);
++        ZVAL_DEREF(source);
++        if (Z_TYPE_P(source) == IS_OBJECT) {
++            auto state = compiled_closures.find(Z_OBJ_P(source));
++            if (state != compiled_closures.end()) carrier = state->second;
++        }
++    }
++    bool handled = false;
++    if (!carrier.isNull()) {
++        zval *source, *new_this;
++        zend_object *scope_object = nullptr;
++        zend_string *scope_name = ZSTR_KNOWN(ZEND_STR_STATIC);
++        ZEND_PARSE_PARAMETERS_START(2, 3)
++            Z_PARAM_OBJECT_OF_CLASS(source, zend_ce_closure)
++            Z_PARAM_OBJECT_OR_NULL(new_this)
++            Z_PARAM_OPTIONAL
++            Z_PARAM_OBJ_OR_STR_OR_NULL(scope_object, scope_name)
++        ZEND_PARSE_PARAMETERS_END();
++        handled = bindCompiledUserScope(return_value, source, new_this, scope_object, scope_name, carrier);
++    }
++    if (!handled) native_closure_bind(INTERNAL_FUNCTION_PARAM_PASSTHRU);
++    if (!carrier.isNull() && Z_TYPE_P(return_value) == IS_OBJECT) {
++        attachCompiledClosure(Z_OBJ_P(return_value), carrier);
++    }
++}
++
++static void compiled_closure_bind_to(INTERNAL_FUNCTION_PARAMETERS) {
++    Object carrier;
++    auto state = compiled_closures.find(Z_OBJ_P(ZEND_THIS));
++    if (state != compiled_closures.end()) carrier = state->second;
++    bool handled = false;
++    if (!carrier.isNull()) {
++        zval *new_this;
++        zend_object *scope_object = nullptr;
++        zend_string *scope_name = ZSTR_KNOWN(ZEND_STR_STATIC);
++        ZEND_PARSE_PARAMETERS_START(1, 2)
++            Z_PARAM_OBJECT_OR_NULL(new_this)
++            Z_PARAM_OPTIONAL
++            Z_PARAM_OBJ_OR_STR_OR_NULL(scope_object, scope_name)
++        ZEND_PARSE_PARAMETERS_END();
++        handled = bindCompiledUserScope(return_value, ZEND_THIS, new_this, scope_object, scope_name, carrier);
++    }
++    if (!handled) native_closure_bind_to(INTERNAL_FUNCTION_PARAM_PASSTHRU);
++    if (!carrier.isNull() && Z_TYPE_P(return_value) == IS_OBJECT) {
++        attachCompiledClosure(Z_OBJ_P(return_value), carrier);
++    }
++}
++
++static void compiled_closure_call(INTERNAL_FUNCTION_PARAMETERS) {
++    if (compiled_closures.find(Z_OBJ_P(ZEND_THIS)) != compiled_closures.end()) {
++        zend_throw_error(nullptr, "Closure::call() is not supported for compiled closures");
++        return;
++    }
++    native_closure_call(INTERNAL_FUNCTION_PARAM_PASSTHRU);
++}
+ 
+ void detail::initializeClosureCarrierHandlers() noexcept {
+     memcpy(&closure_carrier_handlers, &std_object_handlers, sizeof(zend_object_handlers));
+@@ -70,6 +333,36 @@
+     closure_carrier_handlers.free_obj = closure_carrier_free;
+     closure_carrier_handlers.get_gc = closure_carrier_get_gc;
+     closure_carrier_handlers.clone_obj = nullptr;
++    zval probe;
++    object_init_ex(&probe, zend_ce_closure);
++    native_closure_handlers = Z_OBJ(probe)->handlers;
++    compiled_closure_handlers = *native_closure_handlers;
++    compiled_closure_handlers.get_gc = compiled_closure_get_gc;
++    compiled_closure_handlers.free_obj = compiled_closure_free;
++    compiled_closure_handlers.clone_obj = compiled_closure_clone;
++    zval_ptr_dtor(&probe);
++    auto *bind = static_cast<zend_function *>(zend_hash_str_find_ptr(&zend_ce_closure->function_table, "bind", 4));
++    auto *bind_to = static_cast<zend_function *>(zend_hash_str_find_ptr(&zend_ce_closure->function_table, "bindto", 6));
++    auto *call = static_cast<zend_function *>(zend_hash_str_find_ptr(&zend_ce_closure->function_table, "call", 4));
++    native_closure_bind = bind->internal_function.handler;
++    native_closure_bind_to = bind_to->internal_function.handler;
++    native_closure_call = call->internal_function.handler;
++    bind->internal_function.handler = compiled_closure_bind;
++    bind_to->internal_function.handler = compiled_closure_bind_to;
++    call->internal_function.handler = compiled_closure_call;
++    auto *reflection = static_cast<zend_class_entry *>(zend_hash_str_find_ptr(CG(class_table), "reflectionclass", 15));
++    auto *name = static_cast<zend_function *>(zend_hash_str_find_ptr(&reflection->function_table, "getname", 7));
++    auto *internal = static_cast<zend_function *>(zend_hash_str_find_ptr(&reflection->function_table, "isinternal", 10));
++    auto *user_defined = static_cast<zend_function *>(zend_hash_str_find_ptr(&reflection->function_table, "isuserdefined", 13));
++    native_reflection_class_name = name->internal_function.handler;
++    native_reflection_is_internal = internal->internal_function.handler;
++    native_reflection_is_user_defined = user_defined->internal_function.handler;
++    reflection_class_entry = reflection;
++    void *entry;
++    ZEND_HASH_FOREACH_PTR(CG(class_table), entry) {
++        installReflectionIdentityHandlers(static_cast<zend_class_entry *>(entry));
++    } ZEND_HASH_FOREACH_END();
++
+ }
+ 
+ static inline ClosureCarrier *closure_carrier_from_obj(zend_object *object) {
+@@ -82,7 +375,6 @@
+ 
+     // ClosureState lives outside Zend's property table. Expose the bound
+     // object and captured variables so cyclic closures remain collectable.
+-    zend_get_gc_buffer_add_zval(gc_buffer, state->this_.ptr());
+     zval *capture = state->vars_.ptr();
+     for (uint32_t i = 0; i < state->vars_.count(); i++) {
+         zend_get_gc_buffer_add_zval(gc_buffer, capture + i);
+@@ -124,7 +416,9 @@
+                              zend_class_entry *scope,
+                              const ClosureParameter *parameters,
+                              uint32_t parameter_count,
+-                             bool strict_types = false) {
++                             bool strict_types = false,
++                             uint32_t binding_flags = 0,
++                             zend_class_entry *inherited_called_scope = nullptr) {
+     auto func = (zend_function *) emalloc(sizeof(zend_internal_function));
+     memset(func, 0, sizeof(zend_internal_function));
+ 
+@@ -132,13 +426,15 @@
+     func->type = ZEND_INTERNAL_FUNCTION;
+     func->internal_function.handler = [](INTERNAL_FUNCTION_PARAMETERS) {
+         try {
+-            if (UNEXPECTED(Z_TYPE(execute_data->This) != IS_OBJECT ||
+-                           Z_OBJ(execute_data->This)->handlers != &closure_carrier_handlers)) {
+-                throwError("Closure::call(), Closure::bind(), and Closure::bindTo() are not supported");
++            auto state_entry = compiled_closures.find(ZEND_CLOSURE_OBJECT(execute_data->func));
++            if (UNEXPECTED(state_entry == compiled_closures.end())) {
++                throwError("Compiled closure state is missing");
+                 return;
+             }
+-            auto *state = closure_carrier_from_obj(Z_OBJ_P(ZEND_THIS))->state();
+-            auto rv = state->fn_(INTERNAL_FUNCTION_PARAM_PASSTHRU, state->this_, state->vars_);
++            auto *state = closure_carrier_from_obj(state_entry->second.object())->state();
++            Object bound_this;
++            if (Z_TYPE(execute_data->This) == IS_OBJECT) bound_this = Object(&execute_data->This);
++            auto rv = state->fn_(INTERNAL_FUNCTION_PARAM_PASSTHRU, bound_this, state->vars_);
+             zval *retval = rv.direct_ptr();
+             if (Z_ISREF_P(retval) && !(EX(func)->common.fn_flags & ZEND_ACC_RETURN_REFERENCE)) {
+                 ZVAL_COPY_DEREF(return_value, retval);
+@@ -152,6 +448,7 @@
+         }
+     };
+     func->internal_function.function_name = fnName.str();
++    func->common.fn_flags |= binding_flags & (ZEND_ACC_STATIC | ZEND_ACC_USES_THIS);
+     if (strict_types) {
+         func->common.fn_flags |= ZEND_ACC_STRICT_TYPES;
+     }
+@@ -177,18 +474,20 @@
+     // callback state alive. Visibility and self:: resolution must use the
+     // lexical PHP class in which the closure was declared.
+     auto *lexical_scope = scope ? scope : zend_standard_class_def;
+-    auto *called_scope = _this.isNull() ? scope : _this.ce();
++    auto *called_scope = inherited_called_scope ? inherited_called_scope : (_this.isNull() ? scope : _this.ce());
+     func->common.scope = lexical_scope;
+ 
+     zval carrier;
+     ZVAL_OBJ(&carrier, newClosureCarrier(fn, _this, uses, func));
+ 
+     zval closure;
+-#if PHP_VERSION_ID >= 80600
+-    zend_create_fake_closure(&closure, func, lexical_scope, called_scope, Z_OBJ(carrier));
+-#else
+-    zend_create_fake_closure(&closure, func, lexical_scope, called_scope, &carrier);
+-#endif
++    zend_create_closure(&closure, func, lexical_scope, called_scope,
++                        _this.isNull() ? nullptr : const_cast<zval *>(_this.const_ptr()));
++    // Zend's internal-function construction needs a non-null source scope,
++    // but the new closure owns its copied function. Restore the PHP lexical
++    // scope on this private copy, including a genuinely unscoped closure.
++    const_cast<zend_function *>(zend_get_closure_method_def(Z_OBJ(closure)))->common.scope = scope;
++    attachCompiledClosure(Z_OBJ(closure), Object(&carrier));
+     zval_ptr_dtor(&carrier);
+ 
+     return {&closure, Ctor::Move};
+@@ -220,7 +519,9 @@
+                                 const Object &_this,
+                                 zend_class_entry *scope,
+                                 std::initializer_list<ClosureParameter> parameters,
+-                                ClosureStrictTypes strict_types) {
++                                ClosureStrictTypes strict_types,
++                                uint32_t binding_flags,
++                                zend_class_entry *called_scope) {
+     return newClosureImpl(
+         fn,
+         uses,
+@@ -228,7 +529,7 @@
+         scope,
+         parameters.begin(),
+         static_cast<uint32_t>(parameters.size()),
+-        strict_types == ClosureStrictTypes::Enabled);
++        strict_types == ClosureStrictTypes::Enabled, binding_flags, called_scope);
+ }
+ 
+ static bool isRelativeCallableClass(const zval *callable) {
+--- a/vendor/swoole/phpx/src/core/scope.cc
++++ b/vendor/swoole/phpx/src/core/scope.cc
+@@ -19,7 +19,7 @@
+ 
+ zend_execute_data *get_user_code_frame() {
+     zend_execute_data *frame = EG(current_execute_data);
+-    while (frame && (!frame->func || !ZEND_USER_CODE(frame->func->type))) {
++    while (frame && (!frame->func || (!ZEND_USER_CODE(frame->func->type) && !(frame->func->common.fn_flags & ZEND_ACC_CLOSURE)))) {
+         frame = frame->prev_execute_data;
+     }
+     return frame;
+--- a/vendor/swoole/phpx/src/typephp/typephp_property.cc
++++ b/vendor/swoole/phpx/src/typephp/typephp_property.cc
+@@ -462,6 +462,15 @@
+         return;
+     }
+ 
++    // A private parent property owns a distinct slot even when the child
++    // declares the same spelling. Internal-class declaration otherwise reuses
++    // the inherited offset and destroys the parent's default and metadata.
++    // Keep those tables intact and remove only the inherited lookup entry.
++    if (inherited->flags & ZEND_ACC_PRIVATE) {
++        zend_hash_del(&class_entry->properties_info, name);
++        return;
++    }
++
+     // The parent hook count was copied when the internal child class was
+     // linked. The replacement will either register its own hooks or restore
+     // the missing parent hooks in typephp_finalize_property_hook_inheritance().
+@@ -485,8 +494,18 @@
+     }
+ 
+     void *entry;
+-    ZEND_HASH_FOREACH_PTR(&class_entry->properties_info, entry) {
++    zend_string *property_key;
++    ZEND_HASH_FOREACH_STR_KEY_PTR(&class_entry->properties_info, property_key, entry) {
+         auto *property_info = static_cast<zend_property_info *>(entry);
++        // Zend's scoped lookup consults the parent's private slot only when
++        // the replacing child declaration is marked as changed.
++        if (property_info->ce == class_entry && property_key != nullptr) {
++            auto *parent_private = static_cast<zend_property_info *>(
++                zend_hash_find_ptr(&class_entry->parent->properties_info, property_key));
++            if (parent_private != nullptr && (parent_private->flags & ZEND_ACC_PRIVATE)) {
++                property_info->flags |= ZEND_ACC_CHANGED;
++            }
++        }
+         // Inherited entries already point at the parent's complete metadata.
+         // Only declarations owned by this class may have replaced that entry
+         // after zend_register_internal_class_with_flags() linked the parent.
+@@ -751,3 +770,32 @@
+     }
+     rebind_property_slot(slot, property_info, reference);
+ }
++
++php::Reference typephp_property_ref_scoped(const php::Variant &object,
++                                           const php::Variant &member,
++                                           zend_class_entry *scope) {
++    auto value = typephp_read_property_scoped(object, member, scope, php::AttrMode::Update);
++    if (value.isReference()) return php::Reference(value.const_ptr());
++    if (!value.isIndirect()) return {};
++    auto reference = value.toReference();
++    auto *obj = object.object();
++    auto *slot = value.direct_ptr();
++    if (slot >= obj->properties_table && slot < obj->properties_table + obj->ce->default_properties_count) {
++        auto *info = zend_get_property_info_for_slot(obj, slot);
++        if (info && ZEND_TYPE_IS_SET(info->type)) ZEND_REF_ADD_TYPE_SOURCE(reference.reference(), info);
++    }
++    return reference;
++}
++
++void typephp_unset_property_scoped(const php::Variant &object,
++                                    const php::Variant &member,
++                                    zend_class_entry *scope) {
++    if (UNEXPECTED(!object.isObject())) {
++        php::throwError("Attempt to unset property on %s", object.typeStr());
++        return;
++    }
++    auto name = member.toString();
++    php::FakeScopeGuard guard{scope};
++    object.object()->handlers->unset_property(object.object(), name.str(), nullptr);
++    php::throwErrorIfOccurred();
++}

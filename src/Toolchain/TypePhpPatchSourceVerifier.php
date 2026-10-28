@@ -26,7 +26,7 @@ final class TypePhpPatchSourceVerifier
         }
         if (!is_array($rules)
             || ($rules['component'] ?? null) !== 'typephp-source'
-            || ($rules['version'] ?? null) !== '0.9.2'
+            || ($rules['version'] ?? null) !== '0.9.5'
             || !is_array($rules['rules'] ?? null)
             || $rules['rules'] === []
         ) {
@@ -37,7 +37,7 @@ final class TypePhpPatchSourceVerifier
             $path = is_array($rule) ? ($rule['path'] ?? null) : null;
             $digest = is_array($rule) ? ($rule['afterSha256'] ?? null) : null;
             if (!is_string($path)
-                || preg_match('~^(?:src|vendor)/[A-Za-z0-9._/-]+$~D', $path) !== 1
+                || preg_match('~^(?:composer\.json|(?:src|vendor)/[A-Za-z0-9._/-]+)$~D', $path) !== 1
                 || in_array('..', explode('/', $path), true)
                 || isset($seen[$path])
                 || !is_string($digest)

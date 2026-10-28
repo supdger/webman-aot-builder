@@ -1,0 +1,26 @@
+--- a/vendor/swoole/phpx/src/core/closure.cc
++++ b/vendor/swoole/phpx/src/core/closure.cc
+@@ -250,10 +250,9 @@
+ }
+ 
+ static void compiled_closure_free(zend_object *object) {
+-    Object carrier;
+     auto state = compiled_closures.find(object);
++    Object carrier = state != compiled_closures.end() ? state->second : Object{};
+     if (state != compiled_closures.end()) {
+-        carrier = state->second;
+         compiled_closures.erase(state);
+     }
+     // Native closure destruction may inspect its borrowed function metadata.
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -2468,6 +2468,9 @@
+     {
+         if ($this->isNanoMode()) {
+             return $this->composeNanoRuntimeSources($sourceFiles);
++        }
++        if ($this->getFullStaticSdkDir() !== null) {
++            $sourceFiles[] = $this->getPhpxDir() . '/src/core/closure.cc';
+         }
+         if ($this->isBuildModeEmbed()) {
+             array_push($sourceFiles, ...$this->getEmbeddedRuntimeSources());

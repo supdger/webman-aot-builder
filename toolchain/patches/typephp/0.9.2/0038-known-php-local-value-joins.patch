@@ -1,0 +1,197 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -79,6 +79,39 @@
+         return $type === null ? null : ($target['namespacedFallback'] ? Type::VAR : $type);
+     }
+ 
++    private function knownPhpAssignmentTypes($expression): ?array
++    {
++        if ($expression instanceof \PhpParser\Node\Expr\Ternary && $expression->if !== null) {
++            $left = $this->knownPhpAssignmentTypes($expression->if);
++            $right = $this->knownPhpAssignmentTypes($expression->else);
++            return $left !== null && $right !== null ? $left + $right : null;
++        }
++        if (!$expression instanceof \PhpParser\Node\Scalar
++            && !$expression instanceof \PhpParser\Node\Expr\Array_
++            && !$expression instanceof \PhpParser\Node\Expr\ConstFetch
++            && !$expression instanceof \PhpParser\Node\Expr\New_
++            && !$expression instanceof \PhpParser\Node\Expr\StaticCall
++            && !$expression instanceof \PhpParser\Node\Expr\FuncCall) { return null; }
++        if ($expression instanceof \PhpParser\Node\Expr\CallLike && $expression->isFirstClassCallable()) {
++            return null;
++        }
++        $type = $this->detectTypeOfExpr($expression);
++        if ($type === Type::VAR && $expression instanceof \PhpParser\Node\Expr\FuncCall) {
++            $type = $this->valueParameterCallType($expression);
++            if ($type === Type::VAR) { return [Type::VAR => true]; }
++        }
++        if (!in_array($type, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)) {
++            return null;
++        }
++        if ($type === Type::OBJECT) {
++            $class = $this->detectClassOfExpr($expression);
++            if ($class === '' || !$this->hasClass($class) || !$this->isNativeClass($class)
++                || $this->isInternalClass($class) || $this->isNativeObjectClass($class)) { return null; }
++            return [Type::OBJECT . ':' . strtolower($class) => true];
++        }
++        return [$type => true];
++    }
++
+     /** Keep the entry ABI while allowing a PHP value parameter to change type in its body. */
+     protected function prepareValueParameterStorage(NodeAbstract|array|null $body): void
+     {
+@@ -95,37 +128,7 @@
+                 foreach ($node->getSubNodeNames() as $field) { $block($node->{$field}); }
+             }
+         };
+-        $types = function ($expression) use (&$types): ?array {
+-            if ($expression instanceof \PhpParser\Node\Expr\Ternary && $expression->if !== null) {
+-                $left = $types($expression->if);
+-                $right = $types($expression->else);
+-                return $left !== null && $right !== null ? $left + $right : null;
+-            }
+-            if (!$expression instanceof \PhpParser\Node\Scalar
+-                && !$expression instanceof \PhpParser\Node\Expr\Array_
+-                && !$expression instanceof \PhpParser\Node\Expr\ConstFetch
+-                && !$expression instanceof \PhpParser\Node\Expr\New_
+-                && !$expression instanceof \PhpParser\Node\Expr\StaticCall
+-                && !$expression instanceof \PhpParser\Node\Expr\FuncCall) { return null; }
+-            if ($expression instanceof \PhpParser\Node\Expr\CallLike && $expression->isFirstClassCallable()) {
+-                return null;
+-            }
+-            $type = $this->detectTypeOfExpr($expression);
+-            if ($type === Type::VAR && $expression instanceof \PhpParser\Node\Expr\FuncCall) {
+-                $type = $this->valueParameterCallType($expression);
+-                if ($type === Type::VAR) { return [Type::VAR => true]; }
+-            }
+-            if (!in_array($type, [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT], true)) {
+-                return null;
+-            }
+-            if ($type === Type::OBJECT) {
+-                $class = $this->detectClassOfExpr($expression);
+-                if ($class === '' || !$this->hasClass($class) || !$this->isNativeClass($class)
+-                    || $this->isInternalClass($class) || $this->isNativeObjectClass($class)) { return null; }
+-                return [Type::OBJECT . ':' . strtolower($class) => true];
+-            }
+-            return [$type => true];
+-        };
++        $types = fn ($expression): ?array => $this->knownPhpAssignmentTypes($expression);
+         $scan = function (mixed $value) use (&$scan, &$assignments, $block, $types): void {
+             foreach (is_array($value) ? $value : [$value] as $node) {
+                 if (!$node instanceof \PhpParser\Node) { continue; }
+@@ -221,18 +224,28 @@
+                 foreach ($node->getSubNodeNames() as $field) { $variables($node->{$field}); }
+             }
+         };
+-        $classes = function ($expression) use (&$classes): ?array {
+-            if ($expression instanceof \PhpParser\Node\Expr\Ternary && $expression->if !== null) {
+-                $left = $classes($expression->if);
+-                $right = $classes($expression->else);
+-                return $left !== null && $right !== null ? $left + $right : null;
+-            }
+-            if (!$expression instanceof \PhpParser\Node\Expr\New_
+-                || !$expression->class instanceof \PhpParser\Node\Name) { return null; }
+-            $class = $this->resolveNewExprClass($expression);
+-            if ($class === null || !$this->hasClass($class) || $this->isNativeObjectClass($class)
+-                || !$this->isNativeClass($class) || $this->isInternalClass($class)) { return null; }
+-            return [strtolower($class) => $class];
++        $classes = function ($expression): ?array {
++            $types = $this->knownPhpAssignmentTypes($expression);
++            if ($types !== null) { return isset($types[Type::VAR]) ? null : $types; }
++            if (!$expression instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseAnd
++                && !$expression instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseOr
++                && !$expression instanceof \PhpParser\Node\Expr\BinaryOp\BitwiseXor
++                && !$expression instanceof \PhpParser\Node\Expr\BinaryOp\ShiftLeft
++                && !$expression instanceof \PhpParser\Node\Expr\BinaryOp\ShiftRight) { return null; }
++            // A PHP integer operand makes a valid bitwise result an integer;
++            // unlike general arithmetic this cannot widen on overflow.
++            $left = $this->detectTypeOfExpr($expression->left);
++            $right = $this->detectTypeOfExpr($expression->right);
++            $ordinary = [Type::STR, Type::INT, Type::FLOAT, Type::BOOL, Type::ARRAY, Type::OBJECT, Type::VAR];
++            if (!in_array($left, $ordinary, true) || !in_array($right, $ordinary, true)
++                || ($left !== Type::INT && $right !== Type::INT)) { return null; }
++            foreach ([$expression->left, $expression->right] as $operand) {
++                if ($this->isVarExpr($operand)
++                    && ($this->isNativeObjectVar($operand->name) || $this->isStdContainerParameter($operand->name))) { return null; }
++                $class = $this->detectClassOfExpr($operand);
++                if ($class !== '' && $this->isNativeObjectClass($class)) { return null; }
++            }
++            return [Type::INT => true];
+         };
+         $scan = function (mixed $value) use (&$scan, &$assignments, &$blocked, &$calls, &$dynamic, $variables, $classes): void {
+             foreach (is_array($value) ? $value : [$value] as $node) {
+@@ -309,10 +322,16 @@
+                 || $this->hasScopeGlobalVar($name) || $this->isSuperGlobal($name)
+                 || isset($this->context->varTypeDegradations[$name])
+                 || isset($this->context->typedRefRoots[$name])
+-                || isset($this->context->explicitNativeTypeVars[$name])) { continue; }
+-            $join = false;
+-            foreach ($classes as $left) {
+-                foreach ($classes as $right) {
++                || isset($this->context->explicitNativeTypeVars[$name])
++                || $this->isStdContainerParameter($name) || $this->isNativeObjectVar($name)) { continue; }
++            $objectClasses = [];
++            foreach (array_keys($classes) as $type) {
++                if (str_starts_with($type, Type::OBJECT . ':')) { $objectClasses[] = substr($type, strlen(Type::OBJECT) + 1); }
++            }
++            $join = count($objectClasses) !== count($classes);
++            if ($join && !$this->phpLocalWritesBeforeReads($body, $sourceName)) { continue; }
++            foreach ($objectClasses as $left) {
++                foreach ($objectClasses as $right) {
+                     if (!$this->isObjectClassStaticallyAssignableTo($left, $right)
+                         && !$this->isObjectClassStaticallyAssignableTo($right, $left)) { $join = true; }
+                 }
+@@ -324,6 +343,53 @@
+                 $this->context->stableObjects[$name], $this->context->exactObjects[$name],
+                 $this->context->hoistedProps[$name], $this->context->unsafeObjectProps[$name]);
+         }
++    }
++
++    /** Conservative definition proof only for new mixed PHP local joins. */
++    private function phpLocalWritesBeforeReads(NodeAbstract|array|null $body, string $name): bool
++    {
++        $valid = true;
++        $read = function (mixed $value, bool $written) use (&$read, &$valid, $name): void {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof Variable && $node->name === $name && !$written) { $valid = false; }
++                if ($node instanceof \PhpParser\Node\Stmt\Goto_ || $node instanceof \PhpParser\Node\Stmt\Label) { $valid = false; }
++                if ($node instanceof \PhpParser\Node\Expr\Closure) {
++                    $read($node->uses, $written);
++                    continue;
++                }
++                if ($node instanceof \PhpParser\Node\FunctionLike && !$node instanceof \PhpParser\Node\Expr\ArrowFunction) { continue; }
++                foreach ($node->getSubNodeNames() as $field) { $read($node->{$field}, $written); }
++            }
++        };
++        $walk = function (mixed $value, bool $written) use (&$walk, &$valid, $read, $name): bool {
++            foreach (is_array($value) ? $value : [$value] as $node) {
++                if (!$node instanceof \PhpParser\Node) { continue; }
++                if ($node instanceof \PhpParser\Node\Stmt\Goto_ || $node instanceof \PhpParser\Node\Stmt\Label) {
++                    $valid = false;
++                } elseif ($node instanceof \PhpParser\Node\Stmt\Expression) {
++                    $written = $walk($node->expr, $written);
++                } elseif ($node instanceof \PhpParser\Node\Expr\Assign && $node->var instanceof Variable && $node->var->name === $name) {
++                    $read($node->expr, $written);
++                    $written = true;
++                } elseif ($node instanceof \PhpParser\Node\Stmt\If_) {
++                    $read($node->cond, $written);
++                    $branches = [$walk($node->stmts, $written)];
++                    foreach ($node->elseifs as $branch) {
++                        $read($branch->cond, $written);
++                        $branches[] = $walk($branch->stmts, $written);
++                    }
++                    $branches[] = $node->else === null ? $written : $walk($node->else->stmts, $written);
++                    $written = !in_array(false, $branches, true);
++                } else {
++                    // Other control flow supplies no new definition evidence.
++                    $read($node, $written);
++                }
++            }
++            return $written;
++        };
++        $walk($body, false);
++        return $valid;
+     }
+ 
+     /**

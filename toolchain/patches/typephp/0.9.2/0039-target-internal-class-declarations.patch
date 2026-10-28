@@ -1,0 +1,656 @@
+--- /dev/null
++++ b/src/Build/TargetInternalClassMetadata.php
+@@ -0,0 +1,298 @@
++<?php
++/**
++ * This file is part of TypePHP.
++ * Selected static SDK declarations, never source classes or C++ body symbols.
++ */
++namespace TypePhp\Build;
++
++use PhpParser\Modifiers;
++use PhpParser\ParserFactory;
++use TypePhp\Entity\ArgInfo;
++use TypePhp\Entity\FunctionDef;
++use TypePhp\Entity\MethodDef;
++use TypePhp\Type;
++
++require_once __DIR__ . "/TargetInternalClassArchive.php";
++
++final class TargetInternalClassMetadata
++{
++    private static array $cache = [];
++
++    public static function read(?string $sdk, ?string $nm): array
++    {
++        $empty = ['classes' => [], 'sha256' => ''];
++        if ($sdk === null || $nm === null || !is_executable($nm)
++            || basename($nm) !== 'llvm-nm' || !is_file($sdk . '/lib/libphp.a')
++            || !is_dir($sdk . '/include/php/ext')) { return $empty; }
++        $headers = [];
++        try {
++            foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator(
++                $sdk . '/include/php/ext', \FilesystemIterator::SKIP_DOTS)) as $file) {
++                if (!$file->isFile() || !str_ends_with($file->getFilename(), '.h')) { continue; }
++                $text = @file_get_contents($file->getPathname());
++                if ($text === false) { return $empty; }
++                $headers[substr($file->getPathname(), strlen($sdk) + 1)] = $text;
++            }
++        } catch (\Throwable) { return $empty; }
++        $layout = [];
++        foreach (['sdk-manifest.json', 'include/php/main/php_config.h', 'include/php/Zend/zend_API.h',
++            'include/php/Zend/zend_compile.h', 'include/php/Zend/zend_types.h', 'include/php/Zend/zend_type_info.h'] as $path) {
++            $text = @file_get_contents($sdk . '/' . $path);
++            if ($text === false) { return $empty; }$layout[$path] = $text;
++        }
++        if (!self::supportsLayout($layout)) { return $empty; }
++        ksort($headers);
++        $digest = hash('sha256', serialize([$layout, realpath($sdk), hash_file('sha256', $sdk . '/lib/libphp.a'),
++            realpath($nm), hash_file('sha256', $nm), $headers]));
++        if (isset(self::$cache[$digest])) { return self::$cache[$digest]; }
++        // The registry object must reference a module which the same archive defines.
++        $defined = $registered = $members = [];
++        $errors = tmpfile();
++        $process = proc_open([$nm, '-A', $sdk . '/lib/libphp.a'], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => $errors], $pipes);
++        if (!is_resource($process)) { return $empty; }
++        fclose($pipes[0]);
++        while (($line = fgets($pipes[1])) !== false) {
++            if (preg_match('/\b[BDR]\s+(\w+_module_entry)\s*$/', $line, $m)) { $defined[$m[1]] = true;
++                if (preg_match('/:(?:[^:]*\/)?([^:]+\.o):/', $line, $member)) { $members[$m[1]] = $member[1]; } }
++            if (preg_match('/\binternal_functions(?:_cli)?\.o:.*\bU\s+(\w+_module_entry)\s*$/', $line, $m)) { $registered[$m[1]] = true; }
++        }
++        fclose($pipes[1]);$exit = proc_close($process);fclose($errors);
++        if ($exit !== 0) { return $empty; }
++        $records = TargetInternalClassArchive::read($sdk . '/lib/libphp.a', array_intersect_key($members, $registered));
++        $classes = $duplicates = [];
++        foreach ($headers as $path => $raw) {
++            if (!str_ends_with($path, '_arginfo.h')) { continue; }
++            $directory = dirname($path);$modules = [];
++            foreach ($headers as $peer => $text) {
++                if (dirname($peer) !== $directory || $peer === $path) { continue; }
++                $text = self::clean($text);
++                preg_match_all('/^\s*extern\s+zend_module_entry\s+(\w+_module_entry)\s*;/m', $text, $entries);
++                foreach ($entries[1] as $module) {
++                    if (isset($defined[$module], $registered[$module])) { $modules[$module] = true; }
++                }
++            }
++            if (count($modules) !== 1) { continue; }
++            $source = self::clean($raw);
++            $unconditional = self::unconditional($source);
++            preg_match_all('/^\s*static\s+zend_class_entry\s*\*\s*(register_class_\w+)\(void\)\s*\{(.*?)\n\}/sm', $source, $registrations, PREG_SET_ORDER);
++            foreach ($registrations as $registration) {
++                $body = $registration[2];$unconditionalBody = self::unconditional($body);
++                if (!preg_match('/^\s*static\s+zend_class_entry\s*\*\s*' . preg_quote($registration[1], '/') . '\(void\)\s*\{/m', $unconditional)) { continue; }
++                // Root internal classes only; parent/interface binding needs separate evidence.
++                if (!preg_match('/^\s*INIT_CLASS_ENTRY\(ce,\s*"([A-Za-z_][A-Za-z0-9_]*)",\s*(\w+)\);/m', $body, $m)
++                    || !str_contains($body, 'zend_register_internal_class_ex(&ce, NULL)')) { continue; }
++                $key = strtolower($m[1]);
++                if (!str_contains($unconditionalBody, $m[0]) || !str_contains($unconditionalBody, 'zend_register_internal_class_ex(&ce, NULL)')) { continue; }
++                
++                $flags = 0;$invalid = false;
++                preg_match_all('/class_entry->ce_flags\s*([^;]+);/', $body, $writes);
++                preg_match_all('/class_entry->ce_flags\s*([^;]+);/', $unconditionalBody, $unconditionalWrites);
++                if ($writes[0] !== $unconditionalWrites[0]) { continue; }
++                foreach ($writes[1] as $write) {
++                    if (!preg_match('/^\|=\s*(ZEND_ACC_FINAL|ZEND_ACC_EXPLICIT_ABSTRACT_CLASS|ZEND_ACC_READONLY_CLASS)$/D', trim($write), $w)) { $invalid = true;break; }
++                    $flags |= match ($w[1]) { 'ZEND_ACC_FINAL' => Modifiers::FINAL, 'ZEND_ACC_EXPLICIT_ABSTRACT_CLASS' => Modifiers::ABSTRACT, 'ZEND_ACC_READONLY_CLASS' => Modifiers::READONLY };
++                }
++                if ($invalid || array_filter($writes[0], static fn(string $write): bool => !str_contains($unconditionalBody, $write)) || preg_match('/zend_class_implements|class_entry->(?:parent|interfaces)/', $body)) { continue; }
++                $unconditional = self::unconditional($source);
++                if (!preg_match('/^\s*static\s+const\s+zend_function_entry\s+' . preg_quote($m[2], '/') . '\[\]\s*=\s*\{([^}]+)\}/sm', $unconditional, $table)) { continue; }
++                // No unknown/conditional method registrations can silently disappear.
++                if (!preg_match('/^\s*static\s+const\s+zend_function_entry\s+' . preg_quote($m[2], '/') . '\[\]\s*=\s*\{([^}]+)\}/sm', $source, $allTable) || $allTable[1] !== $table[1]) { continue; }
++                $methods = self::methods($m[1], $table[1], $unconditional);
++                $actual = $records[array_key_first($modules)][$key] ?? null;
++                if ($methods === null || $actual === null || $methods['signatures'] !== $actual) { continue; }
++                if (isset($classes[$key]) || isset($duplicates[$key])) { unset($classes[$key]);$duplicates[$key] = true;continue; }
++                $classes[$key] = ['name' => $m[1], 'flags' => $flags, 'methods' => $methods['methods'], 'module' => array_key_first($modules), 'header' => $path];
++            }
++        }
++        return self::$cache[$digest] = ['classes' => $classes, 'sha256' => $digest];
++    }
++
++    /** These record offsets apply only to the selected SysV x64 Zend declarations. */
++    private static function supportsLayout(array $headers): bool
++    {
++        $manifest = json_decode($headers['sdk-manifest.json'], true);
++        if (!is_array($manifest) || ($manifest['target'] ?? null) !== 'linux-x64') { return false; }
++        $compile = self::clean($headers['include/php/Zend/zend_compile.h']);
++        $api = self::clean($headers['include/php/Zend/zend_API.h']);
++        $types = self::clean($headers['include/php/Zend/zend_types.h']);
++        $compact = static fn(string $text): string => preg_replace('/\s+/', '', $text);
++        if (!str_contains($compact($compile), 'typedefstruct_zend_internal_arg_info{constchar*name;zend_typetype;constchar*default_value;}zend_internal_arg_info;')
++            || !str_contains($compact($types), 'typedefstruct{void*ptr;uint32_ttype_mask;}zend_type;')
++            || !str_contains($compact($api), 'typedefstruct_zend_function_entry{constchar*fname;zif_handlerhandler;conststruct_zend_internal_arg_info*arg_info;uint32_tnum_args;uint32_tflags;constzend_frameless_function_info*frameless_function_infos;constchar*doc_comment;}zend_function_entry;')) { return false; }
++        foreach (['SIZEOF_LONG', 'SIZEOF_SIZE_T'] as $name) {
++            if (!preg_match('/^#define\s+' . $name . '\s+8\s*$/m', $headers['include/php/main/php_config.h'])) { return false; }
++        }
++        foreach (['IS_NULL' => 1, 'IS_FALSE' => 2, 'IS_TRUE' => 3, 'IS_LONG' => 4, 'IS_DOUBLE' => 5,
++            'IS_STRING' => 6, 'IS_ARRAY' => 7, 'IS_CALLABLE' => 12, 'IS_VOID' => 14, 'IS_MIXED' => 16, '_IS_BOOL' => 18] as $name => $value) {
++            if (!preg_match('/^#define\s+' . $name . '\s+' . $value . '\s*$/m', $types)) { return false; }
++        }
++        foreach (['ZEND_ACC_PUBLIC' => 0, 'ZEND_ACC_PROTECTED' => 1, 'ZEND_ACC_PRIVATE' => 2,
++            'ZEND_ACC_STATIC' => 4, 'ZEND_ACC_FINAL' => 5, 'ZEND_ACC_ABSTRACT' => 6, 'ZEND_ACC_DEPRECATED' => 11] as $name => $shift) {
++            if (!preg_match('/^#define\s+' . $name . '\s+\(1\s*<<\s*' . $shift . '\)\s*$/m', $compile)) { return false; }
++        }
++        return str_contains($compact($types), '#define_ZEND_TYPE_EXTRA_FLAGS_SHIFT25')
++            && str_contains($compact($types), '#define_ZEND_TYPE_LITERAL_NAME_BIT(1u<<23)')
++            && str_contains($compact($compile), '#define_ZEND_IS_VARIADIC_BIT(1<<(_ZEND_TYPE_EXTRA_FLAGS_SHIFT+2))')
++            && str_contains($compact($compile), '#define_ZEND_SEND_MODE_SHIFT_ZEND_TYPE_EXTRA_FLAGS_SHIFT');
++    }
++
++    private static function clean(string $source): string
++    {
++        $source = preg_replace('/\\\\\r?\n/', '', $source);
++        return preg_replace_callback('~"(?:\\\\.|[^"\\\\])*"|\'(?:\\\\.|[^\'\\\\])*\'|/\*.*?\*/|//[^\n]*~s',
++            static fn(array $m): string => str_starts_with($m[0], '"') || str_starts_with($m[0], "'") ? $m[0] : preg_replace('/[^\n]/', ' ', $m[0]), $source) ?? '';
++    }
++
++    private static function unconditional(string $source): string
++    {
++        $depth = 0;$result = '';
++        foreach (explode("\n", $source) as $line) {
++            if (preg_match('/^\s*#\s*(if|ifdef|ifndef)\b/', $line)) { ++$depth;continue; }
++            if (preg_match('/^\s*#\s*endif\b/', $line)) { if ($depth === 0) { return ''; }--$depth;continue; }
++            if ($depth === 0 && !preg_match('/^\s*#\s*(else|elif)\b/', $line)) { $result .= $line . "\n"; }
++        }
++        return $depth === 0 ? $result : '';
++    }
++
++    private static function methods(string $class, string $table, string $source): ?array
++    {
++        $methods = $signatures = [];
++        preg_match_all('/ZEND_(ME|MALIAS)\(([^\n]*)\)/', $table, $entries, PREG_SET_ORDER);
++        $residue = preg_replace('/ZEND_(ME|MALIAS)\([^\n]*\)|ZEND_FE_END|\s/', '', $table);
++        if ($residue !== '') { return null; }
++        foreach ($entries as $entry) {
++            $values = self::arguments($entry[2]);$name = $values[1] ?? '';
++            if (count($values) !== ($entry[1] === 'ME' ? 4 : 5) || $values[0] !== $class || isset($methods[strtolower($name)])) { return null; }
++            $info = $values[$entry[1] === 'ME' ? 2 : 3];$flags = 0;
++            foreach (explode('|', $values[$entry[1] === 'ME' ? 3 : 4]) as $flag) {
++                $value = match (trim($flag)) { 'ZEND_ACC_PUBLIC' => Modifiers::PUBLIC, 'ZEND_ACC_PROTECTED' => Modifiers::PROTECTED, 'ZEND_ACC_PRIVATE' => Modifiers::PRIVATE, 'ZEND_ACC_STATIC' => Modifiers::STATIC, 'ZEND_ACC_FINAL' => Modifiers::FINAL, 'ZEND_ACC_ABSTRACT' => Modifiers::ABSTRACT, 'ZEND_ACC_DEPRECATED' => 0, default => null };
++                if ($value === null) { return null; }$flags |= $value;
++            }
++            $visited = [];
++            while (($count = preg_match_all('/^[ \t]*#[ \t]*define[ \t]+' . preg_quote($info, '/') . '[ \t]+(\w+)[ \t]*$/m', $source, $aliases, PREG_SET_ORDER)) > 0) {
++                if ($count !== 1 || isset($visited[$info])) { return null; }$visited[$info] = true;$info = $aliases[0][1];
++            }
++            if (preg_match_all('/^\s*(ZEND_BEGIN_ARG_\w+)\(' . preg_quote($info, '/') . ',\s*([^\n]*)\)\s*(.*?)ZEND_END_ARG_INFO\(\)/sm', $source, $matches, PREG_SET_ORDER) !== 1) { return null; }
++            $signature = self::signature($class, $name, $matches[0]);
++            if ($signature === null) { return null; }
++            $record = self::record($name, $values[$entry[1] === 'ME' ? 3 : 4], $matches[0]);
++            if ($record === null) { return null; }
++            $signatures[strtolower($name)] = $record;
++            if ($signature === null) { return null; }
++            $method = new MethodDef($flags, $name);$method->functionDef = $signature;$methods[strtolower($name)] = $method;
++        }
++        return ['methods' => $methods, 'signatures' => $signatures];
++    }
++
++    private static function arguments(string $text): array
++    {
++        preg_match_all('/"(?:\\\\.|[^"\\\\])*"|[^,]+/', $text, $m);
++        return array_map('trim', $m[0]);
++    }
++
++    private static function signature(string $class, string $name, array $match): ?FunctionDef
++    {
++        $begin = self::arguments($match[2]);
++        if (count($begin) < 3 || !in_array($begin[0], ['0', '1'], true)) { return null; }
++        $function = new FunctionDef($name, Type::VAR, '');$function->method = true;$function->declaringClass = $class;
++        $function->argCountRequired = (int) $begin[1];$function->returnsByRef = $begin[0] === '1';
++        if ($match[1] === 'ZEND_BEGIN_ARG_INFO_EX') {
++            $function->argCountRequired = (int) $begin[2];$function->returnTypeUndeclared = true;
++        } else {
++            $return = match ($match[1]) {
++                'ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX' => self::types($begin[2], $begin[3] ?? '0'),
++                'ZEND_BEGIN_ARG_WITH_RETURN_TYPE_MASK_EX' => self::types($begin[2]),
++                'ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX' => self::types($begin[3] ?? ''),
++                default => null,
++            };
++            if ($return === null) { return null; }
++            if ($match[1] === 'ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX') { array_unshift($return, ['kind' => 'instanceof', 'class' => $begin[2]]); }
++            $function->returnTypeCheck = $return;
++            $function->returnType = self::storage($return);$function->returnTypeStr = $begin[2];
++        }
++        preg_match_all('/\b(ZEND_ARG_\w+)\(([^\n]*)\)/', $match[3], $arguments, PREG_SET_ORDER);
++        if (preg_replace('/ZEND_ARG_\w+\([^\n]*\)|\s/', '', $match[3]) !== '') { return null; }
++        foreach ($arguments as $argument) {
++            $v = self::arguments($argument[2]);
++            if (!in_array($argument[1], ['ZEND_ARG_TYPE_INFO', 'ZEND_ARG_TYPE_INFO_WITH_DEFAULT_VALUE', 'ZEND_ARG_TYPE_MASK', 'ZEND_ARG_VARIADIC_TYPE_INFO'], true)
++                || count($v) < 4 || !in_array($v[0], ['0', '1'], true)) { return null; }
++            $types = self::types($v[2], $argument[1] === 'ZEND_ARG_TYPE_MASK' ? '0' : $v[3]);
++            if ($types === null) { return null; }
++            $arg = new ArgInfo;$arg->name = $arg->phpName = $v[1];$arg->byRef = $v[0] === '1';$arg->variadic = $argument[1] === 'ZEND_ARG_VARIADIC_TYPE_INFO';
++            $arg->typeCheck = $types;$arg->type = self::storage($types);$arg->explicitMixed = $v[2] === 'IS_MIXED';$arg->nullable = in_array(['kind' => 'isNull'], $types, true);
++            if (str_contains($argument[1], 'DEFAULT_VALUE') || ($argument[1] === 'ZEND_ARG_TYPE_MASK' && $v[3] !== 'NULL')) {
++                $default = json_decode(end($v));
++                if (!is_string($default)) { return null; }
++                try { $expr = (new ParserFactory)->createForNewestSupportedVersion()->parse('<?php ' . $default . ';')[0]->expr; }
++                catch (\Throwable) { return null; }
++                $arg->defaultExpr = $arg->defaultValue = $expr;
++            }
++            $function->argInfoList[] = $arg;
++        }
++        if ($function->argCountRequired > count($function->argInfoList)) { return null; }
++        return $function;
++    }
++
++    private static function types(string $mask, string $nullable = '0'): ?array
++    {
++        if (!in_array($nullable, ['0', '1'], true)) { return null; }
++        $types = [];
++        foreach (explode('|', $mask) as $token) {
++            $kind = match (trim($token)) {
++                'IS_LONG', 'MAY_BE_LONG' => 'isInt', 'IS_DOUBLE', 'MAY_BE_DOUBLE' => 'isFloat',
++                'IS_STRING', 'MAY_BE_STRING' => 'isString', '_IS_BOOL', 'MAY_BE_BOOL' => 'isBool',
++                'IS_ARRAY', 'MAY_BE_ARRAY' => 'isArray', 'IS_MIXED' => 'isMixed',
++                'IS_CALLABLE' => 'callable', 'IS_VOID' => 'isVoid', 'MAY_BE_FALSE' => 'isFalse',
++                'MAY_BE_TRUE' => 'isTrue', 'MAY_BE_NULL' => 'isNull', default => null,
++            };
++            if ($kind === null) { return null; }$types[] = ['kind' => $kind];
++        }
++        if ($nullable === '1') { $types[] = ['kind' => 'isNull']; }
++        return $types;
++    }
++
++    /** Compare every declared field with the selected object, including relocated literals. */
++    private static function record(string $name, string $flags, array $match): ?array
++    {
++        $v = self::arguments($match[2]);$mask = 0;$class = null;$required = (int) $v[1];
++        if ($match[1] === 'ZEND_BEGIN_ARG_INFO_EX') { $required = (int) $v[2]; }
++        elseif ($match[1] === 'ZEND_BEGIN_ARG_WITH_RETURN_OBJ_TYPE_MASK_EX') { $class = $v[2];$mask = self::mask($v[3]);if ($mask !== null) { $mask |= 1 << 23; } }
++        else { $mask = self::mask($v[2]);if ($match[1] === 'ZEND_BEGIN_ARG_WITH_RETURN_TYPE_INFO_EX' && ($v[3] ?? '0') === '1' && $mask !== null) { $mask |= 2; } }
++        if ($mask === null) { return null; }
++        $args = [['name' => $required, 'mask' => $mask | ((int) $v[0] << 25), 'class' => $class, 'default' => null]];
++        preg_match_all('/\b(ZEND_ARG_\w+)\(([^\n]*)\)/', $match[3], $arguments, PREG_SET_ORDER);
++        foreach ($arguments as $arg) {
++            $a = self::arguments($arg[2]);$mask = self::mask($a[2]);if ($mask === null) { return null; }
++            $mask |= (int) $a[0] << 25;
++            if ($arg[1] === 'ZEND_ARG_VARIADIC_TYPE_INFO') { $mask |= 1 << 27; }
++            if ($arg[1] !== 'ZEND_ARG_TYPE_MASK' && $a[3] === '1') { $mask |= 2; }
++            $default = str_contains($arg[1], 'DEFAULT_VALUE') || ($arg[1] === 'ZEND_ARG_TYPE_MASK' && $a[3] !== 'NULL') ? json_decode(end($a)) : null;
++            $args[] = ['name' => $a[1], 'mask' => $mask, 'class' => null, 'default' => $default];
++        }
++        $bits = 0;
++        foreach (explode('|', $flags) as $flag) {
++            $bit = match (trim($flag)) { 'ZEND_ACC_PUBLIC' => 1, 'ZEND_ACC_PROTECTED' => 2, 'ZEND_ACC_PRIVATE' => 4, 'ZEND_ACC_STATIC' => 16, 'ZEND_ACC_FINAL' => 32, 'ZEND_ACC_ABSTRACT' => 64, 'ZEND_ACC_DEPRECATED' => 2048, default => null };
++            if ($bit === null) { return null; }$bits |= $bit;
++        }
++        return ['name' => $name, 'flags' => $bits, 'args' => $args];
++    }
++
++    private static function mask(string $expression): ?int
++    {
++        $mask = 0;
++        foreach (explode('|', $expression) as $token) {
++            $bit = match (trim($token)) { 'IS_LONG', 'MAY_BE_LONG' => 16, 'IS_DOUBLE', 'MAY_BE_DOUBLE' => 32,
++                'IS_STRING', 'MAY_BE_STRING' => 64, '_IS_BOOL', 'MAY_BE_BOOL' => 12, 'IS_ARRAY', 'MAY_BE_ARRAY' => 128,
++                'IS_MIXED' => 1022, 'IS_CALLABLE' => 4096, 'IS_VOID' => 16384, 'MAY_BE_NULL' => 2, 'MAY_BE_FALSE' => 4, 'MAY_BE_TRUE' => 8, default => null };
++            if ($bit === null) { return null; }$mask |= $bit;
++        }
++        return $mask;
++    }
++
++    private static function storage(array $types): string
++    {
++        if (count($types) !== 1) { return Type::VAR; }
++        return match ($types[0]['kind']) { 'isInt' => Type::INT, 'isFloat' => Type::FLOAT, 'isString' => Type::STR,
++            'isBool', 'isFalse', 'isTrue' => Type::BOOL, 'isArray' => Type::ARRAY, 'isVoid' => Type::VOID, default => Type::VAR };
++    }
++}
+--- /dev/null
++++ b/src/Build/TargetInternalClassArchive.php
+@@ -0,0 +1,136 @@
++<?php
++/** This file is part of TypePHP. Selected Linux x64 Zend declaration records only. */
++namespace TypePhp\Build;
++
++final class TargetInternalClassArchive
++{
++    /** Module entry => class method table records; ambiguous members supply no evidence. */
++    public static function read(string $archive, array $members): array
++    {
++        $result = $duplicate = [];$stream = @fopen($archive, 'rb');
++        if (!is_resource($stream)) { return []; }
++        try {
++            if (fread($stream, 8) !== "!<arch>\n") { return []; }
++            $strings = '';$size = filesize($archive);
++            while (ftell($stream) < $size) {
++                $header = fread($stream, 60);
++                if (strlen($header) !== 60 || substr($header, 58) !== "`\n" || !ctype_digit(trim(substr($header, 48, 10)))) { return []; }
++                $length = (int) trim(substr($header, 48, 10));$offset = ftell($stream);
++                if ($length < 0 || $offset + $length + ($length % 2) > $size) { return []; }
++                $name = trim(substr($header, 0, 16));
++                if ($name === '//') { $strings = fread($stream, $length); }
++                elseif ($name !== '/') {
++                    if (preg_match('/^\/(\d+)$/D', $name, $m)) {
++                        $end = strpos($strings, "/\n", (int) $m[1]);
++                        if ($end === false || (int) $m[1] >= strlen($strings)) { return []; }
++                        $name = substr($strings, (int) $m[1], $end - (int) $m[1]);
++                    } else { $name = rtrim($name, '/'); }
++                    if (in_array($name, $members, true)) {
++                        $object = fread($stream, $length);
++                        foreach (self::object($object, $members) as $module => $tables) {
++                            if (isset($result[$module]) || isset($duplicate[$module])) { unset($result[$module]);$duplicate[$module] = true; }
++                            else { $result[$module] = $tables; }
++                        }
++                    }
++                }
++                fseek($stream, $offset + $length + ($length % 2));
++            }
++        } finally { fclose($stream); }
++        return $result;
++    }
++
++    private static function object(string $bytes, array $modules): array
++    {
++        try {
++            $slice = static function (string $source, int $offset, int $length): string {
++                if ($offset < 0 || $length < 0 || $offset > strlen($source) - $length) { throw new \RuntimeException('record bounds'); }
++                return substr($source, $offset, $length);
++            };
++            $number = static function (string $source, int $offset, string $format) use ($slice): int {
++                $width = match ($format) { 'v' => 2, 'V' => 4, 'P' => 8, default => throw new \RuntimeException('record width') };
++                return unpack($format, $slice($source, $offset, $width))[1];
++            };
++            if ($slice($bytes, 0, 7) !== "\x7fELF\x02\x01\x01" || $number($bytes, 16, 'v') !== 1 || $number($bytes, 18, 'v') !== 62
++                || $number($bytes, 52, 'v') !== 64 || $number($bytes, 58, 'v') !== 64) { return []; }
++            $offset = $number($bytes, 40, 'P');$count = $number($bytes, 60, 'v');$nameIndex = $number($bytes, 62, 'v');
++            if ($count === 0 || $nameIndex >= $count) { return []; }
++            $slice($bytes, $offset, $count * 64);$sections = [];$symbolTables = [];
++            for ($i = 0; $i < $count; ++$i) {
++                $row = $slice($bytes, $offset + $i * 64, 64);$type = $number($row, 4, 'V');
++                $sections[] = ['type' => $type, 'name' => $number($row, 0, 'V'), 'link' => $number($row, 40, 'V'), 'info' => $number($row, 44, 'V'),
++                    'entry' => $number($row, 56, 'P'), 'data' => $type === 8 ? '' : $slice($bytes, $number($row, 24, 'P'), $number($row, 32, 'P'))];
++                if ($type === 2) { $symbolTables[] = $i; }
++            }
++            if (count($symbolTables) !== 1) { return []; }
++            $string = static function (string $data, int $start) use ($slice): string {
++                $slice($data, $start, 1);$end = strpos($data, "\0", $start);
++                if ($end === false) { throw new \RuntimeException('unterminated name'); }
++                return substr($data, $start, $end - $start);
++            };
++            $symbolIndex = $symbolTables[0];$table = $sections[$symbolIndex];
++            if ($table['entry'] !== 24 || strlen($table['data']) % 24 !== 0 || !isset($sections[$table['link']]) || $sections[$table['link']]['type'] !== 3) { return []; }
++            $symbols = [];$names = [];$foundModules = [];
++            for ($i = 0; $i < strlen($table['data']); $i += 24) {
++                $row = $slice($table['data'], $i, 24);$name = $string($sections[$table['link']]['data'], $number($row, 0, 'V'));$section = $number($row, 6, 'v');
++                $symbol = ['name' => $name, 'section' => $section, 'value' => $number($row, 8, 'P'), 'size' => $number($row, 16, 'P')];
++                $symbols[] = $symbol;
++                if ($name !== '' && $section !== 0 && $section < $count) {
++                    if (isset($names[$name])) { throw new \RuntimeException('duplicate declaration symbol'); }
++                    $names[$name] = $symbol;
++                    if (isset($modules[$name])) { $foundModules[] = $name; }
++                    if ($sections[$section]['type'] !== 8) { $slice($sections[$section]['data'], $symbol['value'], $symbol['size']); }
++                }
++            }
++            if (count($foundModules) !== 1) { return []; }
++            $relocations = [];
++            foreach ($sections as $section) {
++                if ($section['type'] !== 4) { continue; }
++                if ($section['entry'] !== 24 || strlen($section['data']) % 24 !== 0 || $section['link'] !== $symbolIndex || !isset($sections[$section['info']])) { return []; }
++                for ($i = 0; $i < strlen($section['data']); $i += 24) {
++                    $row = $slice($section['data'], $i, 24);$at = $number($row, 0, 'P');$info = $number($row, 8, 'P');$symbol = $symbols[$info >> 32] ?? null;
++                    if ($symbol === null || isset($relocations[$section['info']][$at])) { return []; }
++                    $slice($sections[$section['info']]['data'], $at, 1);
++                    $relocations[$section['info']][$at] = ['type' => $info & 0xffffffff, 'symbol' => $symbol, 'addend' => $number($row, 16, 'P')];
++                }
++            }
++            $pointer = static function (int $section, int $at) use ($sections, $relocations, $number, $slice): ?array {
++                $data = $sections[$section]['data'];$slice($data, $at, 8);$relocation = $relocations[$section][$at] ?? null;
++                if ($relocation === null) {
++                    if ($number($data, $at, 'P') !== 0) { throw new \RuntimeException('unresolved pointer'); }
++                    return null;
++                }
++                $symbol = $relocation['symbol'];
++                if ($relocation['type'] !== 1 || $symbol['section'] === 0 || !isset($sections[$symbol['section']]) || $relocation['addend'] < 0) { throw new \RuntimeException('unknown relocation'); }
++                $offset = $symbol['value'] + $relocation['addend'];$slice($sections[$symbol['section']]['data'], $offset, 1);
++                return [$symbol['section'], $offset];
++            };
++            $text = static function (int $section, int $at) use ($pointer, $string, $sections): ?string {
++                $p = $pointer($section, $at);return $p === null ? null : $string($sections[$p[0]]['data'], $p[1]);
++            };
++            $tables = [];
++            foreach ($names as $name => $symbol) {
++                if (!preg_match('/^class_([A-Za-z_][A-Za-z0-9_]*)_methods$/D', $name, $m)) { continue; }
++                if ($symbol['size'] < 48 || $symbol['size'] % 48 !== 0) { return []; }
++                $methods = [];$sec = $symbol['section'];$data = $sections[$sec]['data'];
++                for ($i = 0; $i < $symbol['size'] - 48; $i += 48) {
++                    $at = $symbol['value'] + $i;$method = $text($sec, $at);$p = $pointer($sec, $at + 16);$argc = $number($data, $at + 24, 'V');
++                    if ($method === null || $p === null || $argc > 65536 || isset($methods[strtolower($method)])) { return []; }
++                    $slice($sections[$p[0]]['data'], $p[1], ($argc + 1) * 32);$arguments = [];
++                    for ($j = 0; $j <= $argc; ++$j) {
++                        $off = $p[1] + $j * 32;$argData = $sections[$p[0]]['data'];
++                        $arguments[] = ['name' => $j === 0 ? $number($argData, $off, 'P') : $text($p[0], $off),
++                            'mask' => $number($argData, $off + 16, 'V'), 'class' => $text($p[0], $off + 8), 'default' => $text($p[0], $off + 24)];
++                    }
++                    $methods[strtolower($method)] = ['name' => $method, 'flags' => $number($data, $at + 28, 'V'), 'args' => $arguments];
++                }
++                $end = $symbol['value'] + $symbol['size'] - 48;
++                if ($slice($data, $end, 48) !== str_repeat("\0", 48)) { return []; }
++                foreach ($relocations[$sec] ?? [] as $at => $relocation) {
++                    if ($at >= $end && $at < $end + 48) { return []; }
++                }
++                $tables[strtolower($m[1])] = $methods;
++            }
++            return [$foundModules[0] => $tables];
++        } catch (\Throwable) { return []; }
++    }
++}
+--- a/src/Resolver/Reflection.php
++++ b/src/Resolver/Reflection.php
+@@ -10,8 +10,37 @@
+ 
+ use TypePhp\Metadata\Constants;
+ 
++require_once dirname(__DIR__) . "/Build/TargetInternalClassMetadata.php";
++
+ class Reflection
+ {
++    private static array $targetClasses = [];
++    private static string $targetClassesFingerprint = '';
++
++    public static function setTargetInternalClasses(?string $sdk, ?string $nm): void
++    {
++        $metadata = \TypePhp\Build\TargetInternalClassMetadata::read($sdk, $nm);
++        self::$targetClasses = $metadata['classes'];
++        self::$targetClassesFingerprint = $metadata['sha256'];
++    }
++
++    public static function targetInternalClassFingerprint(): string
++    {
++        return self::$targetClassesFingerprint;
++    }
++
++    public static function getTargetInternalClass(string $class): ?array
++    {
++        // Preserve the existing reflection contract for classes visible to the driver.
++        if (self::getClass($class) !== null) { return null; }
++        return self::$targetClasses[strtolower(ltrim($class, '\\'))] ?? null;
++    }
++
++    public static function getTargetInternalMethod(string $class, string $method): ?\TypePhp\Entity\MethodDef
++    {
++        return self::getTargetInternalClass($class)['methods'][strtolower($method)] ?? null;
++    }
++
+     private static array $functions = [];
+     private static array $classes = [];
+     private static array $interfaces = [];
+@@ -51,7 +80,7 @@
+             }
+         }
+ 
+-        return isset($internalClasses[strtolower($class)]);
++        return isset($internalClasses[strtolower($class)]) || self::getTargetInternalClass($class) !== null;
+     }
+ 
+     public static function isInternalInterface(string $interface): bool
+@@ -140,6 +169,19 @@
+ 
+     public static function getClassMethodModifiers(string $className, string $fn): ?int
+     {
++        $target = self::getTargetInternalMethod($className, $fn);
++        if ($target !== null) {
++            $flags = 0;
++            foreach ([\PhpParser\Modifiers::PUBLIC => \ReflectionMethod::IS_PUBLIC,
++                \PhpParser\Modifiers::PROTECTED => \ReflectionMethod::IS_PROTECTED,
++                \PhpParser\Modifiers::PRIVATE => \ReflectionMethod::IS_PRIVATE,
++                \PhpParser\Modifiers::STATIC => \ReflectionMethod::IS_STATIC,
++                \PhpParser\Modifiers::FINAL => \ReflectionMethod::IS_FINAL,
++                \PhpParser\Modifiers::ABSTRACT => \ReflectionMethod::IS_ABSTRACT] as $source => $reflection) {
++                if ($target->flags & $source) { $flags |= $reflection; }
++            }
++            return $flags;
++        }
+         $classRef = self::getClass($className);
+         if (!$classRef) {
+             return null;
+@@ -175,6 +217,7 @@
+ 
+     public static function hasMethod(string $extends, string $method): bool
+     {
++        if (self::getTargetInternalMethod($extends, $method) !== null) { return true; }
+         $class = self::getClass($extends);
+         if (!$class) {
+             return false;
+@@ -197,6 +240,8 @@
+ 
+     public static function isAbstractClass(string $name): bool
+     {
++        $target = self::getTargetInternalClass($name);
++        if ($target !== null) { return (bool) ($target['flags'] & \PhpParser\Modifiers::ABSTRACT); }
+         $class = self::getClass($name);
+         if (!$class) {
+             return false;
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -165,6 +165,7 @@
+         $this->climate->arguments->parse();
+         Reflection::setTargetLinuxFullStatic(
+             $this->climate->arguments->defined('full-static'));
++        Reflection::setTargetInternalClasses(null, null);
+ 
+         // Only read the command-line arguments here; do not apply them yet
+         // (they are applied after YAML parsing). This preserves the priority:
+@@ -5939,6 +5940,12 @@
+         while ($parent !== '') {
+             $parentDef = $this->getClassDef($parent);
+             if ($parentDef === null) {
++                $targetConstructor = Reflection::getTargetInternalMethod($parent, '__construct');
++                if ($targetConstructor !== null) {
++                    $this->applyGeneratedConstructorParentRule($constructor, $parent, $targetConstructor->flags,
++                        $targetConstructor->functionDef->argCountRequired, (bool) ($targetConstructor->flags & Modifiers::ABSTRACT));
++                    return;
++                }
+                 $reflection = Reflection::getClass($parent);
+                 $parentConstructor = $reflection?->getConstructor();
+                 if ($parentConstructor === null) {
+@@ -6123,7 +6130,13 @@
+             // BcMath\Number is an internal readonly class, ArrayObject is not),
+             // so the contract holds in both directions here as well.
+             $parentClass = $this->getNamespacedClassName($this->parseIdentifier($class->extends));
+-            if (class_exists($parentClass)) {
++            $targetParent = Reflection::getTargetInternalClass($parentClass);
++            if ($targetParent !== null) {
++                if ($targetParent['flags'] & Modifiers::FINAL) {
++                    $this->fatalError($class, "Class `{$this->class}` cannot extend final class `{$parentClass}`");
++                }
++                $this->assertReadonlyInheritanceContract($class, $parentClass, (bool) ($targetParent['flags'] & Modifiers::READONLY));
++            } elseif (class_exists($parentClass)) {
+                 $this->assertReadonlyInheritanceContract(
+                     $class,
+                     $parentClass,
+@@ -7114,6 +7127,11 @@
+         MethodDef $childMethodDef,
+         string $parentClass
+     ): void {
++        $targetMethod = Reflection::getTargetInternalMethod($parentClass, $methodName);
++        if ($targetMethod !== null) {
++            $this->validateMethodOverrideSignature($v, $methodName, $childMethodDef, $targetMethod, $parentClass);
++            return;
++        }
+         $parentRef = Reflection::getClass($parentClass);
+         if (!$parentRef || !$parentRef->hasMethod($methodName)) {
+             return;
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -5791,6 +5791,10 @@
+                 return null;
+             }
+ 
++            $targetConstructor = Reflection::getTargetInternalMethod($current, '__construct');
++            if ($targetConstructor !== null) {
++                return ['className' => $current, 'flags' => $targetConstructor->flags];
++            }
+             $constructor = Reflection::getClass($current)?->getConstructor();
+             if ($constructor === null) {
+                 return null;
+--- a/src/Generator/CallArgumentGenerator.php
++++ b/src/Generator/CallArgumentGenerator.php
+@@ -381,7 +381,8 @@
+     protected function getAotCallArgInfo(string $funcName, string $className, int $argIndex): ?ArgInfo
+     {
+         if ($className !== '') {
+-            $functionDef = $this->findAotMethodFunctionDef($className, $funcName);
++            $functionDef = $this->findAotMethodFunctionDef($className, $funcName)
++                ?? $this->findTargetInternalMethodFunctionDef($className, $funcName);
+             if ($functionDef === null) {
+                 return null;
+             }
+@@ -398,7 +399,8 @@
+     {
+         $functionDef = null;
+         if ($className !== '') {
+-            $functionDef = $this->findAotMethodFunctionDef($className, $funcName);
++            $functionDef = $this->findAotMethodFunctionDef($className, $funcName)
++                ?? $this->findTargetInternalMethodFunctionDef($className, $funcName);
+         } elseif ($this->hasFunction($funcName)) {
+             $functionDef = $this->getFunction($funcName);
+         }
+@@ -417,6 +419,22 @@
+             }
+         }
+         return $variadicArgInfo;
++    }
++
++    /** Metadata only: keep compiled-body/native-call resolution separate. */
++    private function findTargetInternalMethodFunctionDef(string $className, string $method): ?FunctionDef
++    {
++        if ($className === self::DYNAMIC_CALLED_CLASS) { return null; }
++        $visited = [];
++        while ($this->hasClass($className)) {
++            $key = strtolower($className);
++            if (isset($visited[$key])) { return null; }
++            $visited[$key] = true;
++            $class = $this->getClass($className);
++            if ($class->extends === '') { return null; }
++            $className = $class->extends;
++        }
++        return Reflection::getTargetInternalMethod($className, $method)?->functionDef;
+     }
+ 
+     /** Resolve a project class or interface method declaration for AOT call arguments. */
+--- a/src/Build/PreparedProjectCacheTrait.php
++++ b/src/Build/PreparedProjectCacheTrait.php
+@@ -31,7 +31,7 @@
+             $initialState[$field] = $this->{$field};
+         }
+         return hash('sha256', serialize([
+-            2, $this->getIncrementalGeneratorFingerprint(), $this->valueParameterReturnFingerprint(), $sources, PHP_VERSION,
++            2, $this->getIncrementalGeneratorFingerprint(), $this->valueParameterReturnFingerprint(), \TypePhp\Resolver\Reflection::targetInternalClassFingerprint(), $sources, PHP_VERSION,
+             $extensions, get_defined_constants(), $this->linkLibs,
+             $this->varIntTypes, $this->decimalTypes, $this->bigintTypes, $initialState,
+         ]));
+--- a/src/Build/SourcePipelineTrait.php
++++ b/src/Build/SourcePipelineTrait.php
+@@ -551,6 +551,8 @@
+     {
+         $files = $this->getFiles($path);
+         $this->prepareBuildEnvironment();
++        \TypePhp\Resolver\Reflection::setTargetInternalClasses($this->getFullStaticSdkDir(),
++            ExecutableLocator::resolve('llvm-nm'));
+         $this->discoverUnavailableDeclarations($files);
+         $preparedKey = $this->preparedProjectKey($files);
+         if (!$this->restorePreparedProject($preparedKey)) {

@@ -1,0 +1,66 @@
+--- a/src/Parser/FunctionCallTrait.php
++++ b/src/Parser/FunctionCallTrait.php
+@@ -126,6 +126,20 @@
+      * falling back to its global builtin. Resolve on the first execution and
+      * cache that target choice for the rest of the request.
+      */
++    protected function parseNamespacedFunctionPointer(array $target): string
++    {
++        $namespaced = strtolower($this->namespace . '\\' . ltrim($target['source'], '\\'));
++        $literal = $this->getLiteralString($namespaced);
++        $resolution = $this->getFunctionResolutionCache();
++        $namespacedPointer = $this->getFuncPtr($namespaced);
++        $globalPointer = $this->getFuncPtr($target['target']);
++        return '([&]() -> zend_function * { auto &resolution = ' . $resolution
++            . '; if (resolution == 0) { const bool namespaced = zend_hash_exists(EG(function_table), '
++            . $literal . '.str()); auto *function = namespaced ? ' . $namespacedPointer . ' : ' . $globalPointer
++            . '; resolution = namespaced ? 1 : 2; return function; } return resolution == 1 ? '
++            . $namespacedPointer . ' : ' . $globalPointer . '; })()';
++    }
++
+     protected function parseNamespacedGetCalledClassFallback(string $function): string
+     {
+         $function = $this->getLiteralString($function);
+@@ -297,7 +311,7 @@
+             if ($mayCallGlobalBuiltin) {
+                 $this->assertWasiFunctionSupported($expr, $globalName);
+                 $this->assertNanoFunctionSupported($expr, $globalName);
+-                if (!$isNamespacedGetCalledClassFallback && $this->isInternalFunction($globalName)) {
++                if (!$functionTarget['namespacedFallback'] && $this->isInternalFunction($globalName)) {
+                     $this->markInternalFunctionCallbackCall($globalName, $expr->args);
+                 }
+                 if (in_array($globalName, Constants::UNSUPPORTED_FUNCTIONS, true)) {
+@@ -332,7 +346,7 @@
+             if ($functionTarget['definitelyGlobal']) {
+                 $name = strtolower($name);
+             }
+-            if ($mayCallGlobalBuiltin && !$isNamespacedGetCalledClassFallback) {
++            if ($functionTarget['definitelyGlobal'] && !$isNamespacedGetCalledClassFallback) {
+                 $this->checkInternalFunctionArgCount($name, $expr);
+             }
+             if ($functionTarget['definitelyGlobal']
+@@ -355,8 +369,7 @@
+                     $this->namespace . '\\' . ltrim($functionTarget['source'], '\\'),
+                 );
+             }
+-            $canOptimizeBuiltinFallback = $functionTarget['definitelyGlobal']
+-                || ($functionTarget['namespacedFallback'] && $globalName !== 'get_called_class');
++            $canOptimizeBuiltinFallback = $functionTarget['definitelyGlobal'];
+             if ($canOptimizeBuiltinFallback && in_array($globalName, ['array_key_exists', 'key_exists'], true)) {
+                 $typedKeyExists = $this->parseTypedArrayKeyExistsCall($expr);
+                 if ($typedKeyExists !== null) {
+@@ -388,7 +401,13 @@
+                 }
+             }
+             $placeHolder = $this->getLiteralString($functionTarget['target']);
+-            $fn = $this->getFuncPtr($name);
++            if ($functionTarget['namespacedFallback']) {
++                $fn = $this->genTmpVarName();
++                $this->context->beforeStmtLines[] = 'zend_function *' . $fn . ' = '
++                    . $this->parseNamespacedFunctionPointer($functionTarget) . ';';
++            } else {
++                $fn = $this->getFuncPtr($name);
++            }
+             if ($this->debug) {
+                 $this->context->beforeStmtLines[] = $this->formatCppLineComment('Func Call: ', $name . '()');
+             }

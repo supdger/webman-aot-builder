@@ -1,0 +1,39 @@
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -3519,8 +3519,17 @@
+             case 'Expr_BinaryOp_GreaterOrEqual':
+                 return Type::BOOL;
+             case 'Expr_BitwiseNot':
++                if ($this->isVarExpr($expr->expr) && $this->isStdContainerParameter($expr->expr->name)) {
++                    return Type::INT;
++                }
+                 $inner = $this->detectTypeOfExpr($expr->expr);
+-                return $inner === Type::BIGINT ? Type::BIGINT : Type::INT;
++                return match ($inner) {
++                    Type::BIGINT => Type::BIGINT,
++                    Type::STR => Type::STR,
++                    Type::INT, Type::FLOAT => Type::INT,
++                    Type::VAR, Type::BOOL, Type::ARRAY, Type::OBJECT, Type::RESOURCE => Type::VAR,
++                    default => Type::INT,
++                };
+             case 'Expr_Print':
+             case 'Expr_Cast_Int':
+                 return Type::INT;
+--- a/src/Parser/UnaryExpressionTrait.php
++++ b/src/Parser/UnaryExpressionTrait.php
+@@ -33,6 +33,15 @@
+         $this->assertExprCanBeUsedAsValue($expr->expr, 'bitwise operand');
+         if ($type === Type::BIGINT) {
+             return 'php::BigInt::bitNot(' . $this->parseExpr($expr->expr) . ')';
++        }
++        $stdParameter = $this->isVarExpr($expr->expr) && $this->isStdContainerParameter($expr->expr->name);
++        if (!$stdParameter && in_array($type, [Type::STR, Type::FLOAT, Type::VAR, Type::BOOL, Type::ARRAY, Type::OBJECT, Type::RESOURCE], true)) {
++            $code = '(~php::Var(' . $this->parseExprAsValue($expr->expr) . '))';
++            return match ($type) {
++                Type::STR => 'php::toStringExact(' . $code . ')',
++                Type::FLOAT => 'php::toIntExact(' . $code . ')',
++                default => $code,
++            };
+         }
+         $var = $this->parseIdentifier($expr->expr);
+         return '~' . $this->convertIntExpr($var);

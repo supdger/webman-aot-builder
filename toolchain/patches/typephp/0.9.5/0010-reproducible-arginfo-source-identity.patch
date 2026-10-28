@@ -1,0 +1,795 @@
+--- a/src/gen_stub.php
++++ b/src/gen_stub.php
+@@ -62,8 +62,8 @@
+ ];
+ 
+ // file_put_contents() but with a success message printed after saving
+-function reportFilePutContents(string $filename, string $content): void {
+-    getTranslator()->writeFile($filename, $content);
++function reportFilePutContents(string $filename, string $content, ?string $origin = null): void {
++    getTranslator()->writeFile($filename, $content, false, 'declaration-header', $origin);
+ }
+ 
+ function getClassConstFetchClassName(Expr\ClassConstFetch $expr): string
+@@ -149,6 +149,11 @@
+             initPhpParser();
+             $stubContent = $stubCode ?? file_get_contents($stubFile);
+             $fileInfo = FileInfo::parseStubFile($stubContent, $context->phpVersion, $stubFile);
++            foreach ($fileInfo->getAllFuncInfos() as $functionInfo) {
++                $functionInfo->strictTypes = $includeOnly
++                    ? getTranslator()->sourceUsesStrictTypes($stubFile)
++                    : $context->strictTypes;
++            }
+             $context->parsedFiles[$stubFile] = $fileInfo;
+ 
+             foreach ($fileInfo->dependencies as $dependency) {
+@@ -182,7 +187,7 @@
+             $stubHash
+         );
+         if ($context->forceRegeneration || $stubHash !== $oldStubHash) {
+-            reportFilePutContents($arginfoFile, $arginfoCode);
++            reportFilePutContents($arginfoFile, $arginfoCode, $stubFile);
+         }
+ 
+         if ($fileInfo->shouldGenerateLegacyArginfo()) {
+@@ -195,7 +200,7 @@
+                 $stubHash
+             );
+             if ($context->forceRegeneration || $stubHash !== $oldStubHash) {
+-                reportFilePutContents($legacyFile, $arginfoCode);
++                reportFilePutContents($legacyFile, $arginfoCode, $stubFile);
+             }
+         }
+ 
+@@ -227,6 +232,7 @@
+     public array $parsedFiles = [];
+     public string $objectFile = '';
+     public string $phpVersion = '8.5';
++    public bool $strictTypes = false;
+ }
+ 
+ class ArrayType extends SimpleType {
+@@ -1598,6 +1604,7 @@
+ }
+ 
+ class FuncInfo {
++    public bool $strictTypes = false;
+     public /* readonly */ FunctionOrMethodName $name;
+     private /* readonly */ int $classFlags;
+     public int $flags;
+@@ -1907,9 +1914,7 @@
+ 
+     private function getArginfoFlagsByPhpVersions(): VersionFlags
+     {
+-        // TypePHP is always strict. Register functions and methods with the
+-        // flag once so dynamic calls made by native bodies inherit that mode.
+-        $flags = ["ZEND_ACC_STRICT_TYPES"];
++        $flags = $this->strictTypes ? ["ZEND_ACC_STRICT_TYPES"] : [];
+ 
+         if ($this->isMethod()) {
+             if ($this->flags & Modifiers::PROTECTED) {
+@@ -2575,6 +2580,8 @@
+ 
+ class EvaluatedValue
+ {
++    public const DECLARING_CLASS_ATTRIBUTE = 'typephpConstantDeclaringClass';
++
+     public /* readonly */ mixed $value;
+     public SimpleType $type;
+     public Expr $expr;
+@@ -2583,9 +2590,54 @@
+      * class-constant registration may use it (persistent AST) — every other
+      * consumer sees the legacy scalar/object in $value. */
+     public ?\TypePhp\Entity\EnumCaseRef $enumCaseRef = null;
++    public ?Expr $constantAst = null;
+     /** @var ConstInfo[] */
+     public array $originatingConsts;
+ 
++    public static function createFromClassConstantExpression(Expr $expr, ?SimpleType $constType, ?string $cConstName, array $allConstInfos): EvaluatedValue
++    {
++        if (getTranslator()->runtimeDeclaration(ClassInfo::$currentClass) === null) {
++            return self::createFromExpression($expr, $constType, $cConstName, $allConstInfos);
++        }
++        $visitor = new class extends PhpParser\NodeVisitorAbstract {
++            public bool $deferred = false;
++
++            public function enterNode(Node $node)
++            {
++                if ($node instanceof Node\Scalar\MagicConst\Class_) {
++                    $owner = $node->getAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++                    $this->deferred |= (getTranslator()->runtimeDeclaration($owner)['kind'] ?? '') === 'trait';
++                } elseif ($node instanceof Expr\ConstFetch
++                    && !in_array(strtolower($node->name->toString()), ['true', 'false', 'null'], true)
++                ) {
++                    $this->deferred = true;
++                } elseif ($node instanceof Expr\ClassConstFetch
++                    && $node->class instanceof Name && $node->name instanceof Node\Identifier
++                ) {
++                    $owner = $node->getAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++                    $class = resolveClassConstFetchClassName($node, $owner);
++                    if (strcasecmp($node->name->toString(), 'class') !== 0) {
++                        $this->deferred |= !getTranslator()->isNativeClassForStub(ltrim($class, '\\'));
++                    } elseif (in_array(strtolower(getClassConstFetchClassName($node)), ['self', 'parent'], true)) {
++                        $this->deferred |= (getTranslator()->runtimeDeclaration($owner)['kind'] ?? '') === 'trait';
++                    }
++                }
++                return null;
++            }
++        };
++        $traverser = new PhpParser\NodeTraverser;
++        $traverser->addVisitor($visitor);
++        $visitor->deferred = $expr instanceof Expr\Array_
++            && getTranslator()->runtimeDeclaration(ClassInfo::$currentClass) !== null;
++        $traverser->traverse([$expr]);
++        if (!$visitor->deferred) {
++            return self::createFromExpression($expr, $constType, $cConstName, $allConstInfos);
++        }
++        $value = new self(null, $constType ?? SimpleType::null(), $expr, [], false);
++        $value->constantAst = $expr;
++        return $value;
++    }
++
+     /**
+      * @param array<string, ConstInfo> $allConstInfos
+      */
+@@ -2617,7 +2669,7 @@
+                     // file-level function calls independent of the eval scope.
+                     $className = \TypePhp\StubGenerator\resolveClassConstFetchClassName(
+                         $expr,
+-                        ClassInfo::$currentClass,
++                        $expr->getAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass),
+                     );
+                     $originatingConstName = new ClassConstName(
+                         new Name(ltrim($className, '\\')),
+@@ -2661,6 +2713,16 @@
+                 $evaluationState,
+                 $evaluator,
+             ) {
++                if ($expr instanceof Node\Scalar\MagicConst\Class_) {
++                    $class = $expr->getAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++                    $declaration = getTranslator()->runtimeDeclaration($class);
++                    if (($declaration['kind'] ?? '') === 'trait') {
++                        throw new Exception(
++                            'Trait __CLASS__ constant expressions require evaluation in their consuming class'
++                        );
++                    }
++                    return ltrim($declaration['name'] ?? $class, '\\');
++                }
+                 // php-parser's ConstExprEvaluator predates PHP 8.5 constant
+                 // expression casts. Keep the compatibility logic in TypePHP:
+                 // validation has already rejected void and disallowed object
+@@ -2688,21 +2750,21 @@
+ 
+                 if ($expr instanceof Expr\ClassConstFetch) {
+                     $constName = $expr->name->__toString();
++                    $declaringClass = $expr->getAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
+                     if (strcasecmp($constName, 'class') === 0) {
+                         // `::class` is a compile-time magic constant that resolves to the
+                         // fully qualified class name of the referenced class.
+-                        return ltrim(
+-                            resolveClassConstFetchClassName($expr, ClassInfo::$currentClass),
+-                            '\\'
+-                        );
++                        $name = ltrim(resolveClassConstFetchClassName($expr, $declaringClass), '\\');
++                        $declaration = getTranslator()->runtimeDeclaration($name);
++                        return $declaration['name'] ?? $name;
+                     }
+-                    $class = resolveClassConstFetchClassName($expr, ClassInfo::$currentClass);
++                    $class = resolveClassConstFetchClassName($expr, $declaringClass);
+                     $fqcnName = ltrim($class, '\\') . "::" . $constName;
+                     if (isset($allConstInfos[$fqcnName])) {
+                         return $allConstInfos[$fqcnName]->getValue($allConstInfos)->value;
+                     }
+                     return normalizeConstExprValue(
+-                        getTranslator()->getClassConstValue($expr, $class, $constName, ClassInfo::$currentClass)
++                        getTranslator()->getClassConstValue($expr, $class, $constName, $declaringClass)
+                     );
+                 } else {
+                     $constName = $expr->name->__toString();
+@@ -2801,6 +2863,12 @@
+ 
+     public function initializeZval(string $zvalName, bool $alreadyExists = false, string $forStringDef = '', string $varName = '', bool $allowConstantAst = false): string
+     {
++        if ($this->constantAst !== null) {
++            if (!$allowConstantAst) {
++                throw new Exception('Deferred class constants require class-constant registration');
++            }
++            return $this->initializeConstantAstZval($zvalName, $alreadyExists);
++        }
+         if ($this->enumCaseRef !== null && $allowConstantAst) {
+             return $this->initializeEnumCaseZval($zvalName, $alreadyExists);
+         }
+@@ -2863,12 +2931,244 @@
+     /** @var array<int, array{string, string}> [declaring class, constant name] of every emitted AST constant, per generated file */
+     public static array $emittedAstConstants = [];
+ 
++    private function appendConstantAstNode(Node $expr, array &$nodes): int
++    {
++        $index = count($nodes);
++        $nodes[] = [];
++        $kind = 'ZEND_AST_ZVAL';
++        $attr = '0';
++        $children = [];
++        $isList = false;
++        $value = null;
++        if ($expr instanceof Node\Scalar\MagicConst\Class_) {
++            $owner = $expr->getAttribute(self::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++            $declaration = getTranslator()->runtimeDeclaration($owner);
++            if (($declaration['kind'] ?? '') === 'trait') {
++                $kind = 'ZEND_AST_CONSTANT_CLASS';
++            } else {
++                $value = ltrim($declaration['name'] ?? $owner, '\\');
++            }
++        } elseif ($expr instanceof Expr\ClassConstFetch
++            && $expr->class instanceof Name && $expr->name instanceof Node\Identifier
++        ) {
++            $kind = 'ZEND_AST_CLASS_CONST';
++            $attr = 'ZEND_FETCH_CLASS_EXCEPTION';
++            $owner = $expr->getAttribute(self::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++            $name = getClassConstFetchClassName($expr);
++            if (!in_array(strtolower($name), ['self', 'parent'], true)) {
++                $name = resolveClassConstFetchClassName($expr, $owner);
++                $declaration = getTranslator()->runtimeDeclaration(ltrim($name, '\\'));
++                $name = ltrim($declaration['name'] ?? $name, '\\');
++            }
++            if (strcasecmp($expr->name->toString(), 'class') === 0) {
++                if (in_array(strtolower($name), ['self', 'parent'], true)) {
++                    $kind = 'ZEND_AST_CLASS_NAME';
++                    $attr = strtolower($name) === 'self' ? 'ZEND_FETCH_CLASS_SELF' : 'ZEND_FETCH_CLASS_PARENT';
++                    $children = [null];
++                } else {
++                    $kind = 'ZEND_AST_ZVAL';
++                    $attr = '0';
++                    $value = $name;
++                }
++            } else {
++                $children[] = $this->appendConstantAstNode(new Node\Scalar\String_($name), $nodes);
++                $children[] = $this->appendConstantAstNode(new Node\Scalar\String_($expr->name->toString()), $nodes);
++            }
++        } elseif ($expr instanceof Expr\ConstFetch
++            && !in_array(strtolower($expr->name->toString()), ['true', 'false', 'null'], true)
++        ) {
++            $kind = 'ZEND_AST_CONSTANT';
++            $resolved = $expr->name->getAttribute('resolvedName');
++            $namespaced = $expr->name->getAttribute('namespacedName');
++            if ($resolved instanceof Name || $expr->name instanceof Name\FullyQualified) {
++                $value = ltrim(($resolved ?? $expr->name)->toString(), '\\');
++            } elseif ($namespaced instanceof Name) {
++                $value = $namespaced->toString();
++                if (str_contains($value, '\\')) { $attr = 'IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE'; }
++            } else {
++                $owner = $expr->getAttribute(self::DECLARING_CLASS_ATTRIBUTE, ClassInfo::$currentClass);
++                $declaration = getTranslator()->runtimeDeclaration($owner);
++                $publicName = $declaration['name'] ?? $owner;
++                $position = strrpos($publicName, '\\');
++                $namespace = $position === false ? '' : substr($publicName, 0, $position);
++                $value = $expr->name->toString();
++                if ($namespace !== '' && $expr->name->isUnqualified()) {
++                    $value = $namespace . '\\' . $value;
++                    $attr = 'IS_CONSTANT_UNQUALIFIED_IN_NAMESPACE';
++                }
++            }
++        } elseif ($expr instanceof Expr\Array_) {
++            $kind = 'ZEND_AST_ARRAY';
++            $isList = true;
++            foreach ($expr->items as $item) {
++                if ($item === null || $item->byRef) {
++                    throw new Exception('Invalid deferred constant array element');
++                }
++                $children[] = $this->appendConstantAstNode($item, $nodes);
++            }
++        } elseif ($expr instanceof Node\ArrayItem) {
++            $kind = $expr->unpack ? 'ZEND_AST_UNPACK' : 'ZEND_AST_ARRAY_ELEM';
++            $children[] = $this->appendConstantAstNode($expr->value, $nodes);
++            if (!$expr->unpack) {
++                $children[] = $expr->key === null ? null : $this->appendConstantAstNode($expr->key, $nodes);
++            }
++        } elseif ($expr instanceof Expr\ArrayDimFetch) {
++            $kind = 'ZEND_AST_DIM';
++            $children[] = $this->appendConstantAstNode($expr->var, $nodes);
++            $children[] = $expr->dim === null ? null : $this->appendConstantAstNode($expr->dim, $nodes);
++        } elseif ($expr instanceof Expr\UnaryPlus || $expr instanceof Expr\UnaryMinus) {
++            $kind = $expr instanceof Expr\UnaryPlus ? 'ZEND_AST_UNARY_PLUS' : 'ZEND_AST_UNARY_MINUS';
++            $children[] = $this->appendConstantAstNode($expr->expr, $nodes);
++        } elseif ($expr instanceof Expr\BitwiseNot || $expr instanceof Expr\BooleanNot) {
++            $kind = 'ZEND_AST_UNARY_OP';
++            $attr = $expr instanceof Expr\BitwiseNot ? 'ZEND_BW_NOT' : 'ZEND_BOOL_NOT';
++            $children[] = $this->appendConstantAstNode($expr->expr, $nodes);
++        } elseif ($expr instanceof Expr\BinaryOp) {
++            $kind = 'ZEND_AST_BINARY_OP';
++            $attr = match (true) {
++                $expr instanceof Expr\BinaryOp\Plus => 'ZEND_ADD',
++                $expr instanceof Expr\BinaryOp\Minus => 'ZEND_SUB',
++                $expr instanceof Expr\BinaryOp\Mul => 'ZEND_MUL',
++                $expr instanceof Expr\BinaryOp\Div => 'ZEND_DIV',
++                $expr instanceof Expr\BinaryOp\Mod => 'ZEND_MOD',
++                $expr instanceof Expr\BinaryOp\Pow => 'ZEND_POW',
++                $expr instanceof Expr\BinaryOp\ShiftLeft => 'ZEND_SL',
++                $expr instanceof Expr\BinaryOp\ShiftRight => 'ZEND_SR',
++                $expr instanceof Expr\BinaryOp\Concat => 'ZEND_CONCAT',
++                $expr instanceof Expr\BinaryOp\BitwiseOr => 'ZEND_BW_OR',
++                $expr instanceof Expr\BinaryOp\BitwiseAnd => 'ZEND_BW_AND',
++                $expr instanceof Expr\BinaryOp\BitwiseXor => 'ZEND_BW_XOR',
++                $expr instanceof Expr\BinaryOp\Equal => 'ZEND_IS_EQUAL',
++                $expr instanceof Expr\BinaryOp\NotEqual => 'ZEND_IS_NOT_EQUAL',
++                $expr instanceof Expr\BinaryOp\Identical => 'ZEND_IS_IDENTICAL',
++                $expr instanceof Expr\BinaryOp\NotIdentical => 'ZEND_IS_NOT_IDENTICAL',
++                $expr instanceof Expr\BinaryOp\Smaller => 'ZEND_IS_SMALLER',
++                $expr instanceof Expr\BinaryOp\SmallerOrEqual => 'ZEND_IS_SMALLER_OR_EQUAL',
++                $expr instanceof Expr\BinaryOp\Spaceship => 'ZEND_SPACESHIP',
++                $expr instanceof Expr\BinaryOp\LogicalXor => 'ZEND_BOOL_XOR',
++                default => '0',
++            };
++            if ($expr instanceof Expr\BinaryOp\Greater || $expr instanceof Expr\BinaryOp\GreaterOrEqual) {
++                $kind = $expr instanceof Expr\BinaryOp\Greater ? 'ZEND_AST_GREATER' : 'ZEND_AST_GREATER_EQUAL';
++            } elseif ($expr instanceof Expr\BinaryOp\BooleanAnd || $expr instanceof Expr\BinaryOp\LogicalAnd) {
++                $kind = 'ZEND_AST_AND';
++            } elseif ($expr instanceof Expr\BinaryOp\BooleanOr || $expr instanceof Expr\BinaryOp\LogicalOr) {
++                $kind = 'ZEND_AST_OR';
++            } elseif ($expr instanceof Expr\BinaryOp\Coalesce) {
++                $kind = 'ZEND_AST_COALESCE';
++            } elseif ($attr === '0') {
++                throw new Exception('Unsupported deferred constant operator ' . $expr->getType());
++            }
++            $children[] = $this->appendConstantAstNode($expr->left, $nodes);
++            if ($kind === 'ZEND_AST_COALESCE' && $nodes[$children[0]]['kind'] === 'ZEND_AST_DIM') {
++                $nodes[$children[0]]['attr'] = 'ZEND_DIM_IS';
++            }
++            $children[] = $this->appendConstantAstNode($expr->right, $nodes);
++        } elseif ($expr instanceof Expr\Ternary) {
++            $kind = 'ZEND_AST_CONDITIONAL';
++            $children[] = $this->appendConstantAstNode($expr->cond, $nodes);
++            $children[] = $expr->if === null ? null : $this->appendConstantAstNode($expr->if, $nodes);
++            $children[] = $this->appendConstantAstNode($expr->else, $nodes);
++        } elseif ($expr instanceof Expr\FuncCall && $expr->name instanceof Name) {
++            $kind = 'ZEND_AST_CALL';
++            $children[] = $this->appendConstantAstNode(new Node\Scalar\String_($expr->name->toString(), $expr->getAttributes()), $nodes);
++            $arguments = count($nodes);
++            $nodes[] = [];
++            $argumentChildren = [];
++            foreach ($expr->args as $argument) {
++                if (!$argument instanceof Node\Arg || $argument->unpack || $argument->name !== null) {
++                    throw new Exception('Unsupported deferred constant call argument');
++                }
++                $argumentChildren[] = $this->appendConstantAstNode($argument->value, $nodes);
++            }
++            $nodes[$arguments] = [
++                'kind' => 'ZEND_AST_ARG_LIST', 'attr' => '0', 'children' => $argumentChildren,
++                'list' => true, 'value' => null, 'line' => $expr->getStartLine(),
++            ];
++            $children[] = $arguments;
++        } else {
++            $value = self::createFromExpression($expr, null, null, [])->value;
++            if (!is_scalar($value) && $value !== null) {
++                throw new Exception('Unsupported deferred constant expression ' . $expr->getType());
++            }
++        }
++        $nodes[$index] = [
++            'kind' => $kind, 'attr' => $attr, 'children' => $children,
++            'list' => $isList, 'value' => $value, 'line' => $expr->getStartLine(),
++        ];
++        return $index;
++    }
++
++    private function initializeConstantAstZval(string $zvalName, bool $alreadyExists): string
++    {
++        $nodes = [];
++        $this->appendConstantAstNode($this->constantAst, $nodes);
++        $id = preg_replace('/[^A-Za-z0-9_]/', '_', $zvalName);
++        $persistent = getTranslator()->runtimeDeclaration(ClassInfo::$currentClass) === null;
++        $code = $alreadyExists ? '' : "\tzval $zvalName;\n";
++        $code .= "\t{\n";
++        foreach ($nodes as $index => $node) {
++            $children = count($node['children']);
++            $size = in_array($node['kind'], ['ZEND_AST_ZVAL', 'ZEND_AST_CONSTANT'], true)
++                ? 'sizeof(zend_ast_zval)'
++                : ($node['list'] ? "offsetof(zend_ast_list, child) + $children * sizeof(zend_ast *)" : "zend_ast_size($children)");
++            $code .= "\t\tsize_t {$id}_size_$index = ZEND_MM_ALIGNED_SIZE($size);\n";
++        }
++        $sizes = implode(' + ', array_map(static fn ($index) => "{$id}_size_$index", array_keys($nodes)));
++        $allocation = $persistent ? "pemalloc(sizeof(zend_ast_ref) + $sizes, 1)" : "emalloc(sizeof(zend_ast_ref) + $sizes)";
++        $code .= "\t\tchar *{$id}_block = (char *) $allocation;\n";
++        $code .= "\t\tzend_ast_ref *{$id}_ref = (zend_ast_ref *) {$id}_block;\n";
++        $code .= "\t\tGC_SET_REFCOUNT({$id}_ref, 1);\n";
++        $flags = $persistent ? 'GC_CONSTANT_AST | ((GC_PERSISTENT | GC_IMMUTABLE) << GC_FLAGS_SHIFT)' : 'GC_CONSTANT_AST';
++        $code .= "\t\tGC_TYPE_INFO({$id}_ref) = $flags;\n";
++        $offset = "sizeof(zend_ast_ref)";
++        foreach ($nodes as $index => $node) {
++            $code .= "\t\tzend_ast *{$id}_node_$index = (zend_ast *) ({$id}_block + $offset);\n";
++            $offset .= " + {$id}_size_$index";
++        }
++        foreach ($nodes as $index => $node) {
++            $ptr = "{$id}_node_$index";
++            $code .= "\t\t{$ptr}->kind = {$node['kind']};\n\t\t{$ptr}->attr = {$node['attr']};\n";
++            if (in_array($node['kind'], ['ZEND_AST_ZVAL', 'ZEND_AST_CONSTANT'], true)) {
++                $value = $node['value'];
++                $zval = "((zend_ast_zval *) $ptr)->val";
++                if (is_string($value)) {
++                    $literal = '"' . getTranslator()->escapeString($value) . '"';
++                    $code .= "\t\tZVAL_INTERNED_STR(&$zval, zend_string_init_interned($literal, sizeof($literal) - 1, " . ($persistent ? '1' : '0') . "));\n";
++                } elseif (is_int($value)) {
++                    $literal = $value === PHP_INT_MIN ? 'ZEND_LONG_MIN' : (string) $value;
++                    $code .= "\t\tZVAL_LONG(&$zval, $literal);\n";
++                } elseif (is_float($value)) {
++                    $code .= "\t\tZVAL_DOUBLE(&$zval, " . getTranslator()->genFloatLiteral($value) . ");\n";
++                } elseif (is_bool($value)) {
++                    $code .= "\t\tZVAL_BOOL(&$zval, " . ($value ? '1' : '0') . ");\n";
++                } else {
++                    $code .= "\t\tZVAL_NULL(&$zval);\n";
++                }
++                $code .= "\t\tZ_LINENO($zval) = " . max(0, $node['line']) . ";\n";
++                continue;
++            }
++            $code .= "\t\t{$ptr}->lineno = " . max(0, $node['line']) . ";\n";
++            if ($node['list']) {
++                $code .= "\t\t((zend_ast_list *) $ptr)->children = " . count($node['children']) . ";\n";
++            }
++            foreach ($node['children'] as $childIndex => $child) {
++                $target = $child === null ? 'NULL' : "{$id}_node_$child";
++                $base = $node['list'] ? "((zend_ast_list *) $ptr)" : $ptr;
++                $code .= "\t\t{$base}->child[$childIndex] = $target;\n";
++            }
++        }
++        $code .= "\t\tZVAL_AST(&$zvalName, {$id}_ref);\n\t}\n";
++        return $code;
++    }
++
+     private function initializeEnumCaseZval(string $zvalName, bool $alreadyExists): string
+     {
+         $case = $this->enumCaseRef;
+         $enumCName = '"' . getTranslator()->escapeString(ltrim($case->enumClass, '\\')) . '"';
+         $caseCName = '"' . getTranslator()->escapeString($case->caseName) . '"';
+         $id = preg_replace('/[^A-Za-z0-9_]/', '_', $zvalName);
++        $persistent = getTranslator()->runtimeDeclaration(ClassInfo::$currentClass) === null;
+ 
+         // One contiguous persistent allocation holds the ast_ref, the root
+         // CLASS_CONST node and both zval children, mirroring Zend's own
+@@ -2879,10 +3179,14 @@
+         $code .= "\t\tzend_string *{$id}_case_name = zend_string_init_interned($caseCName, sizeof($caseCName) - 1, 1);\n";
+         $code .= "\t\tsize_t {$id}_root_size = ZEND_MM_ALIGNED_SIZE(zend_ast_size(2));\n";
+         $code .= "\t\tsize_t {$id}_child_size = ZEND_MM_ALIGNED_SIZE(sizeof(zend_ast_zval));\n";
+-        $code .= "\t\tchar *{$id}_block = (char *) pemalloc(sizeof(zend_ast_ref) + {$id}_root_size + 2 * {$id}_child_size, 1);\n";
++        $allocation = $persistent
++            ? "pemalloc(sizeof(zend_ast_ref) + {$id}_root_size + 2 * {$id}_child_size, 1)"
++            : "emalloc(sizeof(zend_ast_ref) + {$id}_root_size + 2 * {$id}_child_size)";
++        $code .= "\t\tchar *{$id}_block = (char *) $allocation;\n";
+         $code .= "\t\tzend_ast_ref *{$id}_ast_ref = (zend_ast_ref *) {$id}_block;\n";
+         $code .= "\t\tGC_SET_REFCOUNT({$id}_ast_ref, 1);\n";
+-        $code .= "\t\tGC_TYPE_INFO({$id}_ast_ref) = GC_CONSTANT_AST | ((GC_PERSISTENT | GC_IMMUTABLE) << GC_FLAGS_SHIFT);\n";
++        $flags = $persistent ? 'GC_CONSTANT_AST | ((GC_PERSISTENT | GC_IMMUTABLE) << GC_FLAGS_SHIFT)' : 'GC_CONSTANT_AST';
++        $code .= "\t\tGC_TYPE_INFO({$id}_ast_ref) = $flags;\n";
+         $code .= "\t\tzend_ast *{$id}_fetch_ast = GC_AST({$id}_ast_ref);\n";
+         $code .= "\t\tzend_ast_zval *{$id}_class_ast = (zend_ast_zval *) ({$id}_block + sizeof(zend_ast_ref) + {$id}_root_size);\n";
+         $code .= "\t\tzend_ast_zval *{$id}_const_ast = (zend_ast_zval *) ({$id}_block + sizeof(zend_ast_ref) + {$id}_root_size + {$id}_child_size);\n";
+@@ -3144,6 +3448,24 @@
+         }
+ 
+         $this->name = $name;
++        // Constant expansion must retain the declaration's lexical scope.
++        $declaringClass = $name instanceof ClassConstName ? $name->class->toString() : '';
++        $visitor = new class($declaringClass) extends PhpParser\NodeVisitorAbstract {
++            public function __construct(private string $declaringClass) {}
++
++            public function enterNode(Node $node)
++            {
++                if ($node instanceof Node\Scalar\MagicConst\Class_
++                    || $node instanceof Expr\ClassConstFetch
++                ) {
++                    $node->setAttribute(EvaluatedValue::DECLARING_CLASS_ATTRIBUTE, $this->declaringClass);
++                }
++                return null;
++            }
++        };
++        $traverser = new PhpParser\NodeTraverser;
++        $traverser->addVisitor($visitor);
++        $value = $traverser->traverse([$value])[0];
+         $this->value = $value;
+         $this->valueString = $valueString;
+         $this->isDeprecated = $isDeprecated;
+@@ -3263,7 +3585,9 @@
+             $simpleType = null;
+         }
+ 
+-        $value = EvaluatedValue::createFromExpression($this->value, $simpleType, $this->cValue, $allConstInfos);
++        $value = $this->name instanceof ClassConstName
++            ? EvaluatedValue::createFromClassConstantExpression($this->value, $simpleType, $this->cValue, $allConstInfos)
++            : EvaluatedValue::createFromExpression($this->value, $simpleType, $this->cValue, $allConstInfos);
+         if ($value->isUnknownConstValue && ($simpleType === null || !$simpleType->isBuiltin)) {
+             throw new Exception("Constant " . $this->name->__toString() . " must have a built-in PHPDoc type as the type couldn't be inferred from its value");
+         }
+@@ -3342,7 +3666,9 @@
+         $constName = $this->name->getDeclarationName();
+ 
+         $zvalCode = $value->initializeZval("const_{$constName}_value", allowConstantAst: true);
+-        if ($value->enumCaseRef !== null) {
++        if (($value->enumCaseRef !== null || $value->constantAst !== null)
++            && getTranslator()->runtimeDeclaration(ClassInfo::$currentClass) === null
++        ) {
+             EvaluatedValue::$emittedAstConstants[] = [ClassInfo::$currentClass, $constName];
+         }
+ 
+@@ -3738,10 +4064,12 @@
+         $code = "\n";
+ 
+         $propertyName = $this->name->getDeclarationName();
++        $runtimeProperty = getTranslator()->runtimeDeclaration($this->name->class->toString()) !== null;
+         $simpleType = $this->type !== null ? $this->type->tryToSimpleType() : null;
+         $hasNullDefault = $this->defaultValue instanceof Expr\ConstFetch
+             && $this->defaultValue->name->toLowerString() === 'null';
+-        $useEmptyArrayDefault = $this->defaultValue !== null
++        $useEmptyArrayDefault = !$runtimeProperty
++            && $this->defaultValue !== null
+             && !$this->defaultValue instanceof Expr\New_
+             && !$hasNullDefault
+             && (
+@@ -3754,7 +4082,9 @@
+             if ($this->defaultValue === null || $this->defaultValue instanceof Expr\New_) {
+                 $defaultValue = EvaluatedValue::null();
+             } else {
+-                $defaultValue = EvaluatedValue::createFromExpression($this->defaultValue, null, null, $allConstInfos);
++                $defaultValue = $runtimeProperty
++                    ? EvaluatedValue::createFromClassConstantExpression($this->defaultValue, null, null, $allConstInfos)
++                    : EvaluatedValue::createFromExpression($this->defaultValue, null, null, $allConstInfos);
+                 if ($simpleType !== null && $simpleType->isFloat() && $defaultValue->type->isInt()) {
+                     // PHP permits an integer default for a float property and
+                     // stores it as a double in the class default table.
+@@ -3784,7 +4114,7 @@
+                 $code .= $this->getTypeDefaultValueCode($zvalName);
+             }
+         } else {
+-            $code .= $defaultValue->initializeZval($zvalName, varName: $this->name->__toString());
++            $code .= $defaultValue->initializeZval($zvalName, varName: $this->name->__toString(), allowConstantAst: $runtimeProperty);
+         }
+ 
+         [$stringInit, $nameCode, $stringRelease] = StringBuilder::getString(
+@@ -3963,8 +4293,10 @@
+         array &$declaredStrings,
+     ): string {
+         $escapedName = addslashes($this->name);
++        $caseFunction = getTranslator()->runtimeDeclaration($this->enumClass) !== null
++            ? 'typephp_declare_user_enum_case' : 'zend_enum_add_case_cstr';
+         if ($this->value === null) {
+-            $code = "\n\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", NULL);\n";
++            $code = "\n\t$caseFunction(class_entry, \"$escapedName\", NULL);\n";
+         } else {
+             // TypePHP finalizes every backed case expression after declaration
+             // and Trait composition, before code generation. Consume that
+@@ -3981,7 +4313,7 @@
+ 
+             $zvalName = "enum_case_{$escapedName}_value";
+             $code = "\n" . $value->initializeZval($zvalName);
+-            $code .= "\tzend_enum_add_case_cstr(class_entry, \"$escapedName\", &$zvalName);\n";
++            $code .= "\t$caseFunction(class_entry, \"$escapedName\", &$zvalName);\n";
+         }
+ 
+         if ($this->attributes !== [] || $this->exposedDocComment !== null) {
+@@ -4236,6 +4568,7 @@
+     /** @param array<string, ConstInfo> $allConstInfos */
+     public function getRegistration(array $allConstInfos): string
+     {
++        $runtime = getTranslator()->runtimeDeclaration($this->name->toString());
+         $params = [];
+         foreach ($this->extends as $extends) {
+             $params[] = "zend_class_entry *class_entry_" . implode("_", $extends->getParts());
+@@ -4244,6 +4577,7 @@
+             $params[] = "zend_class_entry *class_entry_" . implode("_", $implements->getParts());
+         }
+ 
++        if ($runtime !== null) { $params = []; }
+         $escapedName = implode("_", $this->name->getParts());
+ 
+         $code = '';
+@@ -4265,7 +4599,65 @@
+         $flags = $this->getFlagsByPhpVersion();
+ 
+         $classMethods = ($this->funcInfos === []) ? 'NULL' : "class_{$escapedName}_methods";
+-        if ($this->type === "enum") {
++        if ($runtime !== null) {
++            $extraFlag = match ($this->type) {
++                'interface' => 'ZEND_ACC_INTERFACE', 'trait' => 'ZEND_ACC_TRAIT',
++                'enum' => 'ZEND_ACC_ENUM', default => '0',
++            };
++            if ($runtime['anonymous']) { $extraFlag .= ' | ZEND_ACC_ANON_CLASS'; }
++            $template = "\t" . 'zend_class_entry *class_entry = typephp_create_unlinked_user_class("'
++                . addslashes($runtime['name']) . '", ' . $classMethods . ', (%s) | ' . $extraFlag
++                . ', "' . addslashes($runtime['source']) . '", ' . $runtime['line']
++                . ', ' . strlen($runtime['name']) . ");\n";
++            $entries = $flags->generateVersionDependentFlagCode($template, $this->phpVersionIdMinimumCompatibility);
++            $code .= $entries !== '' ? $entries : sprintf($template, '0');
++            if ($runtime['parent'] !== '') {
++                $parent = addslashes($runtime['parent']);
++                $code .= "\tclass_entry->parent_name = zend_string_init(\"$parent\", " . strlen($runtime['parent']) . ", false);\n";
++            }
++            foreach (['interfaces' => 'interface_names', 'traits' => 'trait_names'] as $kind => $field) {
++                if ($runtime[$kind] === []) { continue; }
++                $names = implode(', ', array_map(fn (string $name): string => '"' . addslashes($name) . '"', $runtime[$kind]));
++                $countField = $kind === 'interfaces' ? 'num_interfaces' : 'num_traits';
++                $code .= "\tconst char *names_$kind" . '[] = { ' . $names . " };\n";
++                $code .= "\ttypephp_set_class_names(&class_entry->$field, &class_entry->$countField, names_$kind, " . count($runtime[$kind]) . ");\n";
++            }
++            foreach (['traitAliases' => 'trait_aliases', 'traitPrecedences' => 'trait_precedences'] as $kind => $field) {
++                if ($runtime[$kind] === []) { continue; }
++                $isAlias = $kind === 'traitAliases';
++                $struct = $isAlias ? 'zend_trait_alias' : 'zend_trait_precedence';
++                $code .= "\tclass_entry->$field = static_cast<$struct **>(ecalloc(" . (count($runtime[$kind]) + 1) . ", sizeof($struct *)));\n";
++                foreach ($runtime[$kind] as $index => $adaptation) {
++                    $size = "sizeof($struct)";
++                    if (!$isAlias) { $size .= ' + ' . (count($adaptation['excludes']) - 1) . ' * sizeof(zend_string *)'; }
++                    $variable = "adaptation_{$field}_$index";
++                    $code .= "\tauto *$variable = static_cast<$struct *>(ecalloc(1, $size));\n";
++                    foreach (['method' => 'method_name', 'trait' => 'class_name'] as $key => $member) {
++                        if ($adaptation[$key] === '') { continue; }
++                        $value = addslashes($adaptation[$key]);
++                        $code .= "\t{$variable}->trait_method.$member = zend_string_init(\"$value\", " . strlen($adaptation[$key]) . ", false);\n";
++                    }
++                    if ($isAlias) {
++                        if ($adaptation['alias'] !== '') {
++                            $value = addslashes($adaptation['alias']);
++                            $code .= "\t{$variable}->alias = zend_string_init(\"$value\", " . strlen($adaptation['alias']) . ", false);\n";
++                        }
++                        $code .= "\t{$variable}->modifiers = {$adaptation['modifiers']};\n";
++                    } else {
++                        $code .= "\t{$variable}->num_excludes = " . count($adaptation['excludes']) . ";\n";
++                        foreach ($adaptation['excludes'] as $excludeIndex => $exclude) {
++                            $value = addslashes($exclude);
++                            $code .= "\t{$variable}->exclude_class_names[$excludeIndex] = zend_string_init(\"$value\", " . strlen($exclude) . ", false);\n";
++                        }
++                    }
++                    $code .= "\tclass_entry->{$field}[$index] = $variable;\n";
++                }
++            }
++            if ($this->type === 'enum') {
++                $backingType = $this->enumBackingType ? $this->enumBackingType->toTypeCode() : 'IS_UNDEF';
++                $code .= "\ttypephp_init_user_enum(class_entry, $backingType);\n";
++            }
++        } elseif ($this->type === "enum") {
+             $name = addslashes((string) $this->name);
+             $backingType = $this->enumBackingType
+                 ? $this->enumBackingType->toTypeCode() : "IS_UNDEF";
+@@ -4284,6 +4676,7 @@
+                 $code .= $this->getFlagsByPhpVersion()->generateVersionDependentFlagCode("\tclass_entry->ce_flags |= %s;\n", $this->phpVersionIdMinimumCompatibility);
+             }
+         } else {
++            $runtime = getTranslator()->runtimeDeclaration($this->name->toString());
+             $code .= "\tzend_class_entry ce, *class_entry;\n\n";
+             if (count($this->name->getParts()) > 1) {
+                 $className = $this->name->getLast();
+@@ -4294,7 +4687,15 @@
+                 $code .= "\tINIT_CLASS_ENTRY(ce, \"$this->name\", $classMethods);\n";
+             }
+ 
+-            if ($this->type === "class" || $this->type === "trait") {
++            if ($runtime !== null && $this->type === 'class') {
++                $parent = isset($this->extends[0])
++                    ? "class_entry_" . str_replace("\\", "_", $this->extends[0]->toString()) : 'nullptr';
++                $template = "\t" . 'class_entry = typephp_register_user_class("'
++                    . addslashes($runtime['name']) . '", ' . $classMethods . ', ' . $parent
++                    . ', %s, "' . addslashes($runtime['source']) . '", ' . $runtime['line'] . ");\n";
++                $entries = $flags->generateVersionDependentFlagCode($template, $this->phpVersionIdMinimumCompatibility);
++                $code .= $entries !== '' ? $entries : sprintf($template, '0');
++            } elseif ($this->type === "class" || $this->type === "trait") {
+                 $template = "\tclass_entry = zend_register_internal_class_with_flags(&ce, " . (isset($this->extends[0]) ? "class_entry_" . str_replace("\\", "_", $this->extends[0]->toString()) : "NULL") . ", %s);\n";
+                 $entries = $flags->generateVersionDependentFlagCode($template, $this->phpVersionIdMinimumCompatibility ? max($this->phpVersionIdMinimumCompatibility, PHP_84_VERSION_ID) : null);
+                 if ($entries !== '') {
+@@ -4335,7 +4736,7 @@
+             $code .= $property->getDeclaration($allConstInfos);
+         }
+ 
+-        if ($this->type === 'class' && isset($this->extends[0])) {
++        if ($runtime === null && $this->type === 'class' && isset($this->extends[0])) {
+             // Internal classes are linked to their parent before their own
+             // properties are declared. Restore PHP's per-hook inheritance
+             // after those declarations have replaced inherited metadata.
+@@ -4351,7 +4752,7 @@
+             },
+             $this->type === "interface" ? $this->extends : $this->implements
+         );
+-        if (!empty($implements)) {
++        if ($runtime === null && !empty($implements)) {
+             $code .= "\tzend_class_implements(class_entry, " . count($implements) . ", " . implode(", ", $implements) . ");\n";
+         }
+ 
+@@ -4383,6 +4784,20 @@
+             $code .= "\n" . $attributeInitializationCode;
+         }
+ 
++        if ($runtime !== null) {
++            foreach ($this->funcInfos as $function) {
++                $method = $function->name->getNameForAttributes();
++                $override = getTranslator()->getRuntimeMethodOverrideSource($this->name->toString(), $method);
++                if ($override !== null) {
++                    $code .= "\ttypephp_register_native_override(class_entry, \""
++                        . addcslashes($method, "\\\"\n\r\t") . "\", \""
++                        . addcslashes($override['source'], "\\\"\n\r\t") . "\", "
++                        . $override['line'] . ");\n";
++                }
++            }
++            $code .= getTranslator()->genRuntimeSourceMethodMetadataRegistration($this->name->toString());
++            $code .= "\n\tclass_entry = typephp_link_user_class(class_entry);\n";
++        }
+         $code .= "\n\treturn class_entry;\n";
+ 
+         $code .= "}\n";
+@@ -5037,6 +5452,26 @@
+ 
+     public static function parseStubFile(string $code, string $phpVersion = '8.5', string $sourceFile = ''): FileInfo {
+         $nodeTraverser = new PhpParser\NodeTraverser;
++        $sourceIdentity = $sourceFile === ''
++            ? ''
++            : getTranslator()->getSourceIdentityForStub(realpath($sourceFile) ?: $sourceFile);
++        $nodeTraverser->addVisitor(new class($sourceIdentity) extends PhpParser\NodeVisitorAbstract {
++            public function __construct(private readonly string $sourceFile) {}
++
++            public function enterNode(Node $node)
++            {
++                if ($node instanceof Node\Scalar\MagicConst\Line) {
++                    return new Node\Scalar\Int_($node->getStartLine(), $node->getAttributes());
++                }
++                if ($this->sourceFile !== '' && $node instanceof Node\Scalar\MagicConst\File) {
++                    return new Node\Scalar\String_($this->sourceFile, $node->getAttributes());
++                }
++                if ($this->sourceFile !== '' && $node instanceof Node\Scalar\MagicConst\Dir) {
++                    return new Node\Scalar\String_(dirname($this->sourceFile), $node->getAttributes());
++                }
++                return null;
++            }
++        });
+         $nodeTraverser->addVisitor(new PhpParser\NodeVisitor\NameResolver(
+             null,
+             ['preserveOriginalNames' => true]
+@@ -5044,7 +5479,7 @@
+         $nodeTraverser->addVisitor(new TypePhp\Transform\Visitor(sourceFile: $sourceFile));
+         $nodeTraverser->addVisitor(new TypePhp\Transform\ConstantExpressionValidationVisitor($phpVersion));
+         $nodeTraverser->addVisitor(new TypePhp\Transform\RuntimeAttributeFactoryLowering(
+-            $sourceFile,
++            getTranslator()->getSourceIdentityForStub($sourceFile),
+             static fn (string $class, string $case): bool => getTranslator()->isDeclaredEnumCase($class, $case),
+         ));
+         $prettyPrinter = new class extends Standard {
+@@ -5137,7 +5572,7 @@
+ 
+             // TypePHP traits are compile-time AST templates and must not become
+             // Zend class entries in the generated arginfo registration code.
+-            if ($stmt instanceof Trait_) {
++            if ($stmt instanceof Trait_ && getTranslator()->runtimeDeclaration($stmt->namespacedName->toString()) === null) {
+                 continue;
+             }
+ 
+@@ -5629,7 +6064,8 @@
+                 throw new Exception("Only the last parameter can be variadic");
+             }
+ 
+-            $type = $param->type ? StubType::fromNode($param->type) : null;
++            $parameterType = getTranslator()->getEffectiveParameterType($param);
++            $type = $parameterType ? StubType::fromNode($parameterType) : null;
+             if ($type === null && !isset($docParamTypes[$varName])) {
+                 $defaultParamType = getMagicMethodDefaultParamType($name, $i);
+                 if ($defaultParamType !== null) {
+@@ -5649,7 +6085,9 @@
+                 }
+             }
+ 
+-            if ($param->default instanceof Expr\ClassConstFetch && $param->default->class->toLowerString() === "self") {
++            if ($param->default instanceof Expr\ClassConstFetch && $param->default->class->toLowerString() === "self"
++                && (!$name instanceof MethodName || getTranslator()->runtimeDeclaration($name->className->name) === null)
++            ) {
+                 $defaultValue = getTranslator()->getClassConstValue(
+                     $func,
+                     $name->className->name,
+@@ -7040,7 +7478,7 @@
+ /**
+  * @throws Exception
+  */
+-function generateStubFile(string $stubFile, string $objectFile, bool $forceRegeneration, string $phpVersion = '8.5'): void
++function generateStubFile(string $stubFile, string $objectFile, bool $forceRegeneration, string $phpVersion = '8.5', bool $strictTypes = false): void
+ {
+     $opt_index = 0;
+     $options = getopt(
+@@ -7055,6 +7493,7 @@
+ 
+     $context = new Context;
+     $context->phpVersion = $phpVersion;
++    $context->strictTypes = $strictTypes;
+     $printParameterStats = isset($options["parameter-stats"]);
+     $verify = isset($options["verify"]);
+     $verifyManual = isset($options["verify-manual"]);

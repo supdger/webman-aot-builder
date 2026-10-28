@@ -1,0 +1,58 @@
+--- a/src/Parser/UniversalMethodCall.php
++++ b/src/Parser/UniversalMethodCall.php
+@@ -538,6 +538,55 @@
+             : null;
+     }
+ 
++    /** Ordinary PHP declarations take precedence over the array keyword. */
++    protected function isDeclaredObjectToArrayCall(Expr\MethodCall $expr, string $class = ''): bool
++    {
++        if (!$this->isNamedMethod($expr->name)
++            || strtolower($expr->name->toString()) !== 'toarray'
++        ) {
++            return false;
++        }
++        if ($class === '') {
++            $class = $this->detectDeclaredClassOfExpr($expr->var);
++        }
++        if ($class === '' && ($expr->var instanceof Expr\PropertyFetch
++            || $expr->var instanceof Expr\StaticPropertyFetch)
++        ) {
++            if ($this->getNativePropertyDef($expr->var) === null) {
++                if ($expr->var instanceof Expr\PropertyFetch) {
++                    $this->getPropertyIdentifier($expr->var, $expr->var->var, $expr->var->name);
++                } else {
++                    $this->resolveNativeStaticPropertyFetch($expr->var);
++                }
++            }
++            $class = $this->getNativePropertyDef($expr->var)?->class ?? '';
++        }
++        return $class !== ''
++            && !$this->isNativeObjectClass($class)
++            && $this->objectTypeDeclaresMethod($class, 'toArray');
++    }
++
++    protected function findDeclaredPropertyToArrayFunction(Expr\MethodCall $expr): ?\TypePhp\Entity\FunctionDef
++    {
++        $property = $this->getNativePropertyDef($expr->var);
++        if ($property === null) {
++            return null;
++        }
++        $class = $property->class;
++        // Use the same lexical private slot as typed property call lowering.
++        if ($this->classDef !== null && $this->methodDef !== null
++            && $this->classDef->hasMethod('toArray')
++            && ($this->classDef->getMethodFlags('toArray') & \PhpParser\Modifiers::PRIVATE)
++            && $this->isSameOrSubclassOf($class, $this->classDef->getNamespacedName(false))
++        ) {
++            $class = $this->classDef->getNamespacedName(false);
++        } elseif ($this->hasInaccessibleTypedPropertyMethod($class, 'toArray')) {
++            return null;
++        }
++        $class = $this->getTypedPropertyMethodSignatureClass($class, 'toArray');
++        return $class === '' ? null : $this->findAotMethodFunctionDef($class, 'toArray');
++    }
++
+     private function objectTypeDeclaresMethod(string $class, string $method): bool
+     {
+         return $this->classOrInterfaceDeclaresMethod($class, $method, []);

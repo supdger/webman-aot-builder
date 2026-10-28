@@ -12,13 +12,15 @@ final class DistributionManifestWriter
      * @param array{
      *   sourceTreeSha256:string,
      *   composerLockSha256:string,
-     *   profile:string,
      *   compatibilityLockSha256:string,
      *   toolchainLockSha256:string,
      *   normalizedInputSha256:string,
      *   extensions:list<string>,
      *   arguments:list<string>
      * } $inputs
+     * @param list<array{path:string,reason:string}> $interpreted Sources the
+     *        native compiler could not translate. They ship as their original
+     *        PHP text and run on the embedded Zend engine.
      * @return array<string,mixed>
      */
     public function write(
@@ -26,7 +28,8 @@ final class DistributionManifestWriter
         CoverageLedger $coverage,
         RuntimeResourceManifest $resources,
         array $inputs,
-        string $host
+        string $host,
+        array $interpreted = []
     ): array {
         $candidate = realpath($candidateDirectory);
         if (!is_string($candidate)
@@ -131,6 +134,7 @@ final class DistributionManifestWriter
             'files' => $files,
             'writableDirectories' => $writableDirectories,
             'diagnosticHost' => $host,
+            'interpretedSources' => $this->interpretedSources($interpreted),
         ];
         $encoded = json_encode(
             $manifest,
@@ -141,6 +145,41 @@ final class DistributionManifestWriter
             throw new ConfigurationException('distribution manifest cannot be written');
         }
         return $manifest;
+    }
+
+    /**
+     * Record the interpreted tier in a stable, auditable order.
+     *
+     * @param list<array{path:string,reason:string}> $interpreted
+     * @return list<array{path:string,reason:string}>
+     */
+    private function interpretedSources(array $interpreted): array
+    {
+        $entries = [];
+        foreach ($interpreted as $entry) {
+            if (!is_array($entry) || !is_string($entry['path'] ?? null)) {
+                throw new ConfigurationException('interpreted source record is invalid');
+            }
+            $path = $entry['path'];
+            if ($path === ''
+                || str_contains($path, "\n")
+                || str_starts_with($path, '/')
+                || $path !== str_replace('\\', '/', $path)
+                || in_array('..', explode('/', $path), true)
+            ) {
+                throw new ConfigurationException("interpreted source path is unsafe: {$path}");
+            }
+            $reason = $entry['reason'] ?? 'compilation failed';
+            $entries[$path] = [
+                'path' => $path,
+                'reason' => is_string($reason) && $reason !== ''
+                    ? str_replace("\n", ' ', $reason)
+                    : 'compilation failed',
+            ];
+        }
+        ksort($entries, SORT_STRING);
+
+        return array_values($entries);
     }
 
     /**
@@ -161,13 +200,12 @@ final class DistributionManifestWriter
                 throw new ConfigurationException("distribution input digest is invalid: {$key}");
             }
         }
-        if (!in_array($inputs['profile'] ?? null, ['webman', 'saiadmin'], true)
-            || !is_array($inputs['extensions'] ?? null)
+        if (!is_array($inputs['extensions'] ?? null)
             || !array_is_list($inputs['extensions'])
             || !is_array($inputs['arguments'] ?? null)
             || !array_is_list($inputs['arguments'])
         ) {
-            throw new ConfigurationException('distribution input profile or lists are invalid');
+            throw new ConfigurationException('distribution input lists are invalid');
         }
         foreach (array_merge($inputs['extensions'], $inputs['arguments']) as $value) {
             if (!is_string($value) || $value === '' || str_contains($value, "\n")) {

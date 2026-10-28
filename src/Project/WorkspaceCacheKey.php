@@ -9,7 +9,6 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 final class WorkspaceCacheKey
 {
     public function create(
-        ProjectProfile $profile,
         CoverageLedger $ledger,
         string $toolchainSha256,
         string $rulesSha256,
@@ -24,8 +23,6 @@ final class WorkspaceCacheKey
                 throw new ConfigurationException("invalid {$name} digest for workspace cache key");
             }
         }
-        $packages = $profile->packages();
-        ksort($packages, SORT_STRING);
         $files = $ledger->files();
         usort(
             $files,
@@ -33,8 +30,6 @@ final class WorkspaceCacheKey
         );
         $payload = json_encode([
             'schema' => 'webman-aot-builder-workspace-cache-key-v1',
-            'profile' => $profile->name(),
-            'packages' => $packages,
             'coverage' => $files,
             'toolchainSha256' => $toolchainSha256,
             'rulesSha256' => $rulesSha256,

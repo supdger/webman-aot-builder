@@ -1,0 +1,164 @@
+--- a/src/Parser/ExceptionControlFlowTrait.php
++++ b/src/Parser/ExceptionControlFlowTrait.php
+@@ -51,8 +51,34 @@
+     protected function parseTryCatch(mixed $v): string
+     {
+         $code = $this->parseBeforeStmtLines();
+-        $code .= 'try {';
+         $finally = $v->finally;
++        $gotoTargets = [];
++        $gotoVariable = null;
++        $gotoEntry = null;
++        if ($finally) {
++            $v = clone $v;
++            $labels = [];
++            $this->collectFinallyGotoLabels($v->stmts, $labels);
++            foreach ($v->catches as $catch) { $this->collectFinallyGotoLabels($catch->stmts, $labels); }
++            $gotoVariable = $this->genTmpVarName();
++            $source = isset($this->file) && is_file($this->file) ? file_get_contents($this->file) : '';
++            do {
++                $gotoEntry = 'typephp_finally_' . $gotoVariable;
++                if (!str_contains($source, $gotoEntry)) { break; }
++                $gotoVariable = $this->genTmpVarName();
++            } while (true);
++            $v->stmts = $this->routeFinallyGotos($v->stmts, $labels, $gotoVariable, $gotoEntry, $gotoTargets);
++            foreach ($v->catches as $index => $catch) {
++                $catch = clone $catch;
++                $catch->stmts = $this->routeFinallyGotos($catch->stmts, $labels, $gotoVariable, $gotoEntry, $gotoTargets);
++                $v->catches[$index] = $catch;
++            }
++            if ($gotoTargets) {
++                $this->addLocalVar($gotoVariable, Type::INT);
++                $code .= $this->getIndent() . $gotoVariable . ' = 0;' . PHP_EOL;
++            }
++        }
++        $code .= 'try {';
+         $stmts = $finally ? $this->injectFinallyBeforeReturn($v->stmts, $finally->stmts) : $v->stmts;
+ 
+         $catches = $v->catches;
+@@ -63,7 +89,7 @@
+         if ($finally) {
+             foreach ($catches as $catch) {
+                 if ($catch->var) {
+-                    $varName = $this->parseIdentifier($catch->var);
++                    $varName = $this->escapeVarName($catch->var->name);
+                     if (!$this->hasVar($varName) && $this->stmtListUsesVariable($finally->stmts, $varName)) {
+                         $this->addLocalVar($varName, Type::OBJECT);
+                     }
+@@ -80,7 +106,11 @@
+ 
+         $code .= ' catch (zend_object *_ex) {' . PHP_EOL;
+         $this->indentLevel++;
++        if ($this->runtimeDeclarationsEnabled) {
++            $code .= $this->getIndent() . 'if (EG(exception) && EG(current_execute_data) && EG(current_execute_data)->func && ZEND_USER_CODE(EG(current_execute_data)->func->type) && EG(current_execute_data)->opline) { zend_rethrow_exception(EG(current_execute_data)); }' . PHP_EOL;
++        }
+         $code .= $this->getIndent() . $exVar . ' = php::catchException();' . PHP_EOL;
++        if ($gotoTargets) { $code .= $this->getIndent() . $gotoVariable . ' = 0;' . PHP_EOL; }
+         if ($catches) {
+             $catchMatched = $this->genTmpVarName();
+             $code .= $this->getIndent() . 'bool ' . $catchMatched . ' = false;' . PHP_EOL;
+@@ -92,6 +122,7 @@
+         $code .= $this->getIndent() . '}' . PHP_EOL;
+ 
+         if ($finally) {
++            if ($gotoTargets) { $code .= $this->getIndent() . $gotoEntry . ':;' . PHP_EOL; }
+             $code .= $this->parseStmts($finally->stmts);
+             $code .= PHP_EOL;
+         }
+@@ -104,9 +135,44 @@
+         $this->indentLevel--;
+         $code .= $this->getIndent() . '}';
+ 
++        foreach ($gotoTargets as $target => $id) {
++            $code .= PHP_EOL . $this->getIndent() . 'if (' . $gotoVariable . ' == ' . $id . ') { goto ' . $target . '; }';
++        }
+         return $code;
+     }
+ 
++    protected function collectFinallyGotoLabels(Node|array $node, array &$labels): void
++    {
++        if (is_array($node)) { foreach ($node as $child) { if ($child instanceof Node) { $this->collectFinallyGotoLabels($child, $labels); } } return; }
++        if ($node instanceof Node\FunctionLike || $node instanceof Node\Stmt\ClassLike || $node instanceof Node\Stmt\Finally_) { return; }
++        if ($node instanceof Node\Stmt\Label) { $labels[$node->name->name] = true; }
++        foreach ($node->getSubNodeNames() as $name) { $child = $node->$name; if ($child instanceof Node || is_array($child)) { $this->collectFinallyGotoLabels($child, $labels); } }
++    }
++
++    protected function routeFinallyGotos(array $nodes, array $labels, string $variable, string $entry, array &$targets): array
++    {
++        $result = [];
++        foreach ($nodes as $node) {
++            if ($node instanceof Node\Stmt\Goto_ && !isset($labels[$node->name->name])) {
++                $target = $node->name->name;
++                $targets[$target] ??= count($targets) + 1;
++                $result[] = new Node\Stmt\Expression(new Expr\Assign(new Variable($variable), new Node\Scalar\Int_($targets[$target])));
++                $goto = clone $node;
++                $goto->name = new Node\Identifier($entry);
++                $result[] = $goto;
++            } elseif ($node instanceof Node && !$node instanceof Node\FunctionLike && !$node instanceof Node\Stmt\ClassLike && !$node instanceof Node\Stmt\Finally_) {
++                $node = clone $node;
++                foreach ($node->getSubNodeNames() as $name) {
++                    $child = $node->$name;
++                    if (is_array($child)) { $node->$name = $this->routeFinallyGotos($child, $labels, $variable, $entry, $targets); }
++                    elseif ($child instanceof Node) { $node->$name = $this->routeFinallyGotos([$child], $labels, $variable, $entry, $targets)[0]; }
++                }
++                $result[] = $node;
++            } else { $result[] = $node; }
++        }
++        return $result;
++    }
++
+     protected function injectFinallyBeforeReturn(array $stmts, array $finallyStmts, int $localControlDepth = 0): array
+     {
+         $result = [];
+@@ -134,7 +200,6 @@
+             }
+ 
+             if ($stmt instanceof Node\Stmt\Goto_) {
+-                array_push($result, ...$this->cloneStmtList($finallyStmts));
+                 $result[] = $stmt;
+                 continue;
+             }
+@@ -186,7 +251,7 @@
+ 
+     protected function cloneStmtList(array $stmts): array
+     {
+-        return array_map(static fn (Node\Stmt $stmt): Node\Stmt => clone $stmt, $stmts);
++        return (new \PhpParser\NodeTraverser(new \PhpParser\NodeVisitor\CloningVisitor()))->traverse($stmts);
+     }
+ 
+     protected function stmtListUsesVariable(array $stmts, string $name): bool
+@@ -203,8 +268,11 @@
+     protected function parseCatch(Node\Stmt\Catch_ $catch, string $exVar, string $catchMatched, array $finallyStmts = []): string
+     {
+         $types = $catch->types;
+-        $var = $catch->var ? $this->parseIdentifier($catch->var) : '';
+-        if ($var !== '' && !$this->hasVar($var)) {
++        $binding = $catch->var
++            ? $this->parseDynamicVariableTargetAssignment($catch->var, $exVar)
++            : null;
++        $var = $catch->var ? $this->escapeVarName($catch->var->name) : '';
++        if ($binding === null && $var !== '' && !$this->hasVar($var)) {
+             $this->addLocalVar($var, Type::OBJECT);
+         }
+ 
+@@ -224,7 +292,9 @@
+         $code .= '(' . implode(' || ', $conditions) . ')) {' . PHP_EOL;
+         $this->indentLevel++;
+         $code .= $this->getIndent() . $catchMatched . ' = true;' . PHP_EOL;
+-        if ($var !== '') {
++        if ($binding !== null) {
++            $code .= $this->getIndent() . $binding . ';' . PHP_EOL;
++        } elseif ($var !== '') {
+             $code .= $this->getIndent() . $var . ' = ' . $exVar . ';' . PHP_EOL;
+         }
+         $code .= $this->getIndent() . "{$exVar} = php::null;" . PHP_EOL;
+@@ -236,6 +306,9 @@
+             $this->indentLevel--;
+             $code .= $this->getIndent() . '} catch(zend_object *_catch_throw_ex) {' . PHP_EOL;
+             $this->indentLevel++;
++            if ($this->runtimeDeclarationsEnabled) {
++                $code .= $this->getIndent() . 'if (EG(exception) && EG(current_execute_data) && EG(current_execute_data)->func && ZEND_USER_CODE(EG(current_execute_data)->func->type) && EG(current_execute_data)->opline) { zend_rethrow_exception(EG(current_execute_data)); }' . PHP_EOL;
++            }
+             $code .= $this->getIndent() . "{$exVar} = php::catchException();" . PHP_EOL;
+             $this->indentLevel--;
+             $code .= $this->getIndent() . '}' . PHP_EOL;

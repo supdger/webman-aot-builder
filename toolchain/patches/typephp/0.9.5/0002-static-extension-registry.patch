@@ -1,0 +1,69 @@
+--- a/vendor/swoole/phpx/src/misc/typephp_runtime.cc
++++ b/vendor/swoole/phpx/src/misc/typephp_runtime.cc
+@@ -82,7 +82,15 @@
+ static uint32_t typephp_runtime_persistent_classes = 0;
+ static uint32_t typephp_runtime_persistent_constants = 0;
+ static bool typephp_runtime_started = false;
++static zend_module_entry **typephp_extra_modules = nullptr;
++static size_t typephp_extra_module_count = 0;
+ 
++#if defined(__GNUC__) || defined(__clang__)
++extern "C" zend_module_entry **typephp_runtime_extra_modules(size_t *count) __attribute__((weak));
++#else
++extern "C" zend_module_entry **typephp_runtime_extra_modules(size_t *count);
++#endif
++
+ extern "C" int typephp_runtime_start(
+     typephp_module_getter get_module, typephp_module_pre_shutdown pre_shutdown, int argc, char **argv) {
+     if (typephp_runtime_started) {
+@@ -96,6 +104,15 @@
+     typephp_runtime_persistent_functions = EG(persistent_functions_count);
+     typephp_runtime_persistent_classes = EG(persistent_classes_count);
+     typephp_runtime_persistent_constants = EG(persistent_constants_count);
++#if defined(__GNUC__) || defined(__clang__)
++    if (typephp_runtime_extra_modules != nullptr) {
++        typephp_extra_modules = typephp_runtime_extra_modules(&typephp_extra_module_count);
++        for (size_t i = 0; i < typephp_extra_module_count; i++) {
++            module_init(typephp_extra_modules[i]);
++        }
++    }
++#endif
++
+     typephp_runtime_module = get_module();
+     typephp_runtime_pre_shutdown = pre_shutdown;
+     module_init(typephp_runtime_module);
+@@ -110,6 +127,12 @@
+             char path_translated[] = "embed";
+             cli_register_file_handles();
+             SG(request_info).path_translated = path_translated;
++            for (size_t i = 0; i < typephp_extra_module_count; i++) {
++                zend_module_entry *module = typephp_extra_modules[i];
++                if (module->request_startup_func != nullptr) {
++                    module->request_startup_func(module->type, module->module_number);
++                }
++            }
+             typephp_runtime_module->request_startup_func(typephp_runtime_module->type,
+                                                          typephp_runtime_module->module_number);
+         } catch (zend_object *e) {
+@@ -177,6 +200,13 @@
+         typephp_runtime_pre_shutdown();
+     }
+     module_shutdown(typephp_runtime_module);
++    for (size_t i = typephp_extra_module_count; i > 0; i--) {
++        zend_module_entry *module = typephp_extra_modules[i - 1];
++        if (module->request_shutdown_func != nullptr) {
++            module->request_shutdown_func(module->type, module->module_number);
++        }
++        module_shutdown(module);
++    }
+ 
+     // Embedded opcode blobs allocate their user functions/classes in the
+     // request arena. Match Zend's release-build fast-shutdown behavior: remove
+@@ -193,5 +223,7 @@
+ 
+     typephp_runtime_module = nullptr;
+     typephp_runtime_pre_shutdown = nullptr;
++    typephp_extra_modules = nullptr;
++    typephp_extra_module_count = 0;
+     typephp_runtime_started = false;
+ }

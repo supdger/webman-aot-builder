@@ -1,0 +1,24 @@
+--- a/src/Parser/UnaryExpressionTrait.php
++++ b/src/Parser/UnaryExpressionTrait.php
+@@ -113,11 +113,17 @@
+         if ($type === Type::BIGINT) {
+             return 'php::BigInt::bitNot(' . $this->parseExpr($expr->expr) . ')';
+         }
+-        $var = $this->parseExprAsValue($expr->expr);
+-        if (in_array($type, [Type::BOOL, Type::INT, Type::FLOAT], true)) {
+-            return '~' . $this->convertIntExpr($var);
++        $stdParameter = $this->isVarExpr($expr->expr) && $this->isStdContainerParameter($expr->expr->name);
++        if (!$stdParameter && in_array($type, [Type::STR, Type::FLOAT, Type::VAR, Type::BOOL, Type::ARRAY, Type::OBJECT, Type::RESOURCE], true)) {
++            $code = '(~php::Var(' . $this->parseExprAsValue($expr->expr) . '))';
++            return match ($type) {
++                Type::STR => 'php::toStringExact(' . $code . ')',
++                Type::FLOAT => 'php::toIntExact(' . $code . ')',
++                default => $code,
++            };
+         }
+-        return '(~php::Var(' . $var . '))';
++        $var = $this->parseIdentifier($expr->expr);
++        return '~' . $this->convertIntExpr($var);
+     }
+ 
+     protected function parseBooleanNot(Expr\BooleanNot $expr): string

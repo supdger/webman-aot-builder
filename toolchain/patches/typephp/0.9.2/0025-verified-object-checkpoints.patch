@@ -1,0 +1,260 @@
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -2008,56 +2008,8 @@
+      */
+     public function hasMiscObjectFileCache(string $cppFile): bool
+     {
+-        // This translation unit emits project-specific runtime symbols and is
+-        // intentionally rebuilt for every target.
+-        if ($this->isProjectRuntimeEntryFile($cppFile)) {
+-            return false;
+-        }
+-        if ($this->climate->arguments->defined('force') || $this->enableProfiler) {
+-            return false;
+-        }
+-
+         $objectFile = $this->getObjectFile($cppFile);
+-        if (!file_exists($objectFile)) {
+-            return false;
+-        }
+-
+-        $metadataFile = $this->getMiscObjectCacheMetadataFile($objectFile);
+-        if (!is_file($metadataFile)) {
+-            return false;
+-        }
+-
+-        $cachedKey = file_get_contents($metadataFile);
+-        if ($cachedKey === false || trim($cachedKey) !== $this->getMiscObjectCacheKey($cppFile, $objectFile)) {
+-            return false;
+-        }
+-
+-        $objectMtime = filemtime($objectFile);
+-        if ($objectMtime < filemtime($cppFile)) {
+-            return false;
+-        }
+-
+-        $phpxDir = $this->getPhpxDir();
+-        $headerDirs = [$phpxDir . '/include', $phpxDir . '/src/misc'];
+-        if (str_starts_with($cppFile, $phpxDir . '/thirdparty/opcache/')) {
+-            $headerDirs[] = $phpxDir . '/thirdparty/opcache';
+-        }
+-
+-        foreach ($headerDirs as $dir) {
+-            if (!is_dir($dir)) {
+-                continue;
+-            }
+-            $iterator = new \RecursiveIteratorIterator(
+-                new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
+-            );
+-            foreach ($iterator as $file) {
+-                if ($file->getExtension() === 'h' && $file->getMTime() > $objectMtime) {
+-                    return false;
+-                }
+-            }
+-        }
+-
+-        return true;
++        return $this->restoreObjectCheckpoint($this->getMiscObjectCacheKey($cppFile, $objectFile), $objectFile);
+     }
+ 
+     protected function getMiscObjectCacheMetadataFile(string $objectFile): string
+@@ -2076,7 +2028,8 @@
+             'integer_size' => PHP_INT_SIZE,
+         ];
+ 
+-        return hash('sha256', $this->buildCompileFileCommand($sourceFile, $objectFile) . "\0" . serialize($abi));
++        return hash('sha256', $this->stableCheckpointInput($this->buildCheckpointCompileCommand($sourceFile, $objectFile))
++            . "\0" . serialize($abi) . "\0" . (getenv('WEBMAN_AOT_CACHE_IDENTITY') ?: ''));
+     }
+ 
+     protected function getGeneratedObjectCacheKey(string $sourceFile, string $objectFile): string
+@@ -2124,7 +2077,7 @@
+                 $this->generatedCompileInputCache[$real] = $input;
+             }
+         }
+-        hash_update($context, 'digest-v2' . "\0" . str_replace('\\', '/', $real) . "\0" . $input['digest'] . "\0");
++        hash_update($context, 'digest-v2' . "\0" . $this->stableCheckpointInput(str_replace('\\', '/', $real)) . "\0" . $input['digest'] . "\0");
+         $includeRoot = realpath($this->getIncludeDir());
+         if ($includeRoot === false) {
+             return;
+@@ -2146,42 +2099,122 @@
+         return isset($this->generatedProjectSources[$sourceFile]);
+     }
+ 
++    private function buildCheckpointCompileCommand(string $sourceFile, string $objectFile): string
++    {
++        $language = $this->getLanguageFromExtension($sourceFile);
++        $values = $this->getSourceCompileCommandOptions($sourceFile, $language)->toArray();
++        // Normalize only TypePHP's own generated PCH, preserving its switch
++        // and header content identity. Unknown or external PCH options remain.
++        $pch = $values['precompiled_header'] ?? null;
++        $cache = str_replace('\\', '/', $this->getBuildDir()) . '/cache/pch';
++        if (is_array($pch) && is_string($pch['header'] ?? null) && is_string($pch['artifact'] ?? null)) {
++            $header = str_replace('\\', '/', $pch['header']);
++            $artifact = str_replace('\\', '/', $pch['artifact']);
++            if (preg_match('~^' . preg_quote($cache, '~') . '/[a-f0-9]{24}/typephp_pch\.hpp$~D', $header) === 1
++                && $artifact === dirname($header) . '/typephp_pch.pch') {
++                $digest = hash_file('sha256', $pch['header']);
++                if (!is_string($digest)) { throw new \RuntimeException('Cannot hash generated PCH input'); }
++                $prefix = '/usr/src/webman-aot-checkpoint/pch/' . $digest;
++                $values['precompiled_header'] = ['header' => $prefix . '/typephp_pch.hpp', 'artifact' => $prefix . '/typephp_pch.pch'];
++            }
++        }
++        return $this->getNativeBuilder()->compileCommand($sourceFile, $objectFile, new CompileOptions($values), $language);
++    }
++
++    private function stableCheckpointInput(string $value): string
++    {
++        $root = getenv('WEBMAN_AOT_PROJECT_ROOT');
++        if (!is_string($root) || $root === '') {
++            return $value;
++        }
++        return str_replace([$root, str_replace('\\', '/', $root), str_replace('/', '\\', $root)], '/usr/src/webman-aot-checkpoint', $value);
++    }
++
++    private function restoreObjectCheckpoint(string $key, string $objectFile): bool
++    {
++        $root = getenv('WEBMAN_AOT_OBJECT_CACHE');
++        if (!is_string($root) || $root === '' || getenv('WEBMAN_AOT_FRESH') === '1'
++            || $this->climate->arguments->defined('force')) {
++            return false;
++        }
++        $entries = glob($root . '/' . $key . '-*', GLOB_ONLYDIR) ?: [];
++        foreach ($entries as $entry) {
++        if (is_link($entry) || is_link($entry . '/object') || is_link($entry . '/complete.json')) {
++            continue;
++        }
++        $text = is_file($entry . '/complete.json') ? file_get_contents($entry . '/complete.json') : false;
++        $record = is_string($text) ? json_decode($text, true) : null;
++        $object = $entry . '/object';
++        if (!is_array($record) || ($record['schema'] ?? null) !== 'webman-aot-object-v1'
++            || ($record['inputKey'] ?? null) !== $key || !is_file($object)
++            || !is_int($record['size'] ?? null) || $record['size'] <= 0
++            || filesize($object) !== $record['size'] || hash_file('sha256', $object) !== ($record['sha256'] ?? null)) {
++            continue;
++        }
++        if (!is_dir(dirname($objectFile)) && !mkdir(dirname($objectFile), 0700, true) && !is_dir(dirname($objectFile))) {
++            throw new \RuntimeException('Cannot prepare resumed object directory');
++        }
++        if (!copy($object, $objectFile) || hash_file('sha256', $objectFile) !== $record['sha256']) {
++            throw new \RuntimeException('Cannot restore verified object checkpoint');
++        }
++        ++$this->resumedObjectCount;
++        return true;
++        }
++        return false;
++    }
++
++    private int $resumedObjectCount = 0;
++
++    private function publishObjectCheckpoint(string $key, string $objectFile): void
++    {
++        $root = getenv('WEBMAN_AOT_OBJECT_CACHE');
++        if (!is_string($root) || $root === '' || !is_file($objectFile) || is_link($objectFile)) {
++            return;
++        }
++        $candidate = $root . '/.pending-' . bin2hex(random_bytes(12));
++        if (!mkdir($candidate, 0700)) {
++            throw new \RuntimeException('Cannot create object checkpoint candidate');
++        }
++        try {
++            $object = $candidate . '/object';
++            if (!copy($objectFile, $object)) {
++                throw new \RuntimeException('Cannot copy completed object checkpoint');
++            }
++            $record = ['schema' => 'webman-aot-object-v1', 'inputKey' => $key,
++                'size' => filesize($object), 'sha256' => hash_file('sha256', $object)];
++            if (!is_int($record['size']) || $record['size'] <= 0 || !is_string($record['sha256'])
++                || file_put_contents($candidate . '/complete.json', json_encode($record, JSON_THROW_ON_ERROR)) === false) {
++                throw new \RuntimeException('Cannot record completed object checkpoint');
++            }
++            // Unique immutable pair: a concurrent old attempt cannot replace a
++            // checkpoint another attempt is importing. Corrupt entries are misses.
++            if (!rename($candidate, $root . '/' . $key . '-' . bin2hex(random_bytes(12)))) {
++                    throw new \RuntimeException('Cannot atomically publish object checkpoint');
++            }
++        } finally {
++            if (is_dir($candidate)) {
++                foreach (['object', 'complete.json'] as $name) {
++                    if (is_file($candidate . '/' . $name)) { unlink($candidate . '/' . $name); }
++                }
++                rmdir($candidate);
++            }
++        }
++    }
++
+     private function hasGeneratedObjectFileCache(string $sourceFile, string $objectFile): bool
+     {
+-        if ($this->climate->arguments->defined('force')
+-            || $this->enableProfiler
+-            || !is_file($sourceFile)
+-            || !is_file($objectFile)) {
+-            return false;
+-        }
+-        $metadata = $this->getMiscObjectCacheMetadataFile($objectFile);
+-        $key = is_file($metadata) ? file_get_contents($metadata) : false;
+-        if (!is_string($key)
+-            || trim($key) !== $this->getGeneratedObjectCacheKey($sourceFile, $objectFile)) {
+-            return false;
+-        }
+-        // The key covers the compile command, source contents, and all generated
+-        // project headers recursively. A regenerated file may have a newer
+-        // timestamp while retaining byte-identical contents; rejecting that
+-        // object would turn a generator-fingerprint change into a full native
+-        // rebuild and defeat the content-addressed cache.
+-        return true;
++        return !$this->enableProfiler && is_file($sourceFile)
++            && $this->restoreObjectCheckpoint($this->getGeneratedObjectCacheKey($sourceFile, $objectFile), $objectFile);
+     }
+ 
+     private function writeGeneratedObjectCacheMetadata(string $sourceFile, string $objectFile): void
+     {
+-        $metadata = $this->getMiscObjectCacheMetadataFile($objectFile);
+-        if (file_put_contents($metadata, $this->getGeneratedObjectCacheKey($sourceFile, $objectFile) . PHP_EOL) === false) {
+-            throw new \RuntimeException('Cannot write generated object cache metadata: ' . $metadata);
+-        }
++        $this->publishObjectCheckpoint($this->getGeneratedObjectCacheKey($sourceFile, $objectFile), $objectFile);
+     }
+ 
+     protected function writeMiscObjectCacheMetadata(string $sourceFile, string $objectFile): void
+     {
+-        $metadataFile = $this->getMiscObjectCacheMetadataFile($objectFile);
+-        if (file_put_contents($metadataFile, $this->getMiscObjectCacheKey($sourceFile, $objectFile) . PHP_EOL) === false) {
+-            throw new \RuntimeException('Cannot write misc object cache metadata: ' . $metadataFile);
+-        }
++        $this->publishObjectCheckpoint($this->getMiscObjectCacheKey($sourceFile, $objectFile), $objectFile);
+     }
+ 
+     protected function invalidateMiscObjectCache(string $objectFile): void
+@@ -2325,21 +2358,7 @@
+ 
+     private function hasNanoObjectFileCache(string $sourceFile, string $objectFile): bool
+     {
+-        if ($this->climate->arguments->defined('force') || !is_file($objectFile)) {
+-            return false;
+-        }
+-        $metadataFile = $this->getMiscObjectCacheMetadataFile($objectFile);
+-        $cachedKey = is_file($metadataFile) ? file_get_contents($metadataFile) : false;
+-        if ($cachedKey === false
+-            || trim($cachedKey) !== $this->getMiscObjectCacheKey($sourceFile, $objectFile)) {
+-            return false;
+-        }
+-        $objectMtime = filemtime($objectFile);
+-        $sourceMtime = filemtime($sourceFile);
+-        return $objectMtime !== false
+-            && $sourceMtime !== false
+-            && $objectMtime >= $sourceMtime
+-            && $objectMtime >= $this->nanoRuntimeHeaderMtime;
++        return $this->restoreObjectCheckpoint($this->getMiscObjectCacheKey($sourceFile, $objectFile), $objectFile);
+     }
+ 
+     protected function getSourceCompileCommandOptions(string $sourceFile, ?string $language): CompileOptions
+@@ -2769,6 +2788,8 @@
+ 
+     public function build(array $objectFiles): string
+     {
++        $this->climate->comment('[resume] Reused verified objects: ' . $this->resumedObjectCount);
++
+         $targetFile = $this->getTargetFileName();
+ 
+         // Windows: add the .res resource file to the link

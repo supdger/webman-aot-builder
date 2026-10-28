@@ -1,0 +1,678 @@
+--- a/src/Generator/CallArgumentGenerator.php
++++ b/src/Generator/CallArgumentGenerator.php
+@@ -396,26 +396,153 @@
+ 
+         if ($param) {
+             return $param->isPassedByReference();
++        }
++
++        if (!$className && Reflection::getFunction($funcName) === null) {
++            return $this->isTargetReferenceArgument($funcName, $argIndex);
+         }
+ 
+         // The argument index exceeds the declared range; check whether the last
+         // parameter is a by-reference variadic parameter (e.g. &...$rest)
+         $variadicParam = Reflection::getVariadicParameter($funcName, $className);
+         return $variadicParam !== null && $variadicParam->isPassedByReference();
++    }
++
++    /** Public providers contribute storage requirements, never a selected body. */
++    protected function getRuntimePublicCallArgInfo(string $name, int|string $argument): ?ArgInfo
++    {
++        if (!$this->runtimeDeclarationsEnabled) { return null; }
++        $result = null;
++        $functions = $this->runtimeCallStorageIndexReady
++            ? ($this->runtimeCallStorageFunctions[strtolower(ltrim($name, '\\'))] ?? [])
++            : $this->symbols->functions();
++        foreach ($functions as $function) {
++            if ($function->runtimePublicName === '' || strcasecmp(ltrim($name, '\\'), $function->runtimePublicName) !== 0) { continue; }
++            $candidate = is_int($argument) ? $this->getArgInfoByIndex($function, $argument) : null;
++            if (is_string($argument)) {
++                foreach ($function->argInfoList as $info) {
++                    if (($info->phpName ?: $this->unescapeVarName($info->name)) === $argument || $info->variadic) { $candidate = $info; }
++                }
++            }
++            if ($candidate === null) { continue; }
++            $result ??= clone $candidate;
++            if ($candidate->byRef) {
++                $result = clone $candidate;
++                $result->persistentReference = true;
++                return $result;
++            }
++        }
++        return $result;
++    }
++
++    private bool $runtimeCallStorageIndexReady = false;
++    private array $runtimeCallStorageProviders = [];
++    private array $runtimeCallStorageFunctions = [];
++    private array $runtimeCallStorageDeclarations = [];
++    private array $runtimeCallStorageResults = [];
++
++    protected function invalidateRuntimeCallStorageMetadata(): void
++    {
++        $this->runtimeCallStorageIndexReady = false;
++        $this->runtimeCallStorageProviders = [];
++        $this->runtimeCallStorageFunctions = [];
++        $this->runtimeCallStorageDeclarations = [];
++        $this->runtimeCallStorageResults = [];
++    }
++
++    /** Called only after all declarations and composed trait methods exist. */
++    protected function indexRuntimeCallStorageMetadata(): void
++    {
++        if (!$this->runtimeDeclarationsEnabled || $this->runtimeCallStorageIndexReady) { return; }
++        foreach ($this->runtimeDeclarations as $declaration) {
++            $this->runtimeCallStorageDeclarations[strtolower(ltrim($declaration['native'], '\\'))] = $declaration;
++        }
++        $providers = array_values(array_merge($this->symbols->classes(), $this->symbols->interfaces()));
++        $this->runtimeCallStorageProviders[self::DYNAMIC_CALLED_CLASS] = $providers;
++        foreach ($providers as $provider) {
++            foreach (array_unique([$this->getFullRuntimeNativeClassName($provider), $provider->runtimePublicName]) as $name) {
++                if ($name !== '') { $this->runtimeCallStorageProviders[strtolower(ltrim($name, '\\'))][] = $provider; }
++            }
++        }
++        foreach ($this->symbols->functions() as $function) {
++            if ($function->runtimePublicName !== '') {
++                $this->runtimeCallStorageFunctions[strtolower(ltrim($function->runtimePublicName, '\\'))][] = $function;
++            }
++        }
++        $this->runtimeCallStorageIndexReady = true;
++    }
++
++    protected function getRuntimeCallStorageArgInfo(string $name, string $class, int|string $argument, array &$visited = []): ?ArgInfo
++    {
++        if (!$this->runtimeCallStorageIndexReady && $this->persistentReferenceDeclarationsFinalized) {
++            $this->indexRuntimeCallStorageMetadata();
++        }
++        $cacheKey = serialize([strtolower($name), strtolower(ltrim($class, '\\')), $argument]);
++        $cacheable = $this->runtimeCallStorageIndexReady && $visited === [];
++        if ($cacheable && array_key_exists($cacheKey, $this->runtimeCallStorageResults)) {
++            $result = $this->runtimeCallStorageResults[$cacheKey];
++            return $result === null ? null : clone $result;
++        }
++        $result = $this->resolveRuntimeCallStorageArgInfo($name, $class, $argument, $visited);
++        if ($cacheable) { $this->runtimeCallStorageResults[$cacheKey] = $result === null ? null : clone $result; }
++        return $result;
++    }
++
++    private function resolveRuntimeCallStorageArgInfo(string $name, string $class, int|string $argument, array &$visited): ?ArgInfo
++    {
++        if ($class === '') { return $this->getRuntimePublicCallArgInfo($name, $argument); }
++        if (!$this->runtimeDeclarationsEnabled) { return null; }
++        $key = strtolower(ltrim($class, '\\'));
++        if (isset($visited[$key])) { return null; }
++        $visited[$key] = true;
++        $result = null;
++        $providers = $this->runtimeCallStorageIndexReady
++            ? ($this->runtimeCallStorageProviders[$class === self::DYNAMIC_CALLED_CLASS ? $class : $key] ?? [])
++            : array_merge($this->symbols->classes(), $this->symbols->interfaces());
++        foreach ($providers as $provider) {
++            $native = $this->getFullRuntimeNativeClassName($provider);
++            if (($provider instanceof \TypePhp\Entity\ClassDef && $provider->nativeObject) || $provider->runtimePublicName === ''
++                || ($class !== self::DYNAMIC_CALLED_CLASS && strcasecmp(ltrim($class, '\\'), $provider->runtimePublicName) !== 0
++                    && strcasecmp(ltrim($class, '\\'), $native) !== 0)) { continue; }
++            $function = $this->findAotMethodFunctionDef($this->getFullRuntimeNativeClassName($provider), $name);
++            $candidate = $function !== null && is_int($argument) ? $this->getArgInfoByIndex($function, $argument) : null;
++            if ($function !== null && is_string($argument)) {
++                foreach ($function->argInfoList as $info) {
++                    if (($info->phpName ?: $this->unescapeVarName($info->name)) === $argument || $info->variadic) { $candidate = $info; }
++                }
++            }
++            if ($candidate === null) {
++                $declaration = $this->runtimeCallStorageIndexReady
++                    ? ($this->runtimeCallStorageDeclarations[strtolower(ltrim($native, '\\'))] ?? null)
++                    : $this->runtimeDeclaration($native);
++                $dependencies = array_merge($provider->extends !== '' ? [$provider->extends] : [],
++                    $declaration['traits'] ?? [], $declaration['interfaces'] ?? []);
++                foreach ($dependencies as $dependency) {
++                    $inherited = $this->getRuntimeCallStorageArgInfo($name, $dependency, $argument, $visited);
++                    if ($inherited !== null && ($candidate === null || $inherited->byRef)) { $candidate = $inherited; }
++                    if ($candidate?->byRef) { break; }
++                }
++            }
++            if ($candidate === null) { continue; }
++            $result ??= clone $candidate;
++            if ($candidate->byRef) { $result = clone $candidate; $result->persistentReference = true; return $result; }
++        }
++        return $result;
+     }
+ 
+     protected function getAotCallArgInfo(string $funcName, string $className, int $argIndex): ?ArgInfo
+     {
+         if ($className !== '') {
+-            $functionDef = $this->findAotMethodFunctionDef($className, $funcName);
++            $functionDef = $this->findAotMethodFunctionDef($className, $funcName)
++                ?? $this->findTargetInternalMethodFunctionDef($className, $funcName);
+             if ($functionDef === null) {
+-                return null;
++                return $this->getRuntimeCallStorageArgInfo($funcName, $className, $argIndex);
+             }
+             return $this->getArgInfoByIndex($functionDef, $argIndex);
+         }
+ 
+         if (!$this->hasFunction($funcName)) {
+-            return null;
++            return $this->getRuntimePublicCallArgInfo($funcName, $argIndex);
+         }
+         return $this->getArgInfoByIndex($this->getFunction($funcName), $argIndex);
+     }
+@@ -424,13 +551,14 @@
+     {
+         $functionDef = null;
+         if ($className !== '') {
+-            $functionDef = $this->findAotMethodFunctionDef($className, $funcName);
++            $functionDef = $this->findAotMethodFunctionDef($className, $funcName)
++                ?? $this->findTargetInternalMethodFunctionDef($className, $funcName);
+         } elseif ($this->hasFunction($funcName)) {
+             $functionDef = $this->getFunction($funcName);
+         }
+ 
+         if ($functionDef === null) {
+-            return null;
++            return $this->getRuntimeCallStorageArgInfo($funcName, $className, $argName);
+         }
+ 
+         $variadicArgInfo = null;
+@@ -445,6 +573,22 @@
+         return $variadicArgInfo;
+     }
+ 
++    /** Metadata only: keep compiled-body/native-call resolution separate. */
++    private function findTargetInternalMethodFunctionDef(string $className, string $method): ?FunctionDef
++    {
++        if ($className === self::DYNAMIC_CALLED_CLASS) { return null; }
++        $visited = [];
++        while ($this->hasClass($className)) {
++            $key = strtolower($className);
++            if (isset($visited[$key])) { return null; }
++            $visited[$key] = true;
++            $class = $this->getClass($className);
++            if ($class->extends === '') { return null; }
++            $className = $class->extends;
++        }
++        return Reflection::getTargetInternalMethod($className, $method)?->functionDef;
++    }
++
+     /** Resolve a project class or interface method declaration for AOT call arguments. */
+     protected function findAotMethodFunctionDef(string $className, string $funcName): ?FunctionDef
+     {
+@@ -461,7 +605,11 @@
+         }
+ 
+         $classDef = $this->getClass($className);
++        $visited = [];
+         while (true) {
++            $key = strtolower($this->getFullRuntimeNativeClassName($classDef));
++            if (isset($visited[$key])) { return null; }
++            $visited[$key] = true;
+             if ($classDef->hasMethod($funcName)) {
+                 return $classDef->getMethod($funcName)->functionDef;
+             }
+@@ -541,7 +689,7 @@
+         } else {
+             $ref = Reflection::getFunction($funcName);
+             if (!$ref) {
+-                return false;
++                return $this->isTargetReferenceNamedArgument($funcName, $argName);
+             }
+             $params = $ref->getParameters();
+         }
+@@ -558,6 +706,64 @@
+         return $variadicParam !== null && $variadicParam->isPassedByReference();
+     }
+ 
++    private function isTargetReferenceArgument(string $funcName, int $index): bool
++    {
++        static $positions = [
++            'pcntl_wait' => [0, 2],
++            'pcntl_waitpid' => [1, 3],
++            'pcntl_waitid' => [2],
++            'pcntl_sigprocmask' => [2],
++            'openssl_x509_export' => [1],
++            'openssl_pkcs12_export' => [1],
++            'openssl_pkcs12_read' => [1],
++            'openssl_csr_export' => [1],
++            'openssl_csr_new' => [1],
++            'openssl_pkey_export' => [1],
++            'openssl_pkcs7_read' => [1],
++            'openssl_cms_read' => [1],
++            'openssl_private_encrypt' => [1],
++            'openssl_private_decrypt' => [1],
++            'openssl_public_encrypt' => [1],
++            'openssl_public_decrypt' => [1],
++            'openssl_sign' => [1],
++            'openssl_seal' => [1, 2, 5],
++            'openssl_open' => [1],
++            'openssl_encrypt' => [5],
++            'openssl_random_pseudo_bytes' => [1],
++        ];
++
++        return in_array($index, $positions[strtolower(ltrim($funcName, '\\'))] ?? [], true);
++    }
++
++    private function isTargetReferenceNamedArgument(string $funcName, string $name): bool
++    {
++        static $names = [
++            'pcntl_wait' => ['status', 'resource_usage'],
++            'pcntl_waitpid' => ['status', 'resource_usage'],
++            'pcntl_waitid' => ['info'],
++            'pcntl_sigprocmask' => ['old_signals'],
++            'openssl_x509_export' => ['output'],
++            'openssl_pkcs12_export' => ['output'],
++            'openssl_pkcs12_read' => ['certificates'],
++            'openssl_csr_export' => ['output'],
++            'openssl_csr_new' => ['private_key'],
++            'openssl_pkey_export' => ['output'],
++            'openssl_pkcs7_read' => ['certificates'],
++            'openssl_cms_read' => ['certificates'],
++            'openssl_private_encrypt' => ['encrypted_data'],
++            'openssl_private_decrypt' => ['decrypted_data'],
++            'openssl_public_encrypt' => ['encrypted_data'],
++            'openssl_public_decrypt' => ['decrypted_data'],
++            'openssl_sign' => ['signature'],
++            'openssl_seal' => ['sealed_data', 'encrypted_keys', 'iv'],
++            'openssl_open' => ['output'],
++            'openssl_encrypt' => ['tag'],
++            'openssl_random_pseudo_bytes' => ['strong_result'],
++        ];
++
++        return in_array($name, $names[strtolower(ltrim($funcName, '\\'))] ?? [], true);
++    }
++
+     protected function parseCallArgs(
+         array $args,
+         string $funcName = '',
+@@ -565,6 +771,8 @@
+         bool $separateNamedArgs = true,
+         bool $forceArrayArgs = false,
+         bool $preserveExistingReferences = false,
++        string $runtimeFunction = '',
++        bool $requiresArgsContainer = false,
+     ): string {
+         $this->assertCallArgumentLimit($args);
+         // Nested calls need independent bridge identities and commit points.
+@@ -610,6 +818,47 @@
+                         ),
+                     );
+                 }
++                $superglobal = $arg->value instanceof Expr\Variable && is_string($arg->value->name)
++                    && $this->usesRuntimeSuperGlobalStorage($arg->value->name);
++                if ($runtimeFunction !== '' && !$arg->unpack && $arg->value instanceof Expr\Variable
++                    && ($superglobal || !is_string($arg->value->name) || $this->isDynamicScopeVariable($arg->value))
++                    && (!is_string($arg->value->name) || !isset($this->context->typedArrays[$this->escapeVarName($arg->value->name)]))) {
++                    $variable = $superglobal ? $this->getLiteralString($arg->value->name)
++                        : $this->parseOrderedOperand($this->dynamicVariableName($arg->value), false, true);
++                    $line = max(1, $arg->value->getStartLine());
++                    if ($arg->name !== null) {
++                        if (isset($namedArgs[$arg->name->name])) { $this->fatalError($arg, 'Duplicate named argument `' . $arg->name->name . '`'); }
++                        $hasNamedArg = true;
++                        $namedArgs[$arg->name->name] = true;
++                        $array = $separateNamedArgs ? $this->ensureCallNamedArgs($namedArgsVar) : $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
++                        $value = $superglobal
++                            ? 'typephp_runtime_named_superglobal_argument(' . $runtimeFunction . ', '
++                                . $this->getLiteralString($arg->name->name) . ', ' . $variable . ', ' . $line . ')'
++                            : 'typephp_runtime_named_scope_argument(' . $runtimeFunction . ', '
++                                . $this->getLiteralString($arg->name->name) . ', ' . $this->getDynamicVariableScopeExpr()
++                                . ', php::Var(' . $variable . '), ' . $line . ')';
++                        $this->context->beforeStmtLines[] = $array . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
++                    } else {
++                        if ($hasNamedArg) { $this->fatalError($arg, 'Cannot use positional argument after named argument'); }
++                        if ($hasUnpack) { $this->fatalError($arg, 'Cannot use positional argument after argument unpacking'); }
++                        $value = $superglobal
++                            ? 'typephp_runtime_superglobal_argument(' . $runtimeFunction . ', ' . $i . ', '
++                                . $variable . ', ' . $line . ')'
++                            : 'typephp_runtime_scope_argument(' . $runtimeFunction . ', ' . $i . ', '
++                                . $this->getDynamicVariableScopeExpr() . ', php::Var(' . $variable . '), ' . $line . ')';
++                        $this->context->beforeStmtLines[] = $this->ensureCallArrayArgs($arrayArgsVar, $list_args) . '.append(' . $value . ');';
++                    }
++                    continue;
++                }
++                if ($arg->getAttribute('typephpOwnedReferenceArgument', false)
++                    || ($runtimeFunction !== '' && $this->getRuntimeCallStorageArgInfo(
++                        $funcName, $className, $arg->name?->name ?? $i,
++                    )?->byRef)
++                    || ($funcName !== '' && ($arg->name !== null
++                        ? $this->isReferenceNamedArgument($funcName, $className, $arg->name->name)
++                        : $this->isReferenceArgument($funcName, $className, $i)))) {
++                    $this->prepareDynamicReferenceCallArgument($arg);
++                }
+                 $this->validateTypedArrayDynamicArgument($arg, $funcName, $className, $i);
+                 if ($arg->unpack) {
+                     if ($hasNamedArg) {
+@@ -618,7 +867,8 @@
+                     $hasUnpack = true;
+                     if (!$forceArrayArgs && $separateNamedArgs) {
+                         $callArgs = $this->ensureCallArgs($argsVar, $list_args);
+-                        $this->context->beforeStmtLines[] = $callArgs . '.appendUnpacked(' . $this->parseArrayArg($arg) . ');';
++                        $callNamedArgs = $this->ensureCallNamedArgs($namedArgsVar);
++                        $this->context->beforeStmtLines[] = $callArgs . '.appendUnpacked(' . $this->parseArrayArg($arg) . ', ' . $callNamedArgs . ');';
+                         if ($arg->getAttribute(self::ATTR_SCOPED_CALLBACK) === 'normalize-unpacked') {
+                             $this->context->beforeStmtLines[] = 'php::normalizeCallableClass('
+                                 . $callArgs . ', 0, ' . $this->getCallableScopeExpr() . ');';
+@@ -629,6 +879,33 @@
+                     }
+                     continue;
+                 }
++                if ($runtimeFunction !== '' && $arg->value instanceof Expr\ArrayDimFetch
++                    && ($funcName === '' || $this->getRuntimeCallStorageArgInfo(
++                        $funcName, $className, $arg->name?->name ?? $i,
++                    )?->byRef)) {
++                    // A dynamic callee decides whether this dimension is read or
++                    // fetched as a reference. Do not create a reference on the
++                    // value path, or evaluate a side-effecting key twice.
++                    if ($arg->name !== null) {
++                        if (isset($namedArgs[$arg->name->name])) {
++                            $this->fatalError($arg, 'Duplicate named argument `' . $arg->name->name . '`');
++                        }
++                        $hasNamedArg = true;
++                        $namedArgs[$arg->name->name] = true;
++                        $value = $this->parseRuntimeDimensionCallArgument($arg, $runtimeFunction, $arg->name->name);
++                        $array = $separateNamedArgs ? $this->ensureCallNamedArgs($namedArgsVar)
++                            : $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
++                        $this->context->beforeStmtLines[] = $array . '.set('
++                            . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
++                    } else {
++                        if ($hasNamedArg) { $this->fatalError($arg, 'Cannot use positional argument after named argument'); }
++                        if ($hasUnpack) { $this->fatalError($arg, 'Cannot use positional argument after argument unpacking'); }
++                        $value = $this->parseRuntimeDimensionCallArgument($arg, $runtimeFunction, $i);
++                        $array = $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
++                        $this->context->beforeStmtLines[] = $array . '.append(' . $value . ');';
++                    }
++                    continue;
++                }
+                 if ($arg->name !== null) {
+                     $hasNamedArg = true;
+                     if (!$this->isIdExpr($arg->name)) {
+@@ -638,9 +915,29 @@
+                         $this->fatalError($arg, "Duplicate named argument `{$arg->name->name}`");
+                     }
+                     $namedArgs[$arg->name->name] = true;
+-                    $byRef = ($funcName && $this->isReferenceNamedArgument($funcName, $className, $arg->name->name))
++                    if ($runtimeFunction !== '' && $this->getRuntimeCallStorageArgInfo($funcName, $className, $arg->name->name)?->byRef
++                        && $arg->value instanceof Expr\CallLike) {
++                        $value = 'typephp_runtime_named_call_result_argument(' . $runtimeFunction . ', '
++                            . $this->getLiteralString($arg->name->name) . ', ' . $this->parseExpr($arg->value)
++                            . ', ' . max(1, $arg->value->getStartLine()) . ')';
++                        $namedArgsArray = $separateNamedArgs ? $this->ensureCallNamedArgs($namedArgsVar) : $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
++                        $this->context->beforeStmtLines[] = $namedArgsArray . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
++                        continue;
++                    }
++                    if ($runtimeFunction !== '' && $this->getRuntimeCallStorageArgInfo($funcName, $className, $arg->name->name)?->byRef && $this->isVarExpr($arg->value)) {
++                        $this->prepareDynamicReferenceCallArgument($arg);
++                        $name = $this->parseIdentifier($arg->value);
++                        if (!$this->hasVar($name)) { $this->addLocalVar($name, Type::VAR); }
++                        $value = 'typephp_runtime_named_argument(' . $runtimeFunction . ', ' . $this->getLiteralString($arg->name->name) . ', ' . $name . ')';
++                        $namedArgsArray = $separateNamedArgs ? $this->ensureCallNamedArgs($namedArgsVar) : $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
++                        $this->context->beforeStmtLines[] = $namedArgsArray . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
++                        unset($this->context->objects[$name], $this->context->declaredObjects[$name], $this->context->stableObjects[$name], $this->context->exactObjects[$name]);
++                        continue;
++                    }
++                    $byRef = $arg->getAttribute('typephpOwnedReferenceArgument', false) || ($funcName && $this->isReferenceNamedArgument($funcName, $className, $arg->name->name))
+                         || ($preserveExistingReferences && $this->isExistingReferenceCallArg($arg));
+                     if ($byRef) {
++                        $this->prepareDynamicReferenceCallArgument($arg);
+                         $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
+                     }
+                     $value = ($byRef || $this->isStdRefCall($arg->value) || $this->isToRefCall($arg->value))
+@@ -652,7 +949,8 @@
+                         $this->context->beforeStmtLines[] = $namedArgsArray . '.set(' . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
+                     } else {
+                         $arrayArgs = $this->ensureCallArrayArgs($arrayArgsVar, $list_args);
+-                        $method = $forceArrayArgs ? 'setValue' : 'set';
++                        $method = $forceArrayArgs && !$byRef ? 'setValue' : 'set';
++                        if ($byRef && str_starts_with($value, '&')) { $value = 'php::Var(' . $value . ')'; }
+                         $this->context->beforeStmtLines[] = $arrayArgs . '.' . $method . '('
+                             . $this->getLiteralString($arg->name->name) . ', ' . $value . ');';
+                     }
+@@ -664,14 +962,31 @@
+                 if ($hasUnpack) {
+                     $this->fatalError($arg, 'Cannot use positional argument after argument unpacking');
+                 }
+-                $byRef = ($funcName && $this->isReferenceArgument($funcName, $className, $i))
++                if ($runtimeFunction !== '' && $this->getRuntimeCallStorageArgInfo($funcName, $className, $i)?->byRef
++                    && $arg->value instanceof Expr\CallLike) {
++                    $value = 'typephp_runtime_call_result_argument(' . $runtimeFunction . ', ' . $i . ', '
++                        . $this->parseExpr($arg->value) . ', ' . max(1, $arg->value->getStartLine()) . ')';
++                    $this->context->beforeStmtLines[] = $this->ensureCallArrayArgs($arrayArgsVar, $list_args) . '.append(' . $value . ');';
++                    continue;
++                }
++                if ($runtimeFunction !== '' && $this->getRuntimeCallStorageArgInfo($funcName, $className, $i)?->byRef && $this->isVarExpr($arg->value)) {
++                    $this->prepareDynamicReferenceCallArgument($arg);
++                    $name = $this->parseIdentifier($arg->value);
++                    if (!$this->hasVar($name)) { $this->addLocalVar($name, Type::VAR); }
++                    $this->assertVariableReferenceStorage($arg->value, $arg, $name);
++                    $this->addPositionalCallArg('typephp_runtime_argument(' . $runtimeFunction . ', ' . $i . ', ' . $name . ')', $arrayArgsVar, $list_args, $forceArrayArgs);
++                    unset($this->context->objects[$name], $this->context->declaredObjects[$name], $this->context->stableObjects[$name], $this->context->exactObjects[$name]);
++                    continue;
++                }
++                $byRef = $arg->getAttribute('typephpOwnedReferenceArgument', false) || ($funcName && $this->isReferenceArgument($funcName, $className, $i))
+                     || ($preserveExistingReferences && $this->isExistingReferenceCallArg($arg));
+                 if ($byRef) {
++                    $this->prepareDynamicReferenceCallArgument($arg);
+                     $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
+                 }
+                 $scopedCallback = $arg->getAttribute(self::ATTR_SCOPED_CALLBACK);
+                 if ($scopedCallback !== null) {
+-                    if ($this->isVarExpr($arg->value)) {
++                    if ($this->isVarExpr($arg->value) && !$superglobal) {
+                         $name = $this->parseIdentifier($arg->value);
+                         if (!$this->hasVar($name)) {
+                             $this->fatalError($arg, 'Undefined variable `$' . $name . '`');
+@@ -690,7 +1005,7 @@
+                         $this->addPositionalCallArg($this->parseArgRefVar($arg, $name), $arrayArgsVar, $list_args, $forceArrayArgs);
+                         continue;
+                     }
+-                    if (!$this->hasVar($name)) {
++                    if (!$superglobal && !$this->hasVar($name)) {
+                         $this->fatalError($arg, 'Undefined variable `$' . $name . '`');
+                     }
+                 } elseif ($this->isPropertyFetch($arg->value)) {
+@@ -700,12 +1015,20 @@
+                     }
+                     if ($this->isVarExpr($arg->value->var)) {
+                         $objectExpr = $this->parseIdentifier($arg->value->var);
+-                        if (!$this->hasVar($objectExpr)) {
++                        if (is_string($arg->value->var->name)
++                            && !$this->usesRuntimeSuperGlobalStorage($arg->value->var->name)
++                            && !$this->isDynamicScopeVariable($arg->value->var) && !$this->hasVar($objectExpr)) {
+                             $this->fatalError($arg, 'Undefined variable `$' . $objectExpr . '`');
+                         }
+                     }
+                 } elseif ($this->isArrayDimFetch($arg->value) and $this->isVarExpr($arg->value->var)) {
+-                    $array = $this->parseIdentifier($arg->value->var);
++                    if ($byRef && (!is_string($arg->value->var->name) || $this->isDynamicScopeVariable($arg->value->var))) {
++                        $arg->value->var->setAttribute('dynamicVariableMode', 'write');
++                    }
++                    $runtimeSuperglobal = is_string($arg->value->var->name)
++                        && $this->usesRuntimeSuperGlobalStorage($arg->value->var->name);
++                    $array = $byRef ? $this->parseWritableIdentifier($arg->value->var)
++                        : $this->parseIdentifier($arg->value->var);
+                     if ($array === 'GLOBALS') {
+                         $globalVar = $this->parseGlobalsArrayDimFetch($arg->value);
+                         // Global variable passed as a by-reference argument
+@@ -723,7 +1046,8 @@
+                         }
+                         continue;
+                     }
+-                    if ($this->isVarExpr($arg->value->var) and !$this->hasVar($array)) {
++                    if (is_string($arg->value->var->name) && !$runtimeSuperglobal
++                        && !$this->isDynamicScopeVariable($arg->value->var) && !$this->hasVar($array)) {
+                         $this->fatalError($arg, 'Undefined variable `$' . $array . '`');
+                     }
+                     if ($byRef) {
+@@ -749,6 +1073,10 @@
+                     $this->fatalError($arg, 'The std::ref function only accepts a variable, array element, or object property');
+                 } else {
+                     if ($byRef) {
++                        if ($this->runtimeDeclarationsEnabled && $arg->value instanceof Expr\CallLike) {
++                            $this->addPositionalCallArg($this->parseReferenceCallArgValue($arg), $arrayArgsVar, $list_args, $forceArrayArgs);
++                            continue;
++                        }
+                         if ($this->isScalar($arg->value)) {
+                             $this->fatalError($arg, 'The constants cannot be used as an argument for a reference-type parameter');
+                         }
+@@ -763,6 +1091,10 @@
+                 $this->addPositionalCallArg($value, $arrayArgsVar, $list_args, $forceArrayArgs);
+             }
+ 
++            if ($requiresArgsContainer && $argsVar === null && $arrayArgsVar !== null) {
++                $argsVar = $this->genTmpVarName();
++                $this->context->beforeStmtLines[] = Type::ARGS . ' ' . $argsVar . '(' . $arrayArgsVar . ');';
++            }
+             if ($argsVar !== null) {
+                 $result = $namedArgsVar !== null ? $argsVar . ', ' . $namedArgsVar . '.array()' : $argsVar;
+             } elseif ($arrayArgsVar !== null) {
+@@ -793,6 +1125,9 @@
+         if (!$this->isVarExpr($arg->value)) {
+             return $this->isReferenceWrapperCall($arg->value);
+         }
++        if (is_string($arg->value->name) && $this->usesRuntimeSuperGlobalStorage($arg->value->name)) {
++            return false;
++        }
+         $name = $this->parseIdentifier($arg->value);
+         return $this->hasVar($name) && $this->getVarType($name) === Type::REF;
+     }
+@@ -869,6 +1204,10 @@
+         bool $appendByValue = false,
+     ): void {
+         if ($arrayArgsVar !== null) {
++            if (str_starts_with($value, '&')) {
++                $value = 'php::Var(' . $value . ')';
++                $appendByValue = false;
++            }
+             $method = $appendByValue ? 'appendValue' : 'append';
+             $this->context->beforeStmtLines[] = $arrayArgsVar . '.' . $method . '(' . $value . ');';
+         } else {
+@@ -957,16 +1296,60 @@
+             $args[self::CALL_ARGUMENT_LIMIT],
+             'A function call cannot contain more than 65536 arguments',
+         );
++    }
++
++    private function prepareDynamicReferenceCallArgument(Node\Arg $arg): void
++    {
++        if ($arg->value instanceof Expr\Variable
++            && (!is_string($arg->value->name) || $this->isDynamicScopeVariable($arg->value))) {
++            $arg->value->setAttribute('dynamicVariableMode', 'write');
++        }
++    }
++
++    private function parseRuntimeDimensionCallArgument(Node\Arg $arg, string $function, int|string $parameter): string
++    {
++        $branches = [];
++        foreach ([true, false] as $reference) {
++            $branchArg = $this->cloneStmtList([$arg])[0];
++            $before = count($this->context->beforeStmtLines);
++            $after = count($this->context->afterStmtLines);
++            try {
++                $value = $reference ? $this->parseReferenceCallArgValue($branchArg)
++                    : $this->parseCallArgValue($branchArg);
++                if ($reference) {
++                    $value = str_starts_with($value, '&') ? 'php::Var(' . $value . ')'
++                        : 'php::Var((' . $value . ').const_ptr(), php::Ctor::CopyRef)';
++                }
++                $result = $this->genTmpVarName();
++                $branches[] = implode(' ', array_slice($this->context->beforeStmtLines, $before))
++                    . ' php::Var ' . $result . '{' . $value . '}; '
++                    . implode(' ', array_slice($this->context->afterStmtLines, $after))
++                    . ' return ' . $result . ';';
++            } finally {
++                $this->context->beforeStmtLines = array_slice($this->context->beforeStmtLines, 0, $before);
++                $this->context->afterStmtLines = array_slice($this->context->afterStmtLines, 0, $after);
++            }
++        }
++        $byReference = is_int($parameter)
++            ? '(' . $function . ' && ARG_SHOULD_BE_SENT_BY_REF(' . $function . ', ' . ($parameter + 1) . '))'
++            : 'typephp_runtime_named_argument_by_reference(' . $function . ', ' . $this->getLiteralString($parameter) . ')';
++        return '([&]() -> php::Var { if (' . $byReference . ') { ' . $branches[0]
++            . ' } else { ' . $branches[1] . ' } }())';
+     }
+ 
+     protected function parseReferenceCallArgValue(Node\Arg $arg): string
+     {
++        $this->prepareDynamicReferenceCallArgument($arg);
+         if ($this->isReferenceWrapperCall($arg->value)) {
+             $arg->value = $this->unwrapReferenceWrapperCall($arg->value, $arg);
+         }
+ 
+         $this->assertNativeObjectReferenceForbidden($arg->value, $arg);
+ 
++        if ($this->runtimeDeclarationsEnabled && $arg->value instanceof Expr\CallLike) {
++            return 'php::Var(typephp_reference_call_argument(' . $this->parseExpr($arg->value)
++                . ', ' . max(1, $arg->value->getStartLine()) . ').const_ptr(), php::Ctor::CopyRef)';
++        }
+         if ($this->isVarExpr($arg->value)) {
+             return $this->parseArgRefVar($arg, $this->parseIdentifier($arg->value));
+         }
+@@ -976,14 +1359,16 @@
+         }
+ 
+         if ($this->isArrayDimFetch($arg->value) and $this->isVarExpr($arg->value->var)) {
+-            $array = $this->parseIdentifier($arg->value->var);
++            $array = $this->parseWritableIdentifier($arg->value->var);
+             if ($array === 'GLOBALS') {
+                 $globalVar = $this->parseGlobalsArrayDimFetch($arg->value);
+                 $ref = $this->addTmpVar(Type::REF);
+                 $this->context->beforeStmtLines[] = $ref . ' = ' . $globalVar . '.toReference();';
+                 return '&' . $ref;
+             }
+-            if (!$this->hasVar($array)) {
++            if (is_string($arg->value->var->name)
++                && !$this->usesRuntimeSuperGlobalStorage($arg->value->var->name)
++                && !$this->isDynamicScopeVariable($arg->value->var) && !$this->hasVar($array)) {
+                 $this->fatalError($arg, 'Undefined variable `$' . $array . '`');
+             }
+             if ($arg->value->dim === null) {
+@@ -1007,7 +1392,8 @@
+     {
+         return $this->isMethodCall($expr)
+             && $this->isNamedMethod($expr->name)
+-            && $expr->name->toString() === 'toRef';
++            && $expr->name->toString() === 'toRef'
++            && !$this->usesRuntimeObjectMethodDispatch($expr->var);
+     }
+ 
+     protected function isReferenceWrapperCall(NodeAbstract $expr): bool
+@@ -1047,14 +1433,15 @@
+             return $this->emitDynamicPropertyFetchRef($inner, $arg);
+         }
+         if ($this->isArrayDimFetch($inner) and $this->isVarExpr($inner->var)) {
+-            $array = $this->parseIdentifier($inner->var);
++            $array = $this->parseWritableIdentifier($inner->var);
+             if ($array === 'GLOBALS') {
+                 $globalVar = $this->parseGlobalsArrayDimFetch($inner);
+                 $ref = $this->addTmpVar(Type::REF);
+                 $this->context->beforeStmtLines[] = $ref . ' = ' . $globalVar . '.toReference();';
+                 return '&' . $ref;
+             }
+-            if (!$this->hasVar($array)) {
++            if (is_string($inner->var->name) && !$this->usesRuntimeSuperGlobalStorage($inner->var->name)
++                && !$this->isDynamicScopeVariable($inner->var) && !$this->hasVar($array)) {
+                 $this->fatalError($arg, 'Undefined variable `$' . $array . '`');
+             }
+             if ($inner->dim === null) {
+@@ -1070,6 +1457,13 @@
+      */
+     protected function parseArgRefVar(Node\Arg $arg, string $name): string
+     {
++        if ($arg->value instanceof Expr\Variable && is_string($arg->value->name)
++            && $this->usesRuntimeSuperGlobalStorage($arg->value->name)) {
++            $storage = $this->parseWritableIdentifier($arg->value);
++            $reference = $this->addTmpVar(Type::REF);
++            $this->context->beforeStmtLines[] = $reference . ' = ' . $storage . '.toReference();';
++            return '&' . $reference;
++        }
+         if (!$this->hasVar($name)) {
+             // For a by-reference parameter, an undefined variable may be passed;
+             // it is created immediately as a reference
+@@ -1165,6 +1559,9 @@
+     {
+         $value = $expr->value;
+         if ($this->isVarExpr($value)) {
++            if (is_string($value->name) && $this->usesRuntimeSuperGlobalStorage($value->name)) {
++                return $this->parseExpr($value);
++            }
+             $var = $this->parseIdentifier($value);
+             if (!$this->hasVar($var)) {
+                 $this->errorUndefinedVariable($value);

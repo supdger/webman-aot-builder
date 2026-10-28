@@ -1,0 +1,13 @@
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -113,8 +113,9 @@
+                 and !$this->isBreakExpr($lastExpr)
+                 and !$this->isContinueExpr($lastExpr)
+                 and !$this->isThrowExpr($lastExpr)
++                and !$lastExpr instanceof Node\Stmt\Goto_
+             ) {
+-                $this->fatalError($case, 'switch case must end with return/break/continue/exit/throw, ' . $lastExpr->getType() . ' given');
++                $this->fatalError($case, 'switch case must end with return/break/continue/exit/throw/goto, ' . $lastExpr->getType() . ' given');
+             }
+             $target = count($caseGroups);
+             if ($hasDefault) {

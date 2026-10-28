@@ -1,0 +1,640 @@
+--- a/src/Build/PreparedProjectCacheTrait.php
++++ b/src/Build/PreparedProjectCacheTrait.php
+@@ -12,7 +12,7 @@
+         'globalVars', 'globalVarsInFile', 'globalVarDeclInFile', 'linkLibs',
+         'traitDeclarationsComposed', 'declarationExpressionsFinalized', 'methodOverrideFlagsFinalized',
+         'unavailableDeclarations', 'unavailableDeclarationFiles', 'declarationAutoloadInputs', 'declarationSourceFiles',
+-        'persistentReferenceDeclarationsFinalized',
++        'persistentReferenceDeclarationsFinalized', 'conditionalDeclarationFingerprint',
+     ];
+ 
+     private function preparedProjectKey(array $files): string
+--- a/src/Build/TargetInternalClassArchive.php
++++ b/src/Build/TargetInternalClassArchive.php
+@@ -5,7 +5,7 @@
+ final class TargetInternalClassArchive
+ {
+     /** Module entry => class method table records; ambiguous members supply no evidence. */
+-    public static function read(string $archive, array $members): array
++    public static function read(string $archive, array $members, bool $modulesOnly = false): array
+     {
+         $result = $duplicate = [];$stream = @fopen($archive, 'rb');
+         if (!is_resource($stream)) { return []; }
+@@ -27,7 +27,7 @@
+                     } else { $name = rtrim($name, '/'); }
+                     if (in_array($name, $members, true)) {
+                         $object = fread($stream, $length);
+-                        foreach (self::object($object, $members) as $module => $tables) {
++                        foreach (self::object($object, $members, $modulesOnly) as $module => $tables) {
+                             if (isset($result[$module]) || isset($duplicate[$module])) { unset($result[$module]);$duplicate[$module] = true; }
+                             else { $result[$module] = $tables; }
+                         }
+@@ -39,7 +39,7 @@
+         return $result;
+     }
+ 
+-    private static function object(string $bytes, array $modules): array
++    private static function object(string $bytes, array $modules, bool $modulesOnly): array
+     {
+         try {
+             $slice = static function (string $source, int $offset, int $length): string {
+@@ -107,6 +107,15 @@
+             $text = static function (int $section, int $at) use ($pointer, $string, $sections): ?string {
+                 $p = $pointer($section, $at);return $p === null ? null : $string($sections[$p[0]]['data'], $p[1]);
+             };
++            if ($modulesOnly) {
++                $module = $names[$foundModules[0]];
++                $section = $module['section'];
++                if ($module['size'] !== 168 || $number($sections[$section]['data'], $module['value'], 'v') !== 168) { return []; }
++                $name = $text($section, $module['value'] + 32);
++                $version = $text($section, $module['value'] + 88);
++                if ($name === null || $name === '' || $version === null) { return []; }
++                return [$foundModules[0] => ['name' => strtolower($name), 'version' => $version]];
++            }
+             $tables = [];
+             foreach ($names as $name => $symbol) {
+                 if (!preg_match('/^class_([A-Za-z_][A-Za-z0-9_]*)_methods$/D', $name, $m)) { continue; }
+--- a/src/Build/TargetInternalClassMetadata.php
++++ b/src/Build/TargetInternalClassMetadata.php
+@@ -20,7 +20,7 @@
+ 
+     public static function read(?string $sdk, ?string $nm): array
+     {
+-        $empty = ['classes' => [], 'sha256' => ''];
++        $empty = ['classes' => [], 'sha256' => '', 'extensions' => null, 'extensionsClosed' => false];
+         if ($sdk === null || $nm === null || !is_executable($nm)
+             || basename($nm) !== 'llvm-nm' || !is_file($sdk . '/lib/libphp.a')
+             || !is_dir($sdk . '/include/php/ext')) { return $empty; }
+@@ -36,14 +36,16 @@
+         } catch (\Throwable) { return $empty; }
+         $layout = [];
+         foreach (['sdk-manifest.json', 'include/php/main/php_config.h', 'include/php/Zend/zend_API.h',
+-            'include/php/Zend/zend_compile.h', 'include/php/Zend/zend_types.h', 'include/php/Zend/zend_type_info.h'] as $path) {
++            'include/php/Zend/zend_compile.h', 'include/php/Zend/zend_types.h', 'include/php/Zend/zend_type_info.h',
++            'include/php/main/build-defs.h', 'include/php/main/php_version.h', 'include/php/Zend/zend_modules.h'] as $path) {
+             $text = @file_get_contents($sdk . '/' . $path);
+             if ($text === false) { return $empty; }$layout[$path] = $text;
+         }
+         if (!self::supportsLayout($layout)) { return $empty; }
+         ksort($headers);
+         $digest = hash('sha256', serialize([$layout, realpath($sdk), hash_file('sha256', $sdk . '/lib/libphp.a'),
+-            realpath($nm), hash_file('sha256', $nm), $headers]));
++            realpath($nm), hash_file('sha256', $nm),
++            is_file($sdk . '/lib/libphpx.a') ? hash_file('sha256', $sdk . '/lib/libphpx.a') : null, $headers]));
+         if (isset(self::$cache[$digest])) { return self::$cache[$digest]; }
+         // The registry object must reference a module which the same archive defines.
+         $defined = $registered = $members = [];
+@@ -104,7 +106,41 @@
+                 $classes[$key] = ['name' => $m[1], 'flags' => $flags, 'methods' => $methods['methods'], 'module' => array_key_first($modules), 'header' => $path];
+             }
+         }
+-        return self::$cache[$digest] = ['classes' => $classes, 'sha256' => $digest];
++        $extensions = null;
++        $configuration = $layout['include/php/main/build-defs.h'];
++        $moduleLayout = preg_replace('/\\s+/', '', self::clean($layout['include/php/Zend/zend_modules.h']));
++        if ($registered !== [] && count(array_intersect_key($registered, $defined)) === count($registered)
++            && str_contains($configuration, "'--disable-all'")
++            && str_contains($configuration, "'--enable-shared=no'")
++            && str_contains($configuration, "'--enable-static=yes'")
++            && str_contains($moduleLayout, 'unsignedshortsize;unsignedintzend_api;unsignedcharzend_debug;unsignedcharzts;conststruct_zend_ini_entry*ini_entry;conststruct_zend_module_dep*deps;constchar*name;conststruct_zend_function_entry*functions;' )
++            && str_contains($moduleLayout, 'zend_result(*module_startup_func)(INIT_FUNC_ARGS);zend_result(*module_shutdown_func)(SHUTDOWN_FUNC_ARGS);zend_result(*request_startup_func)(INIT_FUNC_ARGS);zend_result(*request_shutdown_func)(SHUTDOWN_FUNC_ARGS);void(*info_func)(ZEND_MODULE_INFO_FUNC_ARGS);constchar*version;size_tglobals_size;')) {
++            $modules = TargetInternalClassArchive::read($sdk . '/lib/libphp.a', array_intersect_key($members, $registered), true);
++            if (count($modules) === count($registered)) {
++                $extensions = [];
++                foreach ($modules as $module) { $extensions[$module['name']] = $module['version']; }
++                if (count($extensions) !== count($modules)) { $extensions = null; }
++                else { ksort($extensions); }
++            }
++        }
++        $closed = false;
++        if ($extensions !== null && is_file($sdk . '/lib/libphpx.a')) {
++            $errors = tmpfile();
++            $process = proc_open([$nm, '-A', '--defined-only', $sdk . '/lib/libphpx.a'],
++                [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => $errors], $pipes);
++            if (is_resource($process)) {
++                fclose($pipes[0]);
++                $extra = false;
++                while (($line = fgets($pipes[1])) !== false) {
++                    if (preg_match('/\\b[BDRTW]\\s+typephp_runtime_extra_modules\\s*$|\\b[BDR]\\s+\\w+_module_entry\\s*$/', $line)) { $extra = true; }
++                }
++                fclose($pipes[1]);
++                $closed = proc_close($process) === 0 && !$extra;
++            }
++            fclose($errors);
++        }
++        return self::$cache[$digest] = ['classes' => $classes, 'sha256' => $digest,
++            'extensions' => $extensions, 'extensionsClosed' => $closed];
+     }
+ 
+     /** These record offsets apply only to the selected SysV x64 Zend declarations. */
+--- a/src/Build/UnavailableDeclarationsTrait.php
++++ b/src/Build/UnavailableDeclarationsTrait.php
+@@ -19,6 +19,18 @@
+     /** @var list<string> */
+     protected array $declarationSourceFiles = [];
+ 
++    /** @var array<string, string> Serialized selected trees, cloned for each compiler phase. */
++    protected array $conditionalDeclarationAsts = [];
++    protected string $conditionalDeclarationFingerprint = '';
++
++    protected function loadDeclarationAst(string $file, string $source): array
++    {
++        $path = realpath($file) ?: $file;
++        return isset($this->conditionalDeclarationAsts[$path])
++            ? unserialize($this->conditionalDeclarationAsts[$path])
++            : $this->getAstCache()->load($file, $source);
++    }
++
+     public function discoverUnavailableDeclarations(array $files): void
+     {
+         $graph = [];
+@@ -32,6 +44,7 @@
+             array_map(static fn(string $file): string => realpath($file) ?: $file, $files),
+             static fn(string $file): bool => str_ends_with(strtolower($file), '.php'),
+         ));
++        $this->conditionalDeclarationAsts = [];
+         foreach ($this->declarationSourceFiles as $file) {
+             try {
+                 $ast = $this->getAstCache()->load($file, (string) file_get_contents($file));
+@@ -42,6 +55,29 @@
+                 continue; // prepareFile owns parser diagnostics.
+             }
+             $fileAsts[$file] = $ast;
++        }
++        $version = $this->phpVersion;
++        if ($this->fullStatic) {
++            $header = (string) file_get_contents($this->getFullStaticSdkDir() . "/include/php/main/php_version.h");
++            if (preg_match('/^#define\s+PHP_VERSION\s+"([^"\r\n]+)"/m', $header, $match) !== 1) {
++                throw new \RuntimeException("Cannot resolve target PHP version for conditional declarations");
++            }
++            $version = $match[1];
++        }
++        $closedExtensions = $this->fullStatic && \TypePhp\Resolver\Reflection::isTargetExtensionRegistryClosed() && !$this->isNanoMode()
++            && $this->linkLibs === [] && $this->projectObjectFiles === []
++            && count($this->declarationSourceFiles) === count($files)
++            && !preg_match('/(?:^|\s)-l|\.(?:a|o|obj)(?:\s|$)/', $this->ldflags);
++        foreach ($fileAsts as $ast) {
++            if ($this->hasLibraryImportAnnotation($ast)) { $closedExtensions = false; }
++        }
++        $fileAsts = (new ConditionalDeclarationResolver($fileAsts, $version,
++            $this->fullStatic ? \TypePhp\Resolver\Reflection::targetExtensions() : null,
++            $closedExtensions))->resolve();
++        $conditionalDigest = hash_init('sha256');
++        foreach ($fileAsts as $file => $ast) {
++            $this->conditionalDeclarationAsts[$file] = serialize($ast);
++            hash_update($conditionalDigest, $file . "\0" . $this->conditionalDeclarationAsts[$file]);
+             foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\ClassLike::class) as $node) {
+                 if ($node->name === null) {
+                     continue;
+@@ -76,6 +112,7 @@
+                 $fileDeclarations[$file][] = $key;
+             }
+         }
++        $this->conditionalDeclarationFingerprint = hash_final($conditionalDigest);
+         foreach ($graph as $key => $declaration) {
+             $missing = [];
+             foreach ($declaration['traits'] as $trait) {
+@@ -310,3 +347,361 @@
+         return $manifest;
+     }
+ }
++
++/** Resolve compile-time declaration branches without loading project PHP. */
++final class ConditionalDeclarationResolver
++{
++    private object $unknown;
++    private array $types = [];
++    private array $functions = [];
++    private array $constants = [];
++    private array $conditionalTypes = [];
++    private array $excluded = [];
++    private array $included = [];
++    private bool $choicesResolved = false;
++
++    public function __construct(private array $asts, private string $phpVersion, private ?array $extensions = null, private bool $closedExtensions = false)
++    {
++        $this->unknown = new \stdClass();
++        foreach ($asts as $file => $ast) {
++            $this->index($ast, $file);
++            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\Function_::class) as $node) {
++                $this->functions[strtolower($this->name($node))] = true;
++            }
++            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\ClassLike::class) as $node) {
++                if ($node->name !== null) { $this->conditionalTypes[strtolower($this->name($node))][] = [$node, $file]; }
++            }
++        }
++    }
++
++    private function index(array $statements, string $file): void
++    {
++        foreach ($statements as $node) {
++            if ($node instanceof Node\Stmt\Namespace_) {
++                $this->index($node->stmts, $file);
++            } elseif ($node instanceof Node\Stmt\ClassLike && $node->name !== null) {
++                $this->types[strtolower($this->name($node))][] = [$node, $file];
++            } elseif ($node instanceof Node\Stmt\Const_) {
++                foreach ($node->consts as $constant) {
++                    $this->constants[$this->name($constant)][] = [$constant, $file];
++                }
++            } elseif ($node instanceof Node\Stmt\Function_) {
++                $this->functions[strtolower($this->name($node))] = true;
++            }
++        }
++    }
++
++    private function name(Node $node): string
++    {
++        if ($node instanceof Node\Name) {
++            return ($node->getAttribute('resolvedName') ?? $node)->toString();
++        }
++        return isset($node->namespacedName) ? $node->namespacedName->toString() : $node->name->toString();
++    }
++
++    public function resolve(): array
++    {
++        // Prove loader choices first; a self-guard alone cannot select between
++        // two independently scanned files.
++        foreach ($this->asts as $file => $ast) {
++            $variables = [];
++            $this->select($ast, $file, $variables, true);
++        }
++        foreach ($this->asts as $file => $ast) {
++            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Expr\Include_::class) as $include) {
++                if (!$include->expr instanceof Node\Expr\Ternary) {
++                    $path = $this->value($include->expr, $file, []);
++                    if (is_string($path) && ($target = realpath($path)) !== false) { $this->included[$target] = true; }
++                }
++            }
++        }
++        foreach ($this->included as $file => $_) {
++            unset($this->excluded[$file]);
++        }
++        $this->choicesResolved = true;
++        $result = [];
++        foreach ($this->asts as $file => $ast) {
++            $variables = [];
++            $result[$file] = isset($this->excluded[$file]) ? [] : $this->select($ast, $file, $variables, false);
++        }
++        $declarations = [];
++        foreach ($result as $file => $ast) {
++            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\ClassLike::class) as $node) {
++                if ($node->name === null) { continue; }
++                $name = $this->name($node);
++                $key = strtolower($name);
++                $location = $file . ':' . $node->getStartLine();
++                if (isset($declarations[$key])) {
++                    throw new \RuntimeException("Duplicate reachable declaration {$name}: {$declarations[$key]} and {$location}");
++                }
++                $declarations[$key] = $location;
++            }
++        }
++        return $result;
++    }
++
++    private function select(array $statements, string $file, array &$variables, bool $loaders): array
++    {
++        $result = [];
++        foreach ($statements as $node) {
++            if ($node instanceof Node\Stmt\Namespace_) {
++                $scope = [];
++                $node = clone $node;
++                $node->stmts = $this->select($node->stmts, $file, $scope, $loaders);
++            } elseif ($node instanceof Node\Stmt\Expression
++                && $node->expr instanceof Node\Expr\Assign
++                && $node->expr->var instanceof Node\Expr\Variable
++                && is_string($node->expr->var->name)) {
++                $value = $this->value($node->expr->expr, $file, $variables);
++                if (is_array($value) && isset($value['reflectionMethod'])) {
++                    $variables[$node->expr->var->name] = $value;
++                    if (!$loaders && $this->isLoaderBinding($statements, $node->expr->var->name)) { continue; }
++                } else {
++                    unset($variables[$node->expr->var->name]);
++                }
++            } elseif ($node instanceof Node\Stmt\Expression && $node->expr instanceof Node\Expr\Include_) {
++                if ($this->selectInclude($node->expr, $file, $variables) && !$loaders) { continue; }
++            } elseif ($node instanceof Node\Stmt\If_ && $this->hasDeclarations($node)) {
++                if ($loaders) { $result[] = $node; continue; }
++                $branches = [[$node->cond, $node->stmts]];
++                foreach ($node->elseifs as $elseif) { $branches[] = [$elseif->cond, $elseif->stmts]; }
++                $chosen = $node->else?->stmts ?? [];
++                foreach ($branches as [$condition, $body]) {
++                    $decision = $this->value($condition, $file, $variables);
++                    if ($decision === $this->unknown) {
++                        $source = (new \PhpParser\PrettyPrinter\Standard())->prettyPrintExpr($condition);
++                        $locations = [];
++                        foreach ((new NodeFinder())->findInstanceOf($node, Node\Stmt\ClassLike::class) as $declaration) {
++                            if ($declaration->name !== null) {
++                                foreach ($this->conditionalTypes[strtolower($this->name($declaration))] ?? [] as [$candidate, $origin]) {
++                                    if (!isset($this->excluded[$origin])) { $locations[] = $this->name($candidate) . ' at ' . $origin . ':' . $candidate->getStartLine(); }
++                                }
++                            }
++                        }
++                        throw new \RuntimeException('Cannot resolve conditional declaration: ' . $source . ' in ' . $file . ':' . $condition->getStartLine() . '; ' . implode(', ', array_unique($locations)));
++                    }
++                    if ($decision) { $chosen = $body; break; }
++                }
++                array_push($result, ...$this->select($chosen, $file, $variables, false));
++                continue;
++            }
++            $result[] = $node;
++        }
++        return $result;
++    }
++
++    private function isLoaderBinding(array $statements, string $variable): bool
++    {
++        $uses = (new NodeFinder())->find($statements, static fn(Node $node): bool =>
++            $node instanceof Node\Expr\Variable && $node->name === $variable);
++        $includes = (new NodeFinder())->findInstanceOf($statements, Node\Expr\Include_::class);
++        $includeUses = (new NodeFinder())->find($includes, static fn(Node $node): bool =>
++            $node instanceof Node\Expr\Variable && $node->name === $variable);
++        return count($uses) === count($includeUses) + 1 && $includeUses !== [];
++    }
++
++    private function hasDeclarations(Node $node): bool
++    {
++        return (new NodeFinder())->findFirst($node, static fn(Node $child): bool =>
++            $child instanceof Node\Stmt\ClassLike && $child->name !== null) !== null;
++    }
++
++    private function declarationFile(array $statements): bool
++    {
++        foreach ($statements as $node) {
++            if ($node instanceof Node\Stmt\Namespace_) {
++                if (!$this->declarationFile($node->stmts)) { return false; }
++            } elseif ($node instanceof Node\Stmt\If_) {
++                if (!$this->declarationFile($node->stmts)) { return false; }
++                foreach ($node->elseifs as $elseif) { if (!$this->declarationFile($elseif->stmts)) { return false; } }
++                if ($node->else !== null && !$this->declarationFile($node->else->stmts)) { return false; }
++            } elseif (!$node instanceof Node\Stmt\ClassLike && !$node instanceof Node\Stmt\Use_
++                && !$node instanceof Node\Stmt\GroupUse && !$node instanceof Node\Stmt\Nop
++                && !($node instanceof Node\Stmt\Declare_ && $node->stmts === null)) {
++                return false;
++            }
++        }
++        return true;
++    }
++
++    private function selectInclude(Node\Expr\Include_ $include, string $file, array $variables): bool
++    {
++        $choice = $include->expr;
++        if (!$choice instanceof Node\Expr\Ternary || $choice->if === null) { return false; }
++        $true = $this->value($choice->if, $file, $variables);
++        $false = $this->value($choice->else, $file, $variables);
++        if (!is_string($true) || !is_string($false)) { return false; }
++        $true = realpath($true);
++        $false = realpath($false);
++        if ($true === false || $false === false || !isset($this->asts[$true], $this->asts[$false])
++            || !$this->declarationFile($this->asts[$true]) || !$this->declarationFile($this->asts[$false])) { return false; }
++        $condition = $this->value($choice->cond, $file, $variables);
++        if ($condition === $this->unknown) {
++            $expression = (new \PhpParser\PrettyPrinter\Standard())->prettyPrintExpr($choice->cond);
++            throw new \RuntimeException("Cannot resolve conditional declaration loader {$expression} at {$file}:{$include->getStartLine()}; candidates {$true} and {$false}");
++        }
++        if (!$this->choicesResolved) {
++            $this->included[$condition ? $true : $false] = true;
++            $this->excluded[$condition ? $false : $true] = true;
++        }
++        return true;
++    }
++
++    private function method(string $class, string $method, array $visiting = []): mixed
++    {
++        $key = strtolower($class);
++        if (isset($visiting[$key]) || count($this->types[$key] ?? []) !== 1) { return $this->unknown; }
++        $visiting[$key] = true;
++        $node = $this->types[$key][0][0];
++        foreach ($node->getMethods() as $candidate) {
++            if (strcasecmp($candidate->name->toString(), $method) === 0) { return ['reflectionMethod' => $candidate]; }
++        }
++        $parents = $node instanceof Node\Stmt\Interface_ ? $node->extends : [];
++        if ($node instanceof Node\Stmt\Class_ && $node->extends !== null) { $parents[] = $node->extends; }
++        foreach ($parents as $parent) {
++            $found = $this->method($this->name($parent), $method, $visiting);
++            if ($found !== $this->unknown) { return $found; }
++        }
++        return $this->unknown;
++    }
++
++    private function value(Node\Expr $node, string $file, array $variables): mixed
++    {
++        if ($node instanceof Node\Scalar\String_ || $node instanceof Node\Scalar\Int_ || $node instanceof Node\Scalar\Float_) { return $node->value; }
++        if ($node instanceof Node\Scalar\MagicConst\Dir) { return dirname($file); }
++        if ($node instanceof Node\Scalar\MagicConst\File) { return $file; }
++        if ($node instanceof Node\Expr\Variable && is_string($node->name)) { return $variables[$node->name] ?? $this->unknown; }
++        if ($node instanceof Node\Expr\ConstFetch) {
++            $raw = $node->name->toString();
++            if (in_array(strtolower($raw), ['true', 'false', 'null'], true)) {
++                return match (strtolower($raw)) { 'true' => true, 'false' => false, default => null };
++            }
++            $resolved = $node->name->getAttribute('resolvedName');
++            $local = $node->name->getAttribute('namespacedName');
++            $name = $resolved instanceof Node\Name ? $resolved->toString()
++                : ($local instanceof Node\Name ? $local->toString() : $raw);
++            $definitions = $this->constants[$name] ?? [];
++            if ($definitions !== []) {
++                if (count($definitions) !== 1 || $definitions[0][1] !== $file
++                    || $definitions[0][0]->getStartFilePos() >= $node->getStartFilePos()) { return $this->unknown; }
++                $literal = $definitions[0][0]->value;
++                if ($literal instanceof Node\Scalar\String_ || $literal instanceof Node\Scalar\Int_
++                    || $literal instanceof Node\Scalar\Float_) { return $literal->value; }
++                return $this->unknown;
++            }
++            // Namespace fallback can be changed by define() or loaded source.
++            // Only a canonical global constant is target evidence.
++            if ($local instanceof Node\Name && !$resolved instanceof Node\Name) { return $this->unknown; }
++            return match ($name) {
++                'PHP_VERSION' => $this->phpVersion,
++                'PHP_VERSION_ID' => (int) explode('.', $this->phpVersion)[0] * 10000 + (int) (explode('.', $this->phpVersion)[1] ?? 0) * 100 + (int) (explode('.', $this->phpVersion)[2] ?? 0),
++                default => $this->unknown,
++            };
++        }
++        if ($node instanceof Node\Expr\ClassConstFetch && $node->class instanceof Node\Name
++            && $node->name instanceof Node\Identifier && strtolower($node->name->toString()) === 'class') { return $this->name($node->class); }
++        if ($node instanceof Node\Expr\BooleanNot) {
++            $value = $this->value($node->expr, $file, $variables);
++            return $value === $this->unknown ? $value : !$value;
++        }
++        if ($node instanceof Node\Expr\Ternary) {
++            $condition = $this->value($node->cond, $file, $variables);
++            return $condition === $this->unknown ? $condition : $this->value($condition ? ($node->if ?? $node->cond) : $node->else, $file, $variables);
++        }
++        if ($node instanceof Node\Expr\BinaryOp) {
++            $left = $this->value($node->left, $file, $variables);
++            if (($node instanceof Node\Expr\BinaryOp\BooleanAnd || $node instanceof Node\Expr\BinaryOp\LogicalAnd) && $left !== $this->unknown && !$left) { return false; }
++            if (($node instanceof Node\Expr\BinaryOp\BooleanOr || $node instanceof Node\Expr\BinaryOp\LogicalOr) && $left !== $this->unknown && $left) { return true; }
++            $right = $this->value($node->right, $file, $variables);
++            if ($left === $this->unknown || $right === $this->unknown) { return $this->unknown; }
++            return match (true) {
++                $node instanceof Node\Expr\BinaryOp\Concat => is_string($left) && is_string($right) ? $left . $right : $this->unknown,
++                $node instanceof Node\Expr\BinaryOp\Identical => $left === $right,
++                $node instanceof Node\Expr\BinaryOp\NotIdentical => $left !== $right,
++                $node instanceof Node\Expr\BinaryOp\Equal => $left == $right,
++                $node instanceof Node\Expr\BinaryOp\NotEqual => $left != $right,
++                $node instanceof Node\Expr\BinaryOp\Greater => $left > $right,
++                $node instanceof Node\Expr\BinaryOp\GreaterOrEqual => $left >= $right,
++                $node instanceof Node\Expr\BinaryOp\Smaller => $left < $right,
++                $node instanceof Node\Expr\BinaryOp\SmallerOrEqual => $left <= $right,
++                $node instanceof Node\Expr\BinaryOp\BooleanAnd, $node instanceof Node\Expr\BinaryOp\LogicalAnd => (bool) $left && (bool) $right,
++                $node instanceof Node\Expr\BinaryOp\BooleanOr, $node instanceof Node\Expr\BinaryOp\LogicalOr => (bool) $left || (bool) $right,
++                default => $this->unknown,
++            };
++        }
++        if ($node instanceof Node\Expr\FuncCall && $node->name instanceof Node\Name) {
++            $name = strtolower($this->name($node->name));
++            $local = $node->name->getAttribute('namespacedName');
++            if (($local instanceof Node\Name && isset($this->functions[strtolower($local->toString())]))
++                || isset($this->functions[$name]) || count($node->args) < 1) { return $this->unknown; }
++            $argument = $this->value($node->args[0]->value, $file, $variables);
++            if (in_array($name, ['class_exists', 'interface_exists', 'trait_exists', 'enum_exists'], true) && is_string($argument)) {
++                $declarations = $this->types[strtolower($argument)] ?? [];
++                if (count($declarations) > 1) { return $this->unknown; }
++                $autoload = isset($node->args[1]) ? $this->value($node->args[1]->value, $file, $variables) : true;
++                if (!is_bool($autoload)) { return $this->unknown; }
++                if ($declarations === []) {
++                    if ($this->extensions !== null && \TypePhp\Resolver\Reflection::getTargetInternalClass($argument) !== null) {
++                        return $name === 'class_exists';
++                    }
++                    $candidates = array_values(array_filter($this->conditionalTypes[strtolower($argument)] ?? [],
++                        fn(array $candidate): bool => !isset($this->excluded[$candidate[1]])));
++                    // The proven loader selected this sole guarded definition;
++                    // no other compiled declaration can satisfy its self-guard.
++                    if (count($candidates) === 1 && $candidates[0][1] === $file
++                        && isset($this->included[$file]) && !$autoload) { return false; }
++                    return $this->unknown;
++                }
++                if (!$autoload && $declarations[0][1] !== $file) { return $this->unknown; }
++                $type = $declarations[0][0];
++                return match ($name) {
++                    'interface_exists' => $type instanceof Node\Stmt\Interface_,
++                    'trait_exists' => $type instanceof Node\Stmt\Trait_,
++                    'enum_exists' => $type instanceof Node\Stmt\Enum_,
++                    default => $type instanceof Node\Stmt\Class_ || $type instanceof Node\Stmt\Enum_,
++                };
++            }
++            if (in_array($name, ['phpversion', 'extension_loaded'], true) && is_string($argument)
++                && $this->extensions !== null) {
++                $key = strtolower($argument);
++                if (\TypePhp\Resolver\Reflection::isTypePhpExtension($key)) { return $this->unknown; }
++                if ($name === 'extension_loaded') { return array_key_exists($key, $this->extensions) ? true : ($this->closedExtensions ? false : $this->unknown); }
++                return array_key_exists($key, $this->extensions)
++                    ? ($this->extensions[$key] ?? $this->unknown) : ($this->closedExtensions ? false : $this->unknown);
++            }
++            if ($name === 'version_compare' && count($node->args) === 3 && (is_string($argument) || $argument === false)) {
++                $version = $this->value($node->args[1]->value, $file, $variables);
++                $operator = $this->value($node->args[2]->value, $file, $variables);
++                return is_string($version) && is_string($operator) && in_array($operator, ['<','<=','>','>=','==','!=','lt','le','gt','ge','eq','ne'], true)
++                    ? version_compare((string) $argument, $version, $operator) : $this->unknown;
++            }
++        }
++        if ($node instanceof Node\Expr\New_ && $node->class instanceof Node\Name
++            && strcasecmp($this->name($node->class), 'ReflectionMethod') === 0
++            && !isset($this->conditionalTypes['reflectionmethod']) && count($node->args) === 2) {
++            $class = $this->value($node->args[0]->value, $file, $variables);
++            $method = $this->value($node->args[1]->value, $file, $variables);
++            return is_string($class) && is_string($method) ? $this->method($class, $method) : $this->unknown;
++        }
++        if ($node instanceof Node\Expr\ArrayDimFetch && $node->dim !== null) {
++            $array = $this->value($node->var, $file, $variables);
++            $index = $this->value($node->dim, $file, $variables);
++            return is_array($array) && isset($array['reflectionParameters']) && is_int($index) && isset($array['reflectionParameters'][$index])
++                ? ['reflectionParameter' => $array['reflectionParameters'][$index]] : $this->unknown;
++        }
++        if ($node instanceof Node\Expr\MethodCall && $node->name instanceof Node\Identifier && $node->args === []) {
++            $subject = $this->value($node->var, $file, $variables);
++            $method = strtolower($node->name->toString());
++            if (is_array($subject) && isset($subject['reflectionMethod'])) {
++                $definition = $subject['reflectionMethod'];
++                return match ($method) {
++                    'hasreturntype' => $definition->returnType !== null,
++                    'getparameters' => ['reflectionParameters' => $definition->params],
++                    default => $this->unknown,
++                };
++            }
++            if (is_array($subject) && isset($subject['reflectionParameter']) && $method === 'hastype') { return $subject['reflectionParameter']->type !== null; }
++        }
++        return $this->unknown;
++    }
++}
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -5545,7 +5545,9 @@
+     public function loadPristineAst(string $file, string $source, string $phpVersion): array
+     {
+         if ($phpVersion === $this->phpVersion) {
+-            return $this->getAstCache()->load($file, $source);
++            return method_exists($this, 'loadDeclarationAst')
++                ? $this->loadDeclarationAst($file, $source)
++                : $this->getAstCache()->load($file, $source);
+         }
+         $parser = (new ParserFactory())->createForVersion(PhpVersion::fromString($phpVersion));
+         return (new AstCache($parser, $this->buildDir, $phpVersion))->load($file, $source);
+--- a/src/Preprocessor.php
++++ b/src/Preprocessor.php
+@@ -165,7 +165,7 @@
+                 continue;
+             }
+             try {
+-                $ast = $this->getAstCache()->load($file, $source);
++                $ast = $this->loadDeclarationAst($file, $source);
+                 $traverser = new NodeTraverser();
+                 $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+                 $ast = $this->requireStatementList($traverser->traverse($ast));
+@@ -251,7 +251,7 @@
+ 
+         foreach ($candidateSources as $file => $source) {
+             try {
+-                $ast = $this->getAstCache()->load($file, $source);
++                $ast = $this->loadDeclarationAst($file, $source);
+                 $traverser = new NodeTraverser();
+                 $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+                 $ast = $this->requireStatementList($traverser->traverse($ast));
+@@ -463,7 +463,7 @@
+ 
+             $this->climate->info('prepare: ' . $this->getRelativePath($this->file));
+             try {
+-                $ast = $this->getAstCache()->load($this->file, $phpCode);
++                $ast = $this->loadDeclarationAst($this->file, $phpCode);
+             } catch (\PhpParser\Error $e) {
+                 $this->climate->red("Fatal error: {$e->getMessage()} in {$this->file}");
+                 throw new SyntaxError($e->getMessage(), $e->getCode());
+--- a/src/Resolver/Reflection.php
++++ b/src/Resolver/Reflection.php
+@@ -16,12 +16,26 @@
+ {
+     private static array $targetClasses = [];
+     private static string $targetClassesFingerprint = '';
++    private static ?array $targetExtensions = null;
++    private static bool $targetExtensionRegistryClosed = false;
+ 
+     public static function setTargetInternalClasses(?string $sdk, ?string $nm): void
+     {
+         $metadata = \TypePhp\Build\TargetInternalClassMetadata::read($sdk, $nm);
+         self::$targetClasses = $metadata['classes'];
+         self::$targetClassesFingerprint = $metadata['sha256'];
++        self::$targetExtensions = $metadata['extensions'];
++        self::$targetExtensionRegistryClosed = $metadata['extensionsClosed'];
++    }
++
++    public static function isTargetExtensionRegistryClosed(): bool
++    {
++        return self::$targetLinuxFullStatic && self::$targetExtensionRegistryClosed;
++    }
++
++    public static function targetExtensions(): ?array
++    {
++        return self::$targetExtensions;
+     }
+ 
+     public static function targetInternalClassFingerprint(): string
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -4661,7 +4661,7 @@
+         $this->generatedMethodBodies = [];
+         $this->climate->info('convert: ' . $this->getRelativePath($this->file));
+ 
+-        $ast = $this->getAstCache()->load($this->file, $phpCode);
++        $ast = $this->loadDeclarationAst($this->file, $phpCode);
+         $traverser = new NodeTraverser();
+         $traverser->addVisitor(new NameResolver(null, ['replaceNodes' => false]));
+         if ($this->isNanoPolicyMode()) {

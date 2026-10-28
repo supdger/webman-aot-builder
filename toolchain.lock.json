@@ -14,17 +14,24 @@
         {
             "id": "php-source",
             "kind": "source",
-            "version": "8.4.25",
-            "sourceUrl": "https://www.php.net/distributions/php-8.4.25.tar.xz",
-            "sha256": "dc1ad8b4109898d9db49744450403874858c23efc685b1032a50bd1e83906848"
+            "version": "8.4.26",
+            "sourceUrl": "https://www.php.net/distributions/php-8.4.26.tar.xz",
+            "sha256": "32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1"
         },
         {
             "id": "typephp-source",
             "kind": "source",
-            "version": "0.9.2",
-            "revision": "3b923316a9938c00425cf9e41fc378aa49b5392f",
-            "sourceUrl": "https://github.com/swoole/typephp/archive/refs/tags/v0.9.2.tar.gz",
-            "sha256": "7e5fe3549397e819c20b82c4586af5cad7cb03d6743d86fbca5094d629894902"
+            "version": "0.9.5",
+            "revision": "5ba9376642d8dd75efcd002b41b09a9d6bcca3e2",
+            "sourceUrl": "https://github.com/swoole/typephp/archive/refs/tags/v0.9.5.tar.gz",
+            "sha256": "d1b33b2c2ba1deea2d8af01f52b180e85b3827bd8a291772176ce66bc4684d47"
+        },
+        {
+            "id": "typephp-vendor",
+            "kind": "vendor-bundle",
+            "version": "0.9.5",
+            "sourceUrl": "https://github.com/supdger/webman-aot-builder/releases/download/toolchain/typephp-0.9.5-vendor.tar.gz",
+            "sha256": "6362857f55af55fe5c3a3566b352793c76eadba8f0668249f56d94126cfdedef"
         },
         {
             "id": "webman-typephp-generator-source",
@@ -37,10 +44,10 @@
         {
             "id": "phpx-source",
             "kind": "source",
-            "version": "2.9.1",
-            "revision": "864aed3a46ef5a865b966062e15d10b9efefed10",
-            "sourceUrl": "https://github.com/swoole/phpx/archive/refs/tags/v2.9.1.tar.gz",
-            "sha256": "e3d1e7349a7dcb9f6a213a1c9760f7c5de1b93b339f36362ccfcd98568a66a9d"
+            "version": "2.9.4",
+            "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
+            "sourceUrl": "https://github.com/swoole/phpx/archive/refs/tags/v2.9.4.tar.gz",
+            "sha256": "08d075ffcee1ed35cc05be5ffeb4e009ee1de979751ab53d51f43a905fbdd569"
         },
         {
             "id": "swoole-cli-source",
@@ -53,31 +60,31 @@
         {
             "id": "phpx-sdk-linux-x64",
             "kind": "sdk",
-            "version": "2.9.1+php8.4.25",
-            "revision": "864aed3a46ef5a865b966062e15d10b9efefed10",
-            "sourceUrl": "https://github.com/swoole/phpx/releases/download/v2.9.1/phpx-sdk_v2.9.1_php8.4.25_linux-x64.tar.xz",
-            "sha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "version": "2.9.4+php8.4.25",
+            "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
+            "sourceUrl": "https://github.com/swoole/phpx/releases/download/v2.9.4/phpx-sdk_v2.9.4_php8.4.25_linux-x64.tar.xz",
+            "sha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "typephp-macos-arm64",
             "kind": "host-tool",
-            "version": "0.9.2",
-            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.2/tpc_v0.9.2_macos_arm64.tar.gz",
-            "sha256": "5459d72a70e64723ab7ab13be6dc367d8edd60540ff54f1047b44e26fceae767"
+            "version": "0.9.5",
+            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_macos_arm64_php8.4.26-zts.tar.gz",
+            "sha256": "f22f678c8aa173c9e6b616cc19d50e05a368d65d6230b77573e8dd3f7329bfd9"
         },
         {
             "id": "php-driver-windows-x64",
             "kind": "host-tool",
-            "version": "8.4.25",
-            "sourceUrl": "https://downloads.php.net/~windows/releases/archives/php-8.4.25-Win32-vs17-x64.zip",
-            "sha256": "2cf521fb6bcb45b634c7e9a7ab2afb6d41698b987bbc73c4975d90a065e0f16c"
+            "version": "8.4.26",
+            "sourceUrl": "https://downloads.php.net/~windows/releases/archives/php-8.4.26-Win32-vs17-x64.zip",
+            "sha256": "6e56f0e932e92bfdce208d3a7e6068f6e2f7a19fc2922a5f856fb085f61673f3"
         },
         {
             "id": "typephp-windows-x64",
             "kind": "host-tool",
-            "version": "0.9.2",
-            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.2/tpc_v0.9.2_windows_x64.zip",
-            "sha256": "3000697b6996394168b5c92120f34959b488e04df3cb695fdf93684e26fa7344"
+            "version": "0.9.5",
+            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_windows_x64_php8.4.26-zts.zip",
+            "sha256": "8d8576b53f942b1bdf609559189fdfe50736c217a3f2ea40890649fae51cbea8"
         },
         {
             "id": "llvm-macos-arm64",
@@ -106,7 +113,7 @@
             "kind": "package-index",
             "version": "3.18",
             "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/APKINDEX.tar.gz",
-            "sha256": "b61d6b5ee9eff8eb8b4a6d193bf82e1e679fe11e9d772720c4f0ff105e981687"
+            "sha256": "ab075861f3cbd24fe05720b5da84a2eeca1fbc2060f8d9a88f334e751020a086"
         },
         {
             "id": "alpine-musl-dev-x86-64",
@@ -186,7 +193,7 @@
             "sourceUrl": "https://github.com/openssl/openssl/releases/download/openssl-3.6.0/openssl-3.6.0.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "curl",
@@ -194,7 +201,7 @@
             "sourceUrl": "https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "libzip",
@@ -202,7 +209,7 @@
             "sourceUrl": "https://libzip.org/download/libzip-1.9.2.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "icu",
@@ -210,7 +217,7 @@
             "sourceUrl": "https://github.com/unicode-org/icu/releases/download/release-73-2/icu4c-73_2-src.tgz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "libpq",
@@ -218,7 +225,7 @@
             "sourceUrl": "https://ftp.postgresql.org/pub/source/v16.3/postgresql-16.3.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "zlib",
@@ -226,7 +233,7 @@
             "sourceUrl": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "libxml2",
@@ -234,7 +241,7 @@
             "sourceUrl": "https://github.com/GNOME/libxml2/archive/refs/tags/v2.9.14.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         },
         {
             "id": "oniguruma",
@@ -242,7 +249,7 @@
             "sourceUrl": "https://github.com/kkos/oniguruma/archive/refs/tags/v6.9.9.tar.gz",
             "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
             "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "e993dbad10a2f349d97c8a9f94f53ee652ce1a5d1dcb04f29038a1ce29028981"
+            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
         }
     ],
     "requiredExtensions": {
@@ -303,13 +310,13 @@
             "producer": "swoole/swoole-cli",
             "producerRef": "v6.2.2.2",
             "phpVersion": "8.4.25",
-            "phpxVersion": "v2.9.1",
+            "phpxVersion": "v2.9.4",
             "target": "linux-x64",
             "zts": true
         },
         "phpxSdkArchiveDigests": {
             "libphp.a": "edef07bd8e532334e02061481b4bbbd70210cd8505fe90d6bec155ea04133003",
-            "libphpx.a": "afb819aab33837f8a7e8a69e0fb5a6a16029ee6fb4ca28ed79ef5b41fb6fac74"
+            "libphpx.a": "eb6f55f1ff489eb81e4dc4dac4af0c5d6ecc862e551825b8b37ab0cfee8ffe72"
         },
         "phpxSdkArchiveCapabilities": {
             "pdo_pgsql": {

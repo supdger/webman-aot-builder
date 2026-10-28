@@ -58,9 +58,9 @@ final class InstallerPackager
             $this->createDirectory($licenseDirectory);
             (new PharData($typePhpSource))->extractTo(
                 $licenseDirectory,
-                'typephp-0.9.2/LICENSE'
+                'typephp-0.9.5/LICENSE'
             );
-            $typePhpLicense = $licenseDirectory . '/typephp-0.9.2/LICENSE';
+            $typePhpLicense = $licenseDirectory . '/typephp-0.9.5/LICENSE';
             if (!is_file($typePhpLicense)) {
                 throw new RuntimeException('locked TypePHP source license is missing');
             }
@@ -145,8 +145,8 @@ final class InstallerPackager
         chmod($stage . '/payload/runtime/bin/php-compiler', 0700);
         $this->copyDirectory($runtimeLicenseDirectory, $stage . '/payload/runtime/licenses');
         foreach ([
-            'libmbfl-LGPL-2.1.txt' => 'php-8.4.25/ext/mbstring/libmbfl/LICENSE',
-            'libbcmath-LGPL-2.1.txt' => 'php-8.4.25/ext/bcmath/libbcmath/LICENSE',
+            'libmbfl-LGPL-2.1.txt' => 'php-8.4.26/ext/mbstring/libmbfl/LICENSE',
+            'libbcmath-LGPL-2.1.txt' => 'php-8.4.26/ext/bcmath/libbcmath/LICENSE',
         ] as $name => $member) {
             $license = $this->readTarMember($phpSourceArchive, $member);
             if (!str_contains($license, 'GNU LESSER GENERAL PUBLIC LICENSE')
@@ -385,8 +385,8 @@ final class InstallerPackager
             }
         }
         $this->copyDirectory(
-            $this->root . '/toolchain/patches/typephp/0.9.2',
-            $app . '/toolchain/patches/typephp/0.9.2',
+            $this->root . '/toolchain/patches/typephp/0.9.5',
+            $app . '/toolchain/patches/typephp/0.9.5',
             ['patch', 'json']
         );
         $this->createDirectory($app . '/compatibility/locks');

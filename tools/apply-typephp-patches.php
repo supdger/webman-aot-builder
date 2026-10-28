@@ -47,7 +47,7 @@ try {
         throw new RuntimeException('PHPX must be available at TypePHP vendor/swoole/phpx');
     }
 
-    $patchDirectory = dirname(__DIR__) . '/toolchain/patches/typephp/0.9.2';
+    $patchDirectory = dirname(__DIR__) . '/toolchain/patches/typephp/0.9.5';
     $manifest = json_decode(
         (string) file_get_contents($patchDirectory . '/manifest.json'),
         true,
@@ -58,9 +58,34 @@ try {
         throw new RuntimeException('TypePHP patch manifest has no rules');
     }
 
+    (new UnifiedPatchApplier())->verifyManifestCoverage($patchDirectory . '/manifest.json', $rules);
+
+    $alreadyApplied = true;
+    foreach ($rules as $rule) {
+        $target = $typephp . '/' . (string) ($rule['path'] ?? '');
+        if (!is_file($target) || is_link($target)
+            || hash_file('sha256', $target) !== ($rule['afterSha256'] ?? null)) {
+            $alreadyApplied = false;
+            break;
+        }
+    }
+    if ($alreadyApplied) {
+        fwrite(STDOUT, json_encode(['component' => 'typephp-source', 'version' => $manifest['version'],
+            'patches' => 29, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
+        exit(0);
+    }
+
     foreach ($rules as $rule) {
         $path = (string) ($rule['path'] ?? '');
         $expected = (string) ($rule['beforeSha256'] ?? '');
+        if (array_key_exists('added', $rule)) {
+            if ($rule['added'] !== true || $expected !== hash('sha256', '')
+                || array_key_exists('preparedBeforeSha256', $rule)
+                || file_exists($typephp . '/' . $path) || is_link($typephp . '/' . $path)) {
+                throw new RuntimeException("TypePHP added source must be absent before patching: {$path}");
+            }
+            continue;
+        }
         $actual = is_file($typephp . '/' . $path)
             ? hash_file('sha256', $typephp . '/' . $path)
             : false;
@@ -77,23 +102,29 @@ try {
         '0004-full-static-host-target-separation.patch',
         '0005-windows-clang-response-paths.patch',
         '0006-pcntl-target-reference-metadata.patch',
-        '0007-full-static-skip-host-php-import-libs.patch',
-        '0008-full-static-linux-internal-metadata.patch',
-        '0009-full-static-linux-builtin-lifetime.patch',
         '0010-reproducible-arginfo-source-identity.patch',
         '0011-native-inheritance-and-target-reference-calls.patch',
         '0012-loop-probe-defers-unknown-foreach-vars.patch',
-        '0013-namespaced-global-function-dependencies.patch',
         '0014-default-helpers-and-globals-reference.patch',
         '0015-portable-full-static-magic-dir.patch',
         '0016-embedded-anonymous-class-valid-php.patch',
-        '0017-full-static-anonymous-source-embedding.patch',
-        '0018-full-static-target-php-eol.patch',
-        '0019-full-static-target-internal-functions.patch',
-        '0020-full-static-target-constants-and-host-functions.patch',
         '0021-portable-source-scan-order.patch',
         '0022-full-static-hide-host-only-reflection.patch',
-        '0023-full-static-select-target-reflection.patch',
+        '0024-closure-runtime-binding-and-reference-storage.patch',
+        '0026-compiler-command-paths.patch',
+        '0027-compiler-runtime-capabilities.patch',
+        '0028-ordinary-toarray-method-contracts.patch',
+        '0029-unavailable-composer-traits.patch',
+        '0030-polymorphic-php-local-storage.patch',
+        '0031-persistent-php-reference-storage.patch',
+        '0035-target-function-value-storage.patch',
+        '0036-request-namespace-function-fallback.patch',
+        '0037-php-string-bitwise-not.patch',
+        '0039-target-internal-class-declarations.patch',
+        '0045-switch-goto-termination.patch',
+        '0047-lexical-finally-goto-exits.patch',
+        '0053-native-runtime-declarations.patch',
+        '0054-load-time-constant-and-list-reference.patch',
     ] as $patch) {
         $applier->apply($patchDirectory . '/' . $patch, $typephp);
     }
@@ -112,8 +143,8 @@ try {
         json_encode(
             [
                 'component' => 'typephp-source',
-                'version' => '0.9.2',
-                'patches' => 23,
+                'version' => $manifest['version'],
+                'patches' => 29,
                 'rules' => count($rules),
                 'status' => 'applied-and-verified',
             ],
