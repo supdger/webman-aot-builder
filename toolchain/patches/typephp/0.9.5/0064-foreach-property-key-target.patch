@@ -1,0 +1,21 @@
+--- a/src/Parser/ForeachTrait.php
++++ b/src/Parser/ForeachTrait.php
+@@ -68,8 +68,16 @@
+             ? $this->parseDynamicVariableTargetAssignment($node->keyVar, $keyExpr)
+             : null;
+         if ($binding !== null) { return $this->getIndent() . $binding . ';' . PHP_EOL; }
+-        $keyVar = $this->parseIdentifier($node->keyVar);
+-        $this->checkVar($node, $keyVar, $defaultType);
++        // A non-variable key target (a property fetch or an array dimension)
++        // lowers to a writable helper expression rather than a local name.
++        // checkVar() would register that helper string as a local and emit an
++        // invalid `php::Var typephp_read_property_cached(...)` declaration.
++        $keyVar = $this->isVarExpr($node->keyVar)
++            ? $this->parseIdentifier($node->keyVar)
++            : $this->parseWritableIdentifier($node->keyVar);
++        if ($this->isVarExpr($node->keyVar)) {
++            $this->checkVar($node, $keyVar, $defaultType);
++        }
+         return $this->getIndent() . $keyVar . ' = ' . $keyExpr . ';' . PHP_EOL;
+     }
+ 

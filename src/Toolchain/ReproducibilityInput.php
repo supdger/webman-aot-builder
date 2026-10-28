@@ -47,29 +47,19 @@ final class ReproducibilityInput
         }
 
         $llvmVersions = [];
-        $llvmMaterials = [];
         foreach (['llvm-macos-arm64', 'llvm-windows-x64'] as $id) {
             $version = (string) ($components[$id]['version'] ?? '');
             if ($version === '') {
                 throw new \RuntimeException("locked LLVM host component is missing: {$id}");
             }
-            $llvmVersions[$id] = $version;
-            $material = $components[$id];
-            if (($material['kind'] ?? null) !== 'host-tool' || preg_match('/^[a-f0-9]{64}$/D', (string) ($material['sha256'] ?? '')) !== 1) {
-                throw new \RuntimeException('selected LLVM material identity is invalid: ' . $id);
-            }
-            $llvmMaterials[$id] = $material['sha256'];
+            $llvmVersions[$version] = true;
         }
-        // Both native preparers execute the same C++17/x86_64 capability probe.
-        // Their archive identities remain part of this contract; labels do not establish ABI parity.
-        if (($lock['target']['os'] ?? null) !== 'linux'
-            || ($lock['target']['architecture'] ?? null) !== 'x86_64'
-            || ($lock['target']['libc'] ?? null) !== 'musl') {
-            throw new \RuntimeException('host LLVM selections do not share the required Linux x86_64 musl target ABI');
+        if (count($llvmVersions) !== 1) {
+            throw new \RuntimeException('Mac and Windows LLVM versions are not aligned');
         }
 
         $patches = [];
-        $patchDirectory = $root . '/toolchain/patches/typephp/0.9.2';
+        $patchDirectory = $root . '/toolchain/patches/typephp/0.9.5';
         foreach ([
             '0001-full-static-sdk-target.patch',
             '0002-static-extension-registry.patch',
@@ -77,51 +67,29 @@ final class ReproducibilityInput
             '0004-full-static-host-target-separation.patch',
             '0005-windows-clang-response-paths.patch',
             '0006-pcntl-target-reference-metadata.patch',
-            '0007-full-static-skip-host-php-import-libs.patch',
-            '0008-full-static-linux-internal-metadata.patch',
-            '0009-full-static-linux-builtin-lifetime.patch',
             '0010-reproducible-arginfo-source-identity.patch',
             '0011-native-inheritance-and-target-reference-calls.patch',
             '0012-loop-probe-defers-unknown-foreach-vars.patch',
-            '0013-namespaced-global-function-dependencies.patch',
             '0014-default-helpers-and-globals-reference.patch',
             '0015-portable-full-static-magic-dir.patch',
             '0016-embedded-anonymous-class-valid-php.patch',
-            '0017-full-static-anonymous-source-embedding.patch',
-            '0018-full-static-target-php-eol.patch',
-            '0019-full-static-target-internal-functions.patch',
-            '0020-full-static-target-constants-and-host-functions.patch',
             '0021-portable-source-scan-order.patch',
             '0022-full-static-hide-host-only-reflection.patch',
-            '0023-full-static-select-target-reflection.patch',
             '0024-closure-runtime-binding-and-reference-storage.patch',
-            '0025-verified-object-checkpoints.patch',
             '0026-compiler-command-paths.patch',
             '0027-compiler-runtime-capabilities.patch',
             '0028-ordinary-toarray-method-contracts.patch',
             '0029-unavailable-composer-traits.patch',
             '0030-polymorphic-php-local-storage.patch',
             '0031-persistent-php-reference-storage.patch',
-            '0032-closure-exception-cleanup.patch',
-            '0033-mutable-php-value-parameters.patch',
-            '0034-native-boundary-reference-overrides.patch',
             '0035-target-function-value-storage.patch',
             '0036-request-namespace-function-fallback.patch',
             '0037-php-string-bitwise-not.patch',
-            '0038-known-php-local-value-joins.patch',
             '0039-target-internal-class-declarations.patch',
-            '0040-pure-php-call-return-prediction.patch',
-            '0041-lazy-missing-composer-interfaces.patch',
-            '0042-ordinary-constructor-return-values.patch',
-            '0043-ordinary-destructor-return-values.patch',
-            '0044-related-php-object-local-joins.patch',
             '0045-switch-goto-termination.patch',
-            '0046-final-switch-case-exit.patch',
             '0047-lexical-finally-goto-exits.patch',
-            '0048-php-catch-local-value-storage.patch',
-            '0049-goto-safe-expression-temporaries.patch',
-            '0050-foreach-list-local-value-storage.patch',
-            '0051-switch-selector-value-lifetime.patch',
+            '0053-native-runtime-declarations.patch',
+            '0054-load-time-constant-and-list-reference.patch',
         ] as $patch) {
             $patches[$patch] = $this->hashNormalizedTextFile(
                 $patchDirectory . '/' . $patch,
@@ -138,21 +106,19 @@ final class ReproducibilityInput
         $input = [
             'target' => $lock['target'] ?? null,
             'components' => $selected,
-            'llvmVersions' => $llvmVersions,
-            'llvmMaterials' => $llvmMaterials,
-            'compilerCapabilities' => ['target' => 'x86_64-unknown-linux-musl', 'cxxStandard' => 'c++17', 'pointerBits' => 64],
+            'llvmVersion' => array_key_first($llvmVersions),
             'patches' => $patches,
             'fixtureSha256' => $fixtureDigest,
             'build' => [
-                'phpVersion' => $lock['evidence']['phpxSdkManifest']['phpVersion'] ?? null,
+                'phpVersion' => '8.4',
                 'targetTriple' => 'x86_64-unknown-linux-musl',
                 'sourcePrefix' => '/usr/src/webman-aot-builder',
                 'cxxStandard' => 'c++17',
-                'gccVersion' => $components['alpine-gcc-x86-64']['version'] ?? null,
+                'gccVersion' => '12.2.1',
                 'allowMultipleDefinition' => true,
                 'stripDebug' => true,
                 'stripSdkDebug' => true,
-                'strippedSdkSha256' => 'bc4b4053092176f8e046a5db0b66c659daa4f23468c09c982223d4fea24d7eeb',
+                'strippedSdkSha256' => '4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623',
                 'removeCommentSection' => true,
                 'jobCount' => 4,
             ],

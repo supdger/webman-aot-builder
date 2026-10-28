@@ -16,7 +16,7 @@ final class CompilerCoverageAudit
     }
 
     /**
-     * @return array{direct:int,shadow:int}
+     * @return array{direct:int,shadow:int,interpreted:int}
      */
     public function audit(string $mirrorDirectory, CoverageLedger $ledger): array
     {
@@ -28,7 +28,7 @@ final class CompilerCoverageAudit
             throw new ConfigurationException('compiler coverage requires an isolated build mirror');
         }
         $manifest = $this->readCompilerLists($mirror . '/project.linux.yml');
-        $counts = ['direct' => 0, 'shadow' => 0];
+        $counts = ['direct' => 0, 'shadow' => 0, 'interpreted' => 0];
         $problems = [];
         foreach ($ledger->files() as $entry) {
             if (($entry['category'] ?? null) === ProjectDiscovery::THIRD_PARTY_DYNAMIC_PHP) {
@@ -52,9 +52,22 @@ final class CompilerCoverageAudit
                 $problems[] = "business PHP source digest drifted: {$path}";
                 continue;
             }
+            // The compiler could not translate this source, so it ships as its
+            // original text and the embedded Zend engine executes it. It is
+            // covered by the artifact, but it is not compiled ahead of time.
+            if (in_array($path, $manifest['interpreted'], true)) {
+                $counts['interpreted']++;
+                continue;
+            }
             $status = $entry['status'] ?? null;
             $sourceIncluded = $this->covered($path, $manifest['sources']);
             $sourceIgnored = $this->covered($path, $manifest['ignore']);
+            if ($status === CoverageLedger::SOURCE_NOT_SELECTED) {
+                if ($sourceIncluded && !$sourceIgnored) {
+                    $problems[] = "unselected PHP is present in compiler inputs: {$path}";
+                }
+                continue;
+            }
             if ($status === CoverageLedger::COMPILED_DIRECT) {
                 if (!$sourceIncluded || $sourceIgnored) {
                     $problems[] = "business PHP is not directly compiled: {$path}";
@@ -147,7 +160,7 @@ final class CompilerCoverageAudit
     }
 
     /**
-     * @return array{sources:list<string>,ignore:list<string>}
+     * @return array{sources:list<string>,ignore:list<string>,interpreted:list<string>}
      */
     private function readCompilerLists(string $path): array
     {
@@ -155,12 +168,14 @@ final class CompilerCoverageAudit
         if (!is_string($contents) || str_contains($contents, "\r")) {
             throw new ConfigurationException('compiler coverage manifest is missing or unsafe');
         }
-        $result = ['sources' => [], 'ignore' => []];
+        $result = ['sources' => [], 'ignore' => [], 'interpreted' => []];
         $section = null;
         $seenSections = [];
         foreach (explode("\n", $contents) as $line) {
-            if ($line === 'sources:' || $line === 'ignore:') {
-                $section = substr($line, 0, -1);
+            if ($line === 'sources:' || $line === 'ignore:' || $line === 'interpreted-sources:') {
+                $section = $line === 'interpreted-sources:'
+                    ? 'interpreted'
+                    : substr($line, 0, -1);
                 if (isset($seenSections[$section])) {
                     throw new ConfigurationException(
                         "compiler coverage has duplicate {$section} section"

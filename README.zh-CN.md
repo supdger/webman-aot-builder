@@ -1,139 +1,62 @@
 # Webman AOT Builder
 
-[![PHP (Composer): >=8.0](https://img.shields.io/badge/PHP%20%28Composer%29-%3E%3D8.0-8892BF.svg?logo=php)](#方式一composer) [![Compiler: TypePHP](https://img.shields.io/badge/Compiler-TypePHP-2E9E5B.svg)](https://github.com/swoole/typephp) [![Build host: macOS ARM64 / Windows x64](https://img.shields.io/badge/Build%20host-macOS%20ARM64%20%2F%20Windows%20x64-2496ED.svg)](https://github.com/supdger/webman-aot-builder/wiki/Install) [![Target: Linux amd64](https://img.shields.io/badge/Target-Linux%20amd64-FCC624.svg?logo=linux)](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance) [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE) [![Latest release](https://img.shields.io/github/v/release/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder/releases/latest) [![Downloads](https://img.shields.io/github/downloads/supdger/webman-aot-builder/total)](https://github.com/supdger/webman-aot-builder/releases) [![GitHub stars](https://img.shields.io/github/stars/supdger/webman-aot-builder)](https://github.com/supdger/webman-aot-builder)
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-Webman AOT Builder 将 PHP 项目（包括 Webman / SaiAdmin）编译成 Linux amd64 全静态程序。
-在 macOS Apple Silicon 或 Windows x64 开发机上构建，再把生成的整个 `dist-aot/` 部署到 Linux；目标机无需安装 PHP。
+Webman AOT Builder 将 PHP 项目编译成 Linux amd64 全静态程序，原始 PHP 源码直接交给 TypePHP。
+在 macOS Apple Silicon 或 Windows x64 开发机上安装工具、构建项目，再将生成的 `dist-aot/` 部署到 Linux，目标机无需安装 PHP。
+
+## 实现方式
 
 构建器枚举可读 PHP 源码，在隔离副本中保持每份 PHP 文件原样交给 TypePHP，再用 Clang 和 PHPx 静态 SDK 生成可执行程序。编译成功返回产物，失败保留 TypePHP 的原始编译错误。
 原项目源码保持不变，配置、模板和静态资源按需保留为外置文件。
 
-工具链材料与输入输出完整性保持校验。当前编译边界和发布状态见[最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest)，历次实际验证范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
+开发源码中的编译器兼容维护保留运行时条件、加载顺序及多文件声明。[原生回归入口](tests/native-declarations.php) 使用最小夹具与同 SDK 版本 PHP 对照原始输出、错误及退出码。这些变更尚未发布；最终冻结全套与完整项目构建仍在验证中。
 
-当前公开包用于开发验证。安装、构建与产物校验的记录见下方示例；Linux 数据库、登录等完整业务仍需在自己的目标环境验收。
+## 源码与安装包
 
-## 安装与开始使用
+本仓库是构建工具的源码，包含命令行程序、源码输入组织、编译组件管理和安装包制作脚本。
+开发或自行制作安装包可从 [最新开发源码](https://github.com/supdger/webman-aot-builder/tree/main) 开始，
+具体步骤见 [源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
 
-构建自己的 PHP 项目，请使用[原生 setup 安装入口](#方式二原生安装包)或 [Composer 入口](#方式一composer)，无需下载本仓库。GitHub 的 **Code → Download ZIP** 和 **Source code** 压缩包供自行制作工具安装包的开发者使用。
+维护者可用 `tools/build-minimal-component.php --compiler-source-root=PATH` 从完整且已核验的编译器源码组合组件，复用已准备的 SDK。开发源码入口校验来源、完整 Composer 权威映射及构建器现有的完整静态运行时声明契约；所需输入见源码构建指南。组件校验不能替代安装、完整项目构建或原生全套回归验收。
 
-本仓库及源码压缩包保留制作安装包所需文件；开发测试、验收脚本与发布流程另行维护。
+直接使用请下载 [最新正式版安装包](https://github.com/supdger/webman-aot-builder/releases/latest)，
+选择与你的**开发机**匹配的 macOS Apple Silicon 或 Windows x64 包。
+轻量包首次使用时联网准备编译组件；完整包包含组件，可在安装时离线准备。
+两种包安装后都提供 `webman-aot` 命令。GitHub 的 `Source code (zip)` 是源码压缩包，不是安装包。
+Windows 无法下载组件时，可直接下载名称含 `full-windows-x86_64.zip` 的完整安装包，全部解压后运行 `install.cmd`；`components.zip` 只是组件资源，没有安装入口。步骤见[Windows 完整包安装](https://github.com/supdger/webman-aot-builder/wiki/Install-Windows#windows-完整包安装)。
 
-只安装工具时可以暂不选择项目。构建时选择可读 PHP 源码根目录，已有 TypePHP `project.yml` 的源码与构建选项可以沿用。编译只需要以下四个前置条件：
+## 安装与使用
 
-1. 能读取待编译的 PHP 源码。
-2. TypePHP 编译器和目标平台工具链可用。
-3. 输出目录可写。
-4. 要生成可执行程序时，有明确入口；编译单个文件或库时按对应模式处理。
-
-当前工具的公开构建入口生成可执行程序；文件和库模式属于 TypePHP 的对应模式。可执行程序的入口由输入源码提供，例如全局 `main(): void`；入口和语言特性是否符合要求由 TypePHP 判定。构建器不识别框架、不检查依赖版本、不审查业务代码、不生成或改写 PHP 源码，不设置项目、框架、插件、目录布局或业务运行门槛。
-
-### 方式一：Composer
-
-开发机需系统 PHP 和 Composer。包的 PHP 声明下限为 8.0；入口另按实际使用的 PHP 语法与 Composer 公共接口能力检查。平台及环境要求见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
-
-在 macOS 终端或 Windows PowerShell 运行：
+下载、校验和安装请按 [安装与使用指南](https://github.com/supdger/webman-aot-builder/wiki/Install) 操作。
+安装后可在任意目录运行以下命令，检查开发机并准备缺失的编译组件，健康时输出 `Result: healthy`：
 
 ```sh
-composer global require "supdger/webman-aot-builder:*"
+webman-aot doctor
 ```
 
-首次 Composer 询问插件信任时输入 `y`，随后自动进入引导。选开始或导入完整包，资源准备完成后选择构建项目，输入或拖入后端根目录。下载中断会保留进度；网络受阻时按入口显示的文件名和链接取得匹配的完整包，再选择导入。
-
-下次使用：
-
-macOS 终端：
-
-```sh
-php "$(composer global config bin-dir --absolute)/webman-aot" guide
-```
-
-Windows PowerShell：
-
-```powershell
-$aotBin = (composer global config bin-dir --absolute).Trim()
-if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
-php (Join-Path $aotBin 'webman-aot') guide
-```
-
-升级或修复丢失的 Composer 入口，始终使用同一条命令，无需先卸载：
-
-```sh
-composer global require "supdger/webman-aot-builder:*" --no-scripts
-```
-
-它恢复全局依赖记录、解除本包旧的固定版本约束，按当前环境和全局稳定性设置解析兼容版本（默认稳定版）；不自动打开项目菜单或下载运行时。不要用单独的 `global update` 修复丢失的依赖记录，否则 Composer 可能移除未被全局配置记录的旧入口。首次插件信任仍由 Composer 询问。
-
-入口更新成功后，再查询入口与目标运行时版本，进入现有资源菜单：
-
-```sh
-composer global exec -- webman-aot --version
-```
-
-macOS 终端：
-
-```sh
-php "$(composer global config bin-dir --absolute)/webman-aot" guide
-```
-
-Windows PowerShell：
-
-```powershell
-$aotBin = (composer global config bin-dir --absolute).Trim()
-if ($LASTEXITCODE -ne 0) { throw '无法读取 Composer 命令目录。' }
-php (Join-Path $aotBin 'webman-aot') guide
-```
-
-选择“开始”准备该入口对应的运行时；已就绪则复用。升级时先校验完整包缓存和已下载完成的 `.part`，通过校验就直接使用；没有可用完整包时，若发行包支持轻量升级，会校验旧组件并复用符合新版本要求的文件，只下载程序和必要替换文件。组件缺失或校验不通过会显示原因，再取得完整包。新环境通过自检后才完成切换；失败会恢复旧环境，若恢复本身失败则停止并显示保留的备份位置。只更新入口不表示运行环境已升级，选择结束可暂不升级运行环境；升级不重建项目产物。详细步骤见[升级与卸载](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。
-
-直接 PHP 入口不受 `composer global exec` 默认 300 秒子进程超时限制，适合下载完整包及长时间交互；无需修改 Composer 全局超时。
-
-### 方式二：原生安装包
-
-从[最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest)取得与你的**开发机**匹配的 setup：
-
-- macOS Apple Silicon：下载名称以 `macos-arm64-setup.zip` 结尾的包，解压后运行 `.command`。
-- Windows x64：下载名称以 `windows-x86_64-setup.cmd` 结尾的入口，运行 `.cmd`。
-
-按菜单选轻量包或完整包，核对安装位置与 PATH 影响并确认安装。轻量包首次构建需联网准备组件；完整包包含编译组件，项目依赖仍需另行准备。安装后可选择构建项目，或结束后在项目根目录运行 `webman-aot build`。
-
-两平台的启动命令、入口核对和完整安装步骤见[安装指南](https://github.com/supdger/webman-aot-builder/wiki/Install)。macOS 首次打开被拦截时，按该页说明核对来源和校验值，再完成系统确认。
-
-### 方式三：开发者从源码制作安装包
-
-从[最新正式版](https://github.com/supdger/webman-aot-builder/releases/latest)下载 **Source code (zip)**，完整解压后进入含 `build.command`、`build.cmd` 的工具源码根目录。Mac 运行 `sh ./build.command`，Windows PowerShell 运行 `.\build.cmd`。
-
-入口准备并核验材料、制作和校验安装包，确认安装后可选择项目。源码构包成功与项目构建成功分别报告；所需环境及操作见[源码构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
-
-## 构建与维护
-
-在自己的项目根目录运行：
+构建时进入**自己的 PHP 项目目录**，运行：
 
 ```sh
 webman-aot build
 webman-aot verify
 ```
 
-旧 `--profile=webman` 与 `--profile=saiadmin` 选项继续接受，只用于命令兼容，不选择源码适配。工具环境和编译器要求见[兼容说明](https://github.com/supdger/webman-aot-builder/wiki/Compatibility)。
+`build` 生成 `dist-aot/`，`verify` 检查该目录的分发结构和静态属性。
+编译只需要以下四个前置条件：
 
-构建会显示当前阶段和真实编译计数；没有新输出时显示进程状态和已等待时间。失败保留原始原因、本机日志位置及恢复建议。重试默认复用输入与完整性校验通过的已完成单元，其余单元重新编译；每次仍重新链接并校验产物。`webman-aot build --fresh` 全量重编，不清空旧缓存。详细规则见[构建指南](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source)。
+1. 能读取待编译的 PHP 源码。
+2. TypePHP 编译器和目标平台工具链可用。
+3. 输出目录可写。
+4. 要生成可执行程序时，有明确入口；编译单个文件或库时按对应模式处理。
 
-升级和清理使用[升级与卸载指南](https://github.com/supdger/webman-aot-builder/wiki/Upgrade-Uninstall)。当前入口能查询旧安装，确认归属的项目可逐项删除；未知归属残留会保留，不能承诺所有旧版都清干净。项目源码、产物和 PATH 保留。独立安装根的共享工具链、日志保留；Composer 私有运行时内部的工具链、日志和缓存随该运行时删除。
+可执行程序的入口由输入源码提供，并满足 TypePHP 的入口要求，例如全局 `main(): void`；入口和语言特性是否符合要求由 TypePHP 判定。构建器不识别框架、不检查依赖版本、不审查业务代码、不生成或改写 PHP 源码，不设置项目、框架、插件、目录布局或业务运行门槛。
 
-普通 PHP 项目可以使用以下最小 `main.php`：
+## 构建结果
 
-```php
-<?php
-function main(): void
-{
-    echo "Hello from PHP\n";
-}
-```
-
-在该目录运行上面的构建命令。成功后生成 `dist-aot/server`；TypePHP 报错时保留原始诊断并构建失败。源码安全、编译器与 SDK 完整性、全部业务 PHP 的编译覆盖继续校验，环境正文与上传数据不进入分发。
-
-## 构建结果与部署
+产物结构示意（运行资源随项目而异）：
 
 ```text
 dist-aot/
@@ -141,47 +64,90 @@ dist-aot/
 ├── start.sh        # 启动脚本
 ├── stop.sh         # 停止脚本
 ├── config/         # 外置配置
-├── …               # 项目需要的模板、静态资源等
+├── …               # 项目所需的模板、静态资源等
 └── manifest.json   # 分发清单
 ```
 
-把**整个 `dist-aot/`** 复制到 Linux amd64 目标机，按项目需要配置 `.env`、数据库等环境，再在产物目录运行：
+外置资源文件应保留相对于程序的原目录布局。原生回归仅挂载程序、运行配置和显式声明的非 PHP 资源，运行容器中没有已编译的 PHP 源码。
+
+把**整个 `dist-aot/`** 复制到 Linux amd64 目标机，按项目需要配置 `.env`、数据库等运行环境后，
+在该目录启动：
 
 ```sh
 ./start.sh
 ```
 
-后台运行用 `./start.sh --daemon`，停止用 `./stop.sh`。按[Linux 部署与验收](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance)检查启动及业务；本机构建校验不代替目标机验收。
+后台运行用 `./start.sh --daemon`，停止用 `./stop.sh`。
+目标机配置和启动后的业务检查见 [Linux 部署与验收](https://github.com/supdger/webman-aot-builder/wiki/Linux-Acceptance)。
 
-## 实际操作记录
+## 实机构建与启动验证
 
-### Windows：构建并校验 Webman 项目
+以下是 v0.3.2 适配流程的历史记录，不代表当前原始 PHP 源码直通流程的 Windows 编译与链接结果。
 
-用户提供的 PowerShell 记录中，首次构建失败后选择继续编译，随后完成 216 个文件的编译和产物校验。以下选取成功阶段的真实输出，省略重复进度、机器路径及长编译命令；产物位置已脱敏为项目相对路径。
+2026-09-30，用户在 macOS Apple Silicon 和 Windows x64 实机构建 SaiAdmin 项目，并分别将产物复制到 Linux x86_64 服务器启动。以下为用户提供的终端关键输出摘录；macOS 和 Windows 是构建宿主，生成的程序面向 Linux。
+
+### macOS Apple Silicon：构建并在 Linux 启动
+
+使用 v0.3.2 轻量包安装并准备编译组件，构建 SaiAdmin 项目。以下保留安装、组件准备、编译及产物校验的关键节点，省略重复进度行：
 
 ```text
-Successfully compiled 216 files
-[成功] 构建项目（自动恢复已完成单元），耗时 119.0 秒，退出码 0
-[成功] 校验本次项目产物，耗时 0.9 秒，退出码 0
-实际校验范围：本机构建产物结构和完整性
+Package contents SHA-256 verified.
+[成功] 校验包并安装，耗时 0.8 秒，退出码 0
+webman-aot 0.3.2
+[prepare] Extracted 7614/7614 verified entries
+[prepare] Minimal component SHA-256 verification complete
+[prepare] Minimal toolchain activated and ready.
+[2063/2063] 100% extension-webman_server.cc
+Successfully compiled 2063 files
+[build] Compiler process completed in 529.8s; exit code 0.
+[成功] 构建项目，耗时 582.3 秒，退出码 0
+[成功] 校验本次项目产物，耗时 0.8 秒，退出码 0
 项目构建与校验成功。
-产物位置：dist-aot/
 ```
 
-这次成功记录证明 Windows 构建及本机产物校验，不代表 Linux 部署或业务运行验收。
+将这次 Mac 构建的产物复制到 Linux x86_64 服务器，在产物目录执行 `./start.sh`，报告 8 个 worker 启动成功（进程用户名已脱敏）：
 
-### macOS：构建并校验 SaiAdmin 项目
+```text
+Workerman[main.php] start in DEBUG mode
+Workerman/5.2.2         PHP/8.4.25 (JIT off)          Linux/5.10.134-16.3.al8.x86_64
+event-loop  proto       user        worker      listen                 count       state
+select      tcp         <用户>      webman      http://0.0.0.0:8788    8            [OK]
+Press Ctrl+C to stop. Start success.
+```
 
-用户实机记录展示了构建完成、产物校验及 `dist-aot/` 位置。下图保留操作结果；它代表这次项目的本机验证。
+### Windows x64：构建并在 CentOS 7 启动
 
-![macOS 实机构建与本机产物校验成功](https://raw.githubusercontent.com/wiki/supdger/webman-aot-builder/assets/macos-build-success.png)
+使用 v0.3.2 Windows 完整包构建 SaiAdmin 项目。现有日志保留了编译尾段、构建完成和产物校验，构建总耗时约 35 分 43 秒：
 
-已有用户记录也报告产物在 Linux 启动成功，但 HTTP、数据库和业务接口仍未验收。Linux 启动记录、其他平台与续编的测试范围见[测试与验证记录](https://github.com/supdger/webman-aot-builder/wiki/Verification)。
+```text
+[1920/2063] 94% vendor\symfony\console\Formatter\OutputFormatterStyleStack.cc
+[2063/2063] 100% extension-webman_server.cc
+Successfully compiled 2063 files
+[build] Compiler process completed in 2083.7s; exit code 0.
+[成功] 构建项目，耗时 2142.9 秒，退出码 0
+[成功] 校验本次项目产物，耗时 1.3 秒，退出码 0
+实际校验范围：本机构建产物结构和完整性
+项目构建与校验成功。
+```
 
-## 文档与反馈
+将这次 Windows 构建的产物复制到另一台 CentOS 7 服务器，在产物目录执行 `./start.sh`，报告 4 个 worker 启动成功（进程用户名已脱敏）：
 
-- [Wiki](https://github.com/supdger/webman-aot-builder/wiki/Home)：安装、构建、维护与部署指南
-- [更新日志](https://github.com/supdger/webman-aot-builder/blob/main/CHANGELOG.md)：历史功能、修复与升级影响
-- [Issues](https://github.com/supdger/webman-aot-builder/issues)：问题与建议
+```text
+Workerman[main.php] start in DEBUG mode
+Workerman/5.2.2         PHP/8.4.25 (JIT off)          Linux/3.10.0-1160.95.1.el7.x86_64
+event-loop  proto       user        worker      listen                 count       state
+select      tcp         <用户>      webman      http://0.0.0.0:1717    4            [OK]
+Press Ctrl+C to stop. Start success.
+```
+
+两台开发机的构建与产物校验均成功，两个 Linux 目标环境均报告服务启动成功；Mac 安装过程另有成功记录。启动仍有兼容性告警，HTTP、数据库和业务接口尚未验收。详细过程见 [实机测试记录](https://github.com/supdger/webman-aot-builder/wiki/Build-from-source#v032-实机测试记录)。
+
+## 文档
+
+- [Wiki](https://github.com/supdger/webman-aot-builder/wiki/Home)：安装、使用与维护文档
+- [更新日志](https://github.com/supdger/webman-aot-builder/blob/main/CHANGELOG.md)：功能、修复与升级影响
+
+## 许可与反馈
 
 原创代码采用 [MIT 许可证](LICENSE)，第三方组件的许可与归属见 [NOTICE](NOTICE.md)。
+问题与建议请提交到 [Issues](https://github.com/supdger/webman-aot-builder/issues)。

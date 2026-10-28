@@ -1,0 +1,69 @@
+--- a/src/Generator/Utils.php
++++ b/src/Generator/Utils.php
+@@ -22,7 +22,7 @@
+         if ($value === PHP_INT_MAX) {
+             return 'ZEND_LONG_MAX';
+         }
+-        return $value . $this->getPlatform()->getIntegerLiteralSuffix();
++        return $value . $this->getTargetIntegerLiteralSuffix();
+     }
+ 
+     public function genFloatLiteral(float $value): string
+--- a/src/Optimizer/FuncCallOptimizer.php
++++ b/src/Optimizer/FuncCallOptimizer.php
+@@ -925,7 +925,7 @@
+     {
+         $arg = $expr->args[0]->value;
+         return ($arg instanceof Node\Scalar\String_)
+-            ? strlen($arg->value) . $this->getPlatform()->getIntegerLiteralSuffix()
++            ? strlen($arg->value) . $this->getTargetIntegerLiteralSuffix()
+             : false;
+     }
+ 
+@@ -949,7 +949,7 @@
+         $result = $name === 'strcasecmp'
+             ? strcasecmp($a0->value, $a1->value)
+             : strcmp($a0->value, $a1->value);
+-        return $result . $this->getPlatform()->getIntegerLiteralSuffix();
++        return $result . $this->getTargetIntegerLiteralSuffix();
+     }
+ 
+     protected function doFoldCmp3(string $name, Node\Expr\FuncCall $expr): string|false
+@@ -963,7 +963,7 @@
+         $result = $name === 'strncasecmp'
+             ? strncasecmp($a0->value, $a1->value, (int) $a2->value)
+             : strncmp($a0->value, $a1->value, (int) $a2->value);
+-        return $result . $this->getPlatform()->getIntegerLiteralSuffix();
++        return $result . $this->getTargetIntegerLiteralSuffix();
+     }
+ 
+     protected function doFoldCountLiteral(Node\Expr\FuncCall $expr): string|false
+@@ -976,7 +976,7 @@
+             if (!$this->isCountFoldableArray($arg)) {
+                 return false;
+             }
+-            return count($arg->items) . $this->getPlatform()->getIntegerLiteralSuffix();
++            return count($arg->items) . $this->getTargetIntegerLiteralSuffix();
+         }
+         return $this->genStdContainerCount($arg);
+     }
+--- a/src/Parser/StdContainerTrait.php
++++ b/src/Parser/StdContainerTrait.php
+@@ -1531,7 +1531,7 @@
+             if ($this->isStdArray($var)) {
+                 $info = $this->context->stdArrays[$var];
+                 $sizes = array_reverse($info['sizes']);
+-                return $sizes[0] . $this->getPlatform()->getIntegerLiteralSuffix();
++                return $sizes[0] . $this->getTargetIntegerLiteralSuffix();
+             }
+             if ($this->isStdVector($var)) {
+                 return $var . '_ref.size()';
+@@ -1556,7 +1556,7 @@
+                     $info = $this->context->stdArrays[$var];
+                     $outerSizes = array_reverse($info['sizes']);
+                     if ($dimLevel < count($outerSizes)) {
+-                        return $outerSizes[$dimLevel] . $this->getPlatform()->getIntegerLiteralSuffix();
++                        return $outerSizes[$dimLevel] . $this->getTargetIntegerLiteralSuffix();
+                     }
+                 }
+             }

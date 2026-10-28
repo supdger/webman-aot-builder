@@ -1,0 +1,38 @@
+--- a/src/Generator/AnonClassGenerator.php
++++ b/src/Generator/AnonClassGenerator.php
+@@ -130,7 +130,7 @@
+     protected function resolveTypeNode(Node\ComplexType|Identifier|Name $type): Node\ComplexType|Identifier|Name
+     {
+         if ($type instanceof Name) {
+-            if ($type->isFullyQualified()) {
++            if ($type->isFullyQualified() || $type->isSpecialClassName()) {
+                 return $type;
+             }
+             $resolved = $this->getNamespacedClassName($type->toString());
+@@ -179,6 +179,26 @@
+                         $class = $this->classStack[count($this->classStack) - 1] ?? null;
+                         if ($class !== null && $this->compiler->shouldAddMixedReturnToEmbeddedClassMethod($class, $node)) {
+                             $node->returnType = new Identifier('mixed');
++                            // A bare return also yields null. It must carry a value
++                            // when the compatibility return type is explicit.
++                            if ($node->stmts !== null) {
++                                $returnTraverser = new NodeTraverser();
++                                $returnTraverser->addVisitor(new class extends NodeVisitorAbstract {
++                                    public function enterNode(Node $child)
++                                    {
++                                        if ($child instanceof Class_
++                                            || $child instanceof Node\Expr\Closure
++                                            || $child instanceof Node\Stmt\Function_) {
++                                            return NodeTraverser::DONT_TRAVERSE_CHILDREN;
++                                        }
++                                        if ($child instanceof Node\Stmt\Return_ && $child->expr === null) {
++                                            $child->expr = new Node\Expr\ConstFetch(new Name('null'));
++                                        }
++                                        return null;
++                                    }
++                                });
++                                $node->stmts = $returnTraverser->traverse($node->stmts);
++                            }
+                             // An implicit fallthrough returns null in PHP. Once the
+                             // compatibility return type is made explicit, PHP requires
+                             // an explicit value on that path as well.

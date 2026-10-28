@@ -1,0 +1,56 @@
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -26,8 +26,8 @@
+                 $this->fatalError($case->cond, 'Native objects cannot be used as switch values');
+             }
+         }
+-        $tmp_var = $this->genTmpVarName();
+         $type    = $this->detectTypeOfExpr($cond);
++        $tmp_var = $this->genTmpVarName();
+         $this->assertExprCanBeUsedAsValue($cond, 'switch condition');
+         if ($this->isVarExpr($cond)) {
+             $this->requireVar($v, $this->parseIdentifier($cond));
+@@ -79,7 +79,7 @@
+             $this->indentLevel--;
+             $code .= $this->getIndent() . '} while(0);' . PHP_EOL;
+ 
+-            return $var_def . $code;
++            return '{' . PHP_EOL . $var_def . $code . PHP_EOL . '}';
+         }
+ 
+         _fail:
+@@ -107,15 +107,6 @@
+             if (count($stmts) === 1 and $stmts[0] instanceof Node\Stmt\Block) {
+                 $stmts = $stmts[0]->stmts;
+             }
+-            $lastExpr = end($stmts);
+-            if (!$this->isReturnExpr($lastExpr)
+-                and !$this->isExitExpr($lastExpr)
+-                and !$this->isBreakExpr($lastExpr)
+-                and !$this->isContinueExpr($lastExpr)
+-                and !$this->isThrowExpr($lastExpr)
+-            ) {
+-                $this->fatalError($case, 'switch case must end with return/break/continue/exit/throw, ' . $lastExpr->getType() . ' given');
+-            }
+             $target = count($caseGroups);
+             if ($hasDefault) {
+                 $defaultTarget = $target;
+@@ -173,7 +164,8 @@
+         }
+ 
+         foreach ($caseGroups as $groupIndex => [, , $stmts]) {
+-            $code .= $this->getIndent() . 'if (' . $switchTarget . ' == ' . $groupIndex . ') {' . PHP_EOL;
++            $code .= $this->getIndent() . 'if (' . $switchTarget . ' >= 0 && '
++                . $switchTarget . ' <= ' . $groupIndex . ') {' . PHP_EOL;
+             $this->indentLevel++;
+             $code .= $this->parseStmts($stmts);
+             $this->indentLevel--;
+@@ -182,7 +174,7 @@
+         $this->indentLevel--;
+         $code .= $this->getIndent() . '} while (0);';
+ 
+-        return $var_def . $code;
++        return '{' . PHP_EOL . $var_def . $code . PHP_EOL . '}';
+     }
+ 
+ }

@@ -1,0 +1,154 @@
+--- a/src/Build/UnavailableDeclarationsTrait.php
++++ b/src/Build/UnavailableDeclarationsTrait.php
+@@ -75,9 +75,17 @@
+         foreach ($fileAsts as $ast) {
+             if ($this->hasLibraryImportAnnotation($ast)) { $closedExtensions = false; }
+         }
+-        $fileAsts = (new ConditionalDeclarationResolver($fileAsts, $version,
++        $resolver = new ConditionalDeclarationResolver($fileAsts, $version,
+             $this->fullStatic ? \TypePhp\Resolver\Reflection::targetExtensions() : null,
+-            $closedExtensions))->resolve();
++            $closedExtensions);
++        $fileAsts = $resolver->resolve();
++        if ($resolver->unresolved()) {
++            // An unknown declaration condition stays in the PHP file and binds
++            // through the runtime declaration identity when that file loads.
++            $this->runtimeDeclarationsEnabled = true;
++            $this->discoverRuntimeDeclarations($files);
++            return;
++        }
+         $conditionalDigest = hash_init('sha256');
+         foreach ($fileAsts as $file => $ast) {
+             $this->conditionalDeclarationAsts[$file] = serialize($ast);
+@@ -362,6 +370,9 @@
+     private array $conditionalTypes = [];
+     private array $excluded = [];
+     private array $included = [];
++    /** @var array<string, true> Declaration files reached only by an unresolved loader. */
++    private array $unresolvedLoaders = [];
++    private bool $unresolved = false;
+     private bool $choicesResolved = false;
+ 
+     public function __construct(private array $asts, private string $phpVersion, private ?array $extensions = null, private bool $closedExtensions = false)
+@@ -430,8 +441,8 @@
+         }
+         $declarations = [];
+         foreach ($result as $file => $ast) {
+-            foreach ((new NodeFinder())->findInstanceOf($ast, Node\Stmt\ClassLike::class) as $node) {
+-                if ($node->name === null) { continue; }
++            if (isset($this->unresolvedLoaders[$file]) && !isset($this->included[$file])) { continue; }
++            foreach ($this->staticallyReachableClasslikes($ast) as $node) {
+                 $name = $this->name($node);
+                 $key = strtolower($name);
+                 $location = $file . ':' . $node->getStartLine();
+@@ -442,6 +453,11 @@
+             }
+         }
+         return $result;
++    }
++
++    public function unresolved(): bool
++    {
++        return $this->unresolved;
+     }
+ 
+     private function select(array $statements, string $file, array &$variables, bool $loaders): array
+@@ -470,21 +486,17 @@
+                 $branches = [[$node->cond, $node->stmts]];
+                 foreach ($node->elseifs as $elseif) { $branches[] = [$elseif->cond, $elseif->stmts]; }
+                 $chosen = $node->else?->stmts ?? [];
++                $pending = false;
+                 foreach ($branches as [$condition, $body]) {
+                     $decision = $this->value($condition, $file, $variables);
+-                    if ($decision === $this->unknown) {
+-                        $source = (new \PhpParser\PrettyPrinter\Standard())->prettyPrintExpr($condition);
+-                        $locations = [];
+-                        foreach ((new NodeFinder())->findInstanceOf($node, Node\Stmt\ClassLike::class) as $declaration) {
+-                            if ($declaration->name !== null) {
+-                                foreach ($this->conditionalTypes[strtolower($this->name($declaration))] ?? [] as [$candidate, $origin]) {
+-                                    if (!isset($this->excluded[$origin])) { $locations[] = $this->name($candidate) . ' at ' . $origin . ':' . $candidate->getStartLine(); }
+-                                }
+-                            }
+-                        }
+-                        throw new \RuntimeException('Cannot resolve conditional declaration: ' . $source . ' in ' . $file . ':' . $condition->getStartLine() . '; ' . implode(', ', array_unique($locations)));
+-                    }
++                    if ($decision === $this->unknown) { $pending = true; break; }
+                     if ($decision) { $chosen = $body; break; }
++                }
++                if ($pending) {
++                    $node->setAttribute('typephpUnresolvedDeclaration', true);
++                    $this->unresolved = true;
++                    $result[] = $node;
++                    continue;
+                 }
+                 array_push($result, ...$this->select($chosen, $file, $variables, false));
+                 continue;
+@@ -537,13 +549,18 @@
+         if (!is_string($true) || !is_string($false)) { return false; }
+         $true = realpath($true);
+         $false = realpath($false);
+-        if ($true === false || $false === false || !isset($this->asts[$true], $this->asts[$false])
+-            || !$this->declarationFile($this->asts[$true]) || !$this->declarationFile($this->asts[$false])) { return false; }
++        if ($true === false || $false === false || !isset($this->asts[$true], $this->asts[$false])) { return false; }
++        $pure = $this->declarationFile($this->asts[$true]) && $this->declarationFile($this->asts[$false]);
++        $declares = $this->containsNamedClasslike($this->asts[$true]) && $this->containsNamedClasslike($this->asts[$false]);
++        if (!$pure && !$declares) { return false; }
+         $condition = $this->value($choice->cond, $file, $variables);
+         if ($condition === $this->unknown) {
+-            $expression = (new \PhpParser\PrettyPrinter\Standard())->prettyPrintExpr($choice->cond);
+-            throw new \RuntimeException("Cannot resolve conditional declaration loader {$expression} at {$file}:{$include->getStartLine()}; candidates {$true} and {$false}");
++            $this->unresolvedLoaders[$true] = true;
++            $this->unresolvedLoaders[$false] = true;
++            $this->unresolved = true;
++            return false;
+         }
++        if (!$pure) { return false; }
+         if (!$this->choicesResolved) {
+             $this->included[$condition ? $true : $false] = true;
+             $this->excluded[$condition ? $false : $true] = true;
+@@ -551,6 +568,31 @@
+         return true;
+     }
+ 
++    private function containsNamedClasslike(array $statements): bool
++    {
++        return (new NodeFinder())->findFirst($statements, static fn(Node $node): bool =>
++            $node instanceof Node\Stmt\ClassLike && $node->name !== null) !== null;
++    }
++
++    /** @return list<Node\Stmt\ClassLike> */
++    private function staticallyReachableClasslikes(array $statements): array
++    {
++        $found = [];
++        $walk = function (Node $node) use (&$walk, &$found): void {
++            if ($node instanceof Node\Stmt\If_ && $node->getAttribute('typephpUnresolvedDeclaration')) { return; }
++            if ($node instanceof Node\Stmt\ClassLike && $node->name !== null) { $found[] = $node; }
++            foreach ($node->getSubNodeNames() as $key) {
++                $value = $node->$key;
++                if ($value instanceof Node) { $walk($value); }
++                elseif (is_array($value)) {
++                    foreach ($value as $child) { if ($child instanceof Node) { $walk($child); } }
++                }
++            }
++        };
++        foreach ($statements as $statement) { $walk($statement); }
++        return $found;
++    }
++
+     private function method(string $class, string $method, array $visiting = []): mixed
+     {
+         $key = strtolower($class);
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -3848,6 +3848,11 @@
+                 if ($decl['early']) {
+                     $code .= 'if (!typephp_file_frames.empty() && typephp_file_frames.back().early.count("'
+                         . $identity . '")) { return true; }' . PHP_EOL;
++                    // PHP binds a free class before later statements, but a name
++                    // that is already bound is reported at the declaration statement.
++                    $public = strtolower($decl['name']);
++                    $code .= 'if (early && zend_hash_str_exists(EG(class_table), "'
++                        . $this->escapeString($public) . '", ' . strlen($public) . ')) { return false; }' . PHP_EOL;
+                 }
+                 if ($decl['parent'] !== '') {
+                     $code .= 'if (early && zend_lookup_class_ex(php::Str("'

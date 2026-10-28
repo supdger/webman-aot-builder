@@ -15,27 +15,8 @@ final class ProjectMirror
         'dist-aot',
     ];
 
-    /** @var \Closure(string,string):bool */
-    private readonly \Closure $move;
-
-    /** @param (\Closure(string,string):bool)|null $move */
-    public function __construct(
-        private readonly string $projectDirectory,
-        ?\Closure $move = null
-    ) {
-        $this->move = $move ?? static fn (string $from, string $to): bool => rename($from, $to);
-    }
-
-    /** Validate both the legacy mirror and independently owned attempt paths. */
-    public static function isOwnedPath(string $path, ?string $project = null): bool
+    public function __construct(private readonly string $projectDirectory)
     {
-        $mirror = realpath($path);
-        if (!is_string($mirror) || is_link($path) || basename($mirror) !== 'project') { return false; }
-        $build = dirname($mirror);
-        if (preg_match('/^attempt-[a-f0-9]{24}$/D', basename($build)) === 1) { $build = dirname($build); }
-        $workspace = dirname($build);
-        return basename($build) === 'build' && basename($workspace) === '.webman-aot-builder'
-            && ($project === null || dirname($workspace) === realpath($project));
     }
 
     /**
@@ -50,9 +31,7 @@ final class ProjectMirror
             : false;
         if (!is_string($project)
             || !is_string($build)
-            || ($build !== $expected
-                && !(dirname($build) === $expected
-                    && preg_match('/^attempt-[a-f0-9]{24}$/D', basename($build)) === 1))
+            || $build !== $expected
             || is_link($buildDirectory)
         ) {
             throw new ConfigurationException('project mirror requires the owned build workspace');
@@ -82,7 +61,9 @@ final class ProjectMirror
             foreach ($files as $path => $digest) {
                 hash_update($context, $path . "\0" . $digest . "\n");
             }
-            $this->activate($candidate, $destination, $sourceSnapshot, $before);
+            if (!rename($candidate, $destination)) {
+                throw new ConfigurationException('unable to activate project build mirror');
+            }
             return [
                 'path' => $destination,
                 'files' => count($files),
@@ -94,53 +75,6 @@ final class ProjectMirror
                 $this->removeCandidate($candidate);
             }
         }
-    }
-
-    /** @param array{sha256:string,files:int,digests:array<string,string>} $before */
-    private function activate(
-        string $candidate,
-        string $destination,
-        SourceTreeSnapshot $sourceSnapshot,
-        array $before
-    ): void {
-        $reason = 'rename returned false';
-        for ($attempt = 0; $attempt < 6; ++$attempt) {
-            clearstatcache(true, $destination);
-            if (file_exists($destination) || is_link($destination)) {
-                throw new ConfigurationException('project build mirror already exists; wait for the active build to finish and retry webman-aot build');
-            }
-            if ($attempt > 0) {
-                $after = $sourceSnapshot->captureWithFiles();
-                if ($after !== $before) {
-                    throw new ConfigurationException(
-                        'project source changed while activating build mirror: '
-                        . $this->describeChanges($before['digests'], $after['digests'])
-                        . '; wait for source writes to finish and retry webman-aot build'
-                    );
-                }
-            }
-            set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
-                $reason = $message;
-                return true;
-            }, E_WARNING);
-            try {
-                $moved = ($this->move)($candidate, $destination);
-            } finally {
-                restore_error_handler();
-            }
-            if ($moved) {
-                return;
-            }
-            if ($attempt < 5) {
-                usleep(50000 * (2 ** $attempt));
-            }
-        }
-        $reason = str_replace([$candidate, $destination], ['<candidate>', '<project>'], $reason);
-        $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', $reason) ?? 'rename failed';
-        throw new ConfigurationException(
-            'unable to activate project build mirror after 6 attempts: ' . substr($reason, 0, 400)
-            . '; close programs holding files in .webman-aot-builder/build, check directory permissions, and retry webman-aot build'
-        );
     }
 
     /**
@@ -155,6 +89,9 @@ final class ProjectMirror
         $filter = new \RecursiveCallbackFilterIterator(
             $directory,
             function (\SplFileInfo $entry) use ($project): bool {
+                if ($entry->isDir() && str_starts_with($entry->getFilename(), '.')) {
+                    return false;
+                }
                 $relative = str_replace(
                     '\\',
                     '/',
@@ -168,12 +105,13 @@ final class ProjectMirror
                     || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
                         && strtolower($entry->getExtension()) !== 'php')
                     || (in_array($root, ['runtime', 'node_modules'], true)
-                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
+                        && !$entry->isDir())
+                    || RuntimeDataPaths::isDevFixturePath($relative)
                 ) {
                     return false;
                 }
                 if ($entry->isLink()) {
-                    throw new ConfigurationException("project mirror refuses symlink: {$relative}");
+                    return false;
                 }
                 return true;
             }

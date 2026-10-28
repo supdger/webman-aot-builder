@@ -6,7 +6,7 @@ namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
 use WebmanAotBuilder\Project\ProjectDiscovery;
-use WebmanAotBuilder\Project\ProjectProfile;
+use WebmanAotBuilder\Project\CompilationSourceResolver;
 
 final class PluginSourceCompletion
 {
@@ -18,15 +18,13 @@ final class PluginSourceCompletion
      */
     public function apply(
         string $mirrorDirectory,
-        string $profile,
         array $dynamicPhp,
         array $mappings = [],
         ?array $entrypoint = null
     ): ?string {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror) || is_link($mirrorDirectory)
-            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
-            || !in_array($profile, [ProjectProfile::PHP, ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
+            || !str_ends_with(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/project')
         ) {
             throw new ConfigurationException('PHP source completion requires an isolated project mirror');
         }
@@ -41,36 +39,101 @@ final class PluginSourceCompletion
             $project .= "\n";
         }
         $sources = $this->section($project, 'sources');
+        $phpSources = $this->section($project, 'php-sources');
         $ignore = $this->section($project, 'ignore');
-        $discovery = (new ProjectDiscovery($mirror))
-            ->discover(new ProjectProfile(ProjectProfile::PHP, [], []), false);
-        // The builder owns the input list; no PHP is ignored or replaced.
-        $sources = [];
-        $ignore = [];
-        foreach ($discovery->files() as $file) {
-            if ($file['category'] === ProjectDiscovery::BUSINESS_PHP) {
-                $sources[] = $file['path'];
+        $receiptFile = $mirror . '/.typephp/build/compilation-sources.json';
+        if (is_link($mirror . '/.typephp') || is_link($mirror . '/.typephp/build')) {
+            throw new ConfigurationException('compiler source receipt directory is unsafe');
+        }
+        if (!is_dir(dirname($receiptFile))
+            && !mkdir(dirname($receiptFile), 0700, true) && !is_dir(dirname($receiptFile))) {
+            throw new ConfigurationException('unable to create compiler source receipt directory');
+        }
+        if (is_file($receiptFile) && !is_link($receiptFile)) {
+            $receipt = json_decode((string) file_get_contents($receiptFile), true);
+            if (is_array($receipt) && ($receipt['schema'] ?? null) === 'webman-aot-compilation-sources-v2'
+                && ($receipt['manifestSha256'] ?? null) === hash('sha256', $project)
+                && is_array($receipt['inputSources'] ?? null) && is_array($receipt['inputIgnore'] ?? null)) {
+                $sources = $receipt['inputSources'];
+                $ignore = $receipt['inputIgnore'];
+                $phpSources = is_array($receipt['inputPhpSources'] ?? null) ? $receipt['inputPhpSources'] : [];
             }
         }
+        $inputSources = $sources;
+        $inputPhpSources = $phpSources;
+        $discovery = (new ProjectDiscovery($mirror))
+            ->discover(false, $inputSources,
+                explicitPhpSources: $inputPhpSources);
+        $sources = $discovery->compilerSources();
+        $diagnostics = $discovery->sourceDiagnostics();
+        foreach ($sources as $path) {
+            if ($this->covered($path, $ignore)) {
+                $diagnostics[] = [
+                    'file' => 'project.linux.yml', 'line' => 1,
+                    'expression' => 'User ignore excludes a possible compiler source: ' . $path,
+                    'candidates' => [$path],
+                ];
+            }
+        }
+        $sources = array_values(array_filter($sources, fn(string $path): bool => !$this->covered($path, $ignore)));
         $sources = array_values(array_unique($sources));
         $ignore = array_values(array_unique($ignore));
-        $adapted = $this->replaceSection($project, 'sources', $sources);
-        $adapted = $this->replaceSection($adapted, 'ignore', $ignore);
-        if ($adapted === $project) {
-            return null;
+        $nativeSources = [];
+        foreach ($discovery->files() as $file) {
+            $path = $file['path'];
+            if (CompilationSourceResolver::isNativeSourcePath($path)
+                && $this->covered($path, $inputSources) && !$this->covered($path, $ignore)) {
+                $nativeSources[] = $path;
+            }
         }
-        if (file_put_contents($projectFile, $adapted, LOCK_EX) !== strlen($adapted)) {
+        $allSources = array_values(array_unique(array_merge($sources, $nativeSources)));
+        sort($allSources, SORT_STRING);
+        $adapted = $this->replaceSection($project, 'sources', $allSources);
+        $adapted = $this->replaceSection($adapted, 'php-sources', $sources);
+        $adapted = $this->replaceSection($adapted, 'ignore', $ignore);
+        if ($adapted !== $project && file_put_contents($projectFile, $adapted, LOCK_EX) !== strlen($adapted)) {
             throw new ConfigurationException('unable to complete PHP compiler sources');
         }
-        return hash('sha256', $adapted);
+        $candidateSets = [];
+        $candidateKeys = [];
+        foreach ($diagnostics as &$diagnostic) {
+            $key = hash('sha256', implode("\0", $diagnostic['candidates']));
+            if (!isset($candidateKeys[$key])) {
+                $candidateKeys[$key] = count($candidateSets);
+                $candidateSets[] = $diagnostic['candidates'];
+            }
+            $diagnostic['candidateSet'] = $candidateKeys[$key];
+            unset($diagnostic['candidates']);
+        }
+        unset($diagnostic);
+        $receipt = json_encode([
+            'schema' => 'webman-aot-compilation-sources-v2',
+            'manifestSha256' => hash('sha256', $adapted),
+            'inputSources' => $inputSources, 'inputIgnore' => $ignore,
+            'inputPhpSources' => $inputPhpSources,
+            'sources' => $sources, 'diagnostics' => $diagnostics,
+            'candidateSets' => $candidateSets,
+        ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n";
+        if (is_link($receiptFile)
+            || file_put_contents($receiptFile, $receipt, LOCK_EX) !== strlen($receipt)) {
+            throw new ConfigurationException('unable to record compiler source selection');
+        }
+        return $adapted === $project ? null : hash('sha256', $adapted);
     }
 
     /** @return list<string> */
     private function section(string $project, string $name): array
     {
-        if (preg_match('/^' . $name . ':[ \t]*([^\n]*)\n((?:[ \t]+[^\n]*\n|\n)*)/m', $project, $match) !== 1) {
+        $lines = explode("\n", $project);
+        $range = $this->sectionRange($lines, $name);
+        if ($range === null) {
             return [];
         }
+        $match = [
+            '',
+            substr($lines[$range[0]], strlen($name) + 1),
+            implode("\n", array_slice($lines, $range[0] + 1, $range[1] - $range[0] - 1)),
+        ];
         $inline = trim($match[1]);
         if ($inline !== '' && !str_starts_with($inline, '#')) {
             if (!str_starts_with($inline, '[') || !str_ends_with($inline, ']')) {
@@ -143,11 +206,36 @@ final class PluginSourceCompletion
             $block .= "  - {$encoded}\n";
         }
         $block .= "\n";
-        $pattern = '/^' . $name . ':[ \t]*[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m';
-        if (preg_match($pattern, $project) !== 1) {
-            return rtrim($project) . "\n\n" . $block;
+        $lines = explode("\n", $project);
+        $range = $this->sectionRange($lines, $name);
+        if ($range === null) {
+            return rtrim($project) . "\n\n" . rtrim($block, "\n") . "\n";
         }
-        return (string) preg_replace_callback($pattern, static fn(): string => $block, $project, 1);
+        array_splice($lines, $range[0], $range[1] - $range[0], explode("\n", rtrim($block, "\n") . "\n"));
+        return implode("\n", $lines);
+    }
+
+    /** @param list<string> $lines @return array{int,int}|null */
+    private function sectionRange(array $lines, string $name): ?array
+    {
+        $start = null;
+        foreach ($lines as $index => $line) {
+            if (str_starts_with($line, $name . ':')) {
+                if ($start !== null) {
+                    throw new ConfigurationException("duplicate TypePHP project {$name} section");
+                }
+                $start = $index;
+            }
+        }
+        if ($start === null) {
+            return null;
+        }
+        $end = $start + 1;
+        while (isset($lines[$end])
+            && (trim($lines[$end]) === '' || $lines[$end][0] === ' ' || $lines[$end][0] === "\t")) {
+            ++$end;
+        }
+        return [$start, $end];
     }
 
     /** @param list<string> $entries */

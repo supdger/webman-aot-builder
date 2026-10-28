@@ -1,0 +1,11 @@
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -1819,8 +1819,6 @@
+                 . '", ZEND_FN(' . $zifName . '), arginfo_' . $zifName
+                 . ', ' . ($functionDef->strictTypes ? 'ZEND_ACC_STRICT_TYPES' : '0') . ', NULL, NULL)' . PHP_EOL;
+         }
+-        $code .= "// clang-format off\n";
+-        $code .= "static const zend_function_entry ext_functions[] = {\n";
+         $code .= $processTitleFunctions;
+         $code .= $projectFunctions;
+         $code .= $this->getIndent() . "ZEND_FE_END\n};\n// clang-format on" . PHP_EOL . PHP_EOL;

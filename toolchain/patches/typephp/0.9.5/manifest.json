@@ -1,0 +1,388 @@
+{
+ "component": "typephp-source",
+ "version": "0.9.5",
+ "rules": [
+  {
+   "path": "composer.json",
+   "beforeSha256": "b7837617c2d39775bae8736b598fc70b0c5c542fd86d8bc2cfe80a6d21c8758e",
+   "afterSha256": "d346d48efac5f67369b2aebca23540c37b7b7e0dc480ae723fd98da446624444"
+  },
+  {
+   "path": "src/Backend/CompilerBackend.php",
+   "beforeSha256": "3ebab0f56fc34c5264224cf7cf5ce0b5570b4b39985639470748cd690b5111d6",
+   "afterSha256": "a02db0aa39731874e031584408b4aefdda908ecc3d1063dcd207bfd814af3934"
+  },
+  {
+   "path": "src/Backend/CompilerFactory.php",
+   "beforeSha256": "edd1cc04448fe1cbbac7b838a949a1c77da31847b2c34c9c9b0d0fe0c032cc58",
+   "afterSha256": "fd3a10278e58d88325b34e0de551e4fd10e3507b8834fd13b6555be41e2a823c"
+  },
+  {
+   "path": "src/Backend/GccLikeBackend.php",
+   "beforeSha256": "f9d105f572dda3ac75a806978877763471844b62594edb97872ec841f36ef48b",
+   "afterSha256": "b2e58b53eba627b869d739d1eb8b2e5907057dd2049b9b9a2f0d8dc19fff903f"
+  },
+  {
+   "path": "src/Build/AstCache.php",
+   "beforeSha256": "a1c46be6461af152346294daea2a069ce7457c14eb3275902b8c7c1aba21b86e",
+   "afterSha256": "432c3a27b775779a08e217a06e2f0bd89bd96db509cbdac3b9cb2fe4af4887d0"
+  },
+  {
+   "path": "src/Build/DynamicVariablesTrait.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "30c5daad8487e5237d3b07d61ac1f38b0f628d6832e57c209d2c022955a3e8bb",
+   "added": true
+  },
+  {
+   "path": "src/Build/FileScanner.php",
+   "beforeSha256": "8a0a6f09620813d9a195158fa1aa3dd8494e6c760c750e3d7d3adc986df861c7",
+   "afterSha256": "94fda6bf465ceeba7ad61bda8acf1411b8c0ff7a368ed7071e801b89810d3c1f"
+  },
+  {
+   "path": "src/Build/GeneratedArtifactReceipt.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "439055e3a17362e5836c244d0e9787a01c9d51116a35727992f77688c65a7b9b",
+   "added": true
+  },
+  {
+   "path": "src/Build/IncrementalBuildState.php",
+   "beforeSha256": "0459c3130b0d6b2e8d069c237e386080a83f5bbc8fc41ef528325e6dc4a809f6",
+   "afterSha256": "b943a81bfdbb4b857ee5fb448cfb2c56dbbfc9832e3c65af967eed1d7a366f64"
+  },
+  {
+   "path": "src/Build/IncrementalCompilationTrait.php",
+   "beforeSha256": "bf3329271854c2e11e85c6767e96ab8edd7c5687f9349300a13ce739f423eb74",
+   "afterSha256": "ef9c93ca0db97e741ccd035790e2217735c14daa3f608dc6b9c97070730e3830"
+  },
+  {
+   "path": "src/Build/NativeBuildConfigurationTrait.php",
+   "beforeSha256": "df337f6497a6f848436a26e7ec4a38fc3153f29143a8d5f3e92aaf70043a50dc",
+   "afterSha256": "10b430c1c5ed2ba900be9e48a2f04c52600edbaf556c331f8d95cc40e65f0288"
+  },
+  {
+   "path": "src/Build/NativeBuilder.php",
+   "beforeSha256": "50df4c959b3f895784bbc20d3a0a6ab50bf2153ed155d8f4ab3128fd9cb561da",
+   "afterSha256": "93845b3508e64655ded596f7543f21a0623facb191031db25e3dab8f08becc1d"
+  },
+  {
+   "path": "src/Build/NativeCommandOptionsTrait.php",
+   "beforeSha256": "2584a87fc55426eb9beb8c0da29790f6926b0b5cb415ea46d86594453f313341",
+   "afterSha256": "b4e1e0b817ba71a5b89fa2208de7ece485869111e97db71a0ac40cdd5b3049f7"
+  },
+  {
+   "path": "src/Build/PersistentReferencesTrait.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "57edab7b322f44c2a894d3c2869f86a83c5397054d63cb7dd86133a8bb939f54",
+   "added": true
+  },
+  {
+   "path": "src/Build/PrecompiledHeaderManager.php",
+   "beforeSha256": "4161f2465dd7efcadafb90a2305926ffb4169cce996d133fdec0ad2aeafe5278",
+   "afterSha256": "865a401c4b0602b3d199f2c4a238e83c6b7eb46ef23e6ae3f52eb3c6a25af532"
+  },
+  {
+   "path": "src/Build/PreparedProjectCacheTrait.php",
+   "beforeSha256": "02c4a7d4b0926c0c35e9f8c50d9fb7a4ff4b916e8ab833c439c6062de273e405",
+   "afterSha256": "bcae68b97f361dd3a4bcb6d129bf2f17f99ed0799676982caea1fed35e538171"
+  },
+  {
+   "path": "src/Build/RuntimeDeclarationsTrait.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "cfe1a1ac86e8b4b8d943b90e0ee1b07b23c7b4f1cf66a5f76f21c3b1a2822c3d",
+   "added": true
+  },
+  {
+   "path": "src/Build/SourcePipelineTrait.php",
+   "beforeSha256": "fc2eeb22ab4880f59755e9f4c8752c099f217b3f6d4088b7ff247b1620f017e7",
+   "afterSha256": "b2e629436689ebcb6499fcc154eee6c65199b438fa562fadf3a2f329590858a7"
+  },
+  {
+   "path": "src/Build/StableIdRegistry.php",
+   "beforeSha256": "83e50698d0d66a2319aa3cfca96aca69e07f99b9b2acdda0e33d01a85524cc1e",
+   "afterSha256": "44cf28313d8912a6a688099e28acf503855c9c4b0682c3073dde6915c4c1be04"
+  },
+  {
+   "path": "src/Build/TargetFunctionReturnMetadata.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "38d053a7d93e3f827d9f6d9f4ccd7b0a9dfd4befc05b2ae75ad57ec946b80639",
+   "added": true
+  },
+  {
+   "path": "src/Build/TargetInternalClassArchive.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "7493767c762c7aebffe50eea0e4ad2ceb781706f264af968ee2f02a179bd206c",
+   "added": true
+  },
+  {
+   "path": "src/Build/TargetInternalClassMetadata.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "8a97f49530cffb78ac5d1f677a89120dc5e500c9399bbc3125d1cf830bb10177",
+   "added": true
+  },
+  {
+   "path": "src/Build/TranslationUnitSplitTrait.php",
+   "beforeSha256": "a784c4fe4216cbaf3634b933f6d786dfbdecb057636190809feebeda016ead33",
+   "afterSha256": "5ca7c6c4e19d68a259f937d73cae1edc991e9ca1d641639c50413cc3b650e51e"
+  },
+  {
+   "path": "src/Build/UnavailableDeclarationsTrait.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "e570ceafc661d723c4eac940eef683bfaa18037a9e4009b684ce506ea625957c",
+   "added": true
+  },
+  {
+   "path": "src/CompilerBase.php",
+   "beforeSha256": "10a2a106f776ac1fd27db8901fa6bceadbb24f2c98ab00eaaedaf5daa807154f",
+   "afterSha256": "0a0dab104d5e7e9babb1e9c31b8da8d7b0cc9e6f84419e633c6e81c52be9c86c"
+  },
+  {
+   "path": "src/Context/CompilationStateTrait.php",
+   "beforeSha256": "158d16dc36e46951f601fd4b996d6920aa4475270e4696ce8958c455cf786484",
+   "afterSha256": "716b945c809100ec2b4b4ef0dbf01d92075dae367679ea99f49793deea99d102"
+  },
+  {
+   "path": "src/Context/FunctionContext.php",
+   "beforeSha256": "6477a62b0a9470464ebd9777c555ef26760df96b8a0845ffa384a705df3f8ba2",
+   "afterSha256": "3f28cc95c0be9783d6cf0fb750fc5403f05087232a80128ce019512009d4007b"
+  },
+  {
+   "path": "src/Entity/ArgInfo.php",
+   "beforeSha256": "0a42a784ad100aed13017d64f8883c9ae0f72d53e8450e53bb072e64fb670bcc",
+   "afterSha256": "97c3b3f866914149ab02ffc9fb90e3489340cf5d4442c8a099b584ee54507103"
+  },
+  {
+   "path": "src/Entity/ClassLikeDef.php",
+   "beforeSha256": "40cd56b9b62ad3491d9be9e9c1d86e8375be075adbbd7c051cd3530bcafa36ac",
+   "afterSha256": "3e12001a02c333f8b7ef853b36e3eabf0a10cb44804b8291d46d65ed62c3fc73"
+  },
+  {
+   "path": "src/Entity/FunctionDef.php",
+   "beforeSha256": "fa51277271616627000766d3114e4884c0eb7951805cf771ff24ca6bc0590a59",
+   "afterSha256": "17622e6436b540a54ae05a2a415fd05e805a4b9df6c80d771375a3ae53ceee1e"
+  },
+  {
+   "path": "src/Generator/AnonClassGenerator.php",
+   "beforeSha256": "f02b0250ab3761743068a934de2979dc711dc81d0c0020e64846d8e10db8922d",
+   "afterSha256": "bc44df2f90f8983ba396da894e9031615bfb389cb4dd1f748b8979f84c068275"
+  },
+  {
+   "path": "src/Generator/CallArgumentGenerator.php",
+   "beforeSha256": "d0e5b1e9248a312749911e3d6d063f2be91b230a296e2a6ded7aba694d74e6e0",
+   "afterSha256": "240e6f412180537f74910eb2bfbe28411f4436d2481cd0faecad87995009f8fe"
+  },
+  {
+   "path": "src/Generator/ClosureGenerator.php",
+   "beforeSha256": "fc23c9113e8b90e0f24e4819506190de592aa565fae340caed594b15e7af5882",
+   "afterSha256": "57b3152efcab3b351327b06e53fb1a92dfcdff0b5af9b6d25525c68070224ade"
+  },
+  {
+   "path": "src/Generator/FiberGenerator.php",
+   "beforeSha256": "34464a794ff5bedc3babf284ad0e7489c52b646411fb6baf832a0f1287dbc4fc",
+   "afterSha256": "a210dcde3368cc13c102ab1b0a5159025b218f1c4eee28a4b1950959fe70418d"
+  },
+  {
+   "path": "src/Generator/TypeCheckGenerator.php",
+   "beforeSha256": "f9e88981fa70ebc76e135ca8a477c994ee314fd9506d8dca6556b31f4a628018",
+   "afterSha256": "db24bf0b35c6f84e6eda49df77e506f8193b2935d48e6efee7a729449f8ad5f0"
+  },
+  {
+   "path": "src/Generator/UnavailableDeclarationGenerator.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "dddb7ebd8b32833c4858f9f5b51a3e7a6a29dabf27409c8a90af1e33fbbf24ea",
+   "added": true
+  },
+  {
+   "path": "src/Generator/Utils.php",
+   "beforeSha256": "aea50ef6412beedb6661998f5ef274b650a5e5298ef5334f5bd7e79405979553",
+   "afterSha256": "ae93dfb8e0b316404ebe4b7f1cad2be0e9ad4929ac6abcda1478a5cbaa7ca382"
+  },
+  {
+   "path": "src/Generator/ZendGeneratorBridge.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "ae7dd5627471a357fa2bc2e330f5ff995efe539dbe31860dd30743af4d4d6964",
+   "added": true
+  },
+  {
+   "path": "src/Metadata/Constants.php",
+   "beforeSha256": "c7b13d55c70aafb809cfac2de03fa8907d47cfa1e1ea8c0b773b0e8119651853",
+   "afterSha256": "9d529af0921024545e8e5157e22e036b5844c6c1b0e587a18d214c47bcfa33a5"
+  },
+  {
+   "path": "src/Optimizer/FuncCallOptimizer.php",
+   "beforeSha256": "8a5f773ad88eb4281d9e797ce7d4393affb3a17fd106318c22e3e7aa41f51b3e",
+   "afterSha256": "4c59099ab3d1a478805b411d2cffa89597e91d904f5795612bb019ed3b9d52f4"
+  },
+  {
+   "path": "src/Optimizer/LoopVarOptimizer.php",
+   "beforeSha256": "99a116cb6335bdce50dd31600fe2a0cb4746b5e78e3474ba7da23b6002455c61",
+   "afterSha256": "7c2e675e103511f37bfedaf4e7ce857e15959d63e70102d5ee27a08bebffd79e"
+  },
+  {
+   "path": "src/Parser/ArrayExpressionTrait.php",
+   "beforeSha256": "9f6fd343198453ff8fc77e670ff167b1e0480c6804999beebbc4c963cc4904b9",
+   "afterSha256": "5b80cbc95c672bd966e79f77e752570c89ce495152f5ee608965d76b638a949a"
+  },
+  {
+   "path": "src/Parser/AssignOpTrait.php",
+   "beforeSha256": "3459e87eb0bbaa448dbcfe57c92912c9c4b68bc465ccebbe8822f3cfeea8c913",
+   "afterSha256": "cf01e66067661bbd3623ac4458e6f37be938d40d814ddca64be23e9fb974baf7"
+  },
+  {
+   "path": "src/Parser/AstNodeType.php",
+   "beforeSha256": "92eb8cc42f408aabab7e22c899252aec58311e2568f768a4fa1c223f5d73fa82",
+   "afterSha256": "a6b9bfa6ae86d785885b22cade9600acb808ea573fb6d69f57ce4273cc67e08c"
+  },
+  {
+   "path": "src/Parser/BinaryOpTrait.php",
+   "beforeSha256": "a809e11f3171058a82b0e5737d4a0cdef9e7db5bb86164e42cfdc6d89bbe805c",
+   "afterSha256": "7bee03568b429eae87f0540ddc765ebfa92845430470cd7880dffabada06fb6f"
+  },
+  {
+   "path": "src/Parser/ClassConstantFetchTrait.php",
+   "beforeSha256": "0b6408a36aeae677ef03acd686a3a719ad861e5c1337f056cab6dff27c48f705",
+   "afterSha256": "aa96fa15c3092aa81cd1a91d290aa527cd0dd70169f3dcf7449f9fde2764f3ba"
+  },
+  {
+   "path": "src/Parser/ConstantExpressionTrait.php",
+   "beforeSha256": "d4a84e2f4f00e9909a733f84a9ed86a16322b36cadf499a0dfb5d8824990d682",
+   "afterSha256": "650bb45eafe610fc2b6298a3304ea054619e4cc8a4e0bc223cbece7c375a0e52"
+  },
+  {
+   "path": "src/Parser/ExceptionControlFlowTrait.php",
+   "beforeSha256": "b9226fbb12e320112a1fb9260a3b48ae09ea2594b7be71832ad2259def00fd86",
+   "afterSha256": "8e667c306634b37162809f2821ac14d61e108f8c0bf7c11e74ecd7cd7cc8b1d4"
+  },
+  {
+   "path": "src/Parser/ForeachTrait.php",
+   "beforeSha256": "7cedcbf9450c8e26c0985972bd8fbb8f648b6b79aa66be1798b2ab7680b3d13e",
+   "afterSha256": "05dc529b7b6986661723e70edd360601ec3b73890875732ed74c0342c07f1ec5"
+  },
+  {
+   "path": "src/Parser/FunctionCallTrait.php",
+   "beforeSha256": "d7bf37b372b8541b8205079a1f04e9ea942d6e58148fe1094e88ad8bb6d9e7e7",
+   "afterSha256": "bf8125cd0ec85ac81b7713b080a89bba72d593706ca2ea858bfff0fa1887a219"
+  },
+  {
+   "path": "src/Parser/MethodCallTrait.php",
+   "beforeSha256": "64f941d2b5fe0a263282d4fc871539239477dc9ff769cf2e1961f3e68ffc50f1",
+   "afterSha256": "9ba454797595a0c83ed7662cf39531596006b0255dedc167216a9848c7874585"
+  },
+  {
+   "path": "src/Parser/PropertyAccessTrait.php",
+   "beforeSha256": "f507a357cfb3f85e0f7d9e282e3e26304f0c9f1b5a3e8f04673b1f60a0c69fee",
+   "afterSha256": "9fe25cdd51de9017bb01ad90c4cc8d3f1426d7b2656142ca7fa804e79dd7f75e"
+  },
+  {
+   "path": "src/Parser/SelectionExpressionTrait.php",
+   "beforeSha256": "32878cf69cb3391e26f93bfac32421f4fd218c9d27882c7e9f23354347851277",
+   "afterSha256": "3d57b06ae24f842f3585fefefb797908501ad38ffa0a436cdfeec03f0f1b84c8"
+  },
+  {
+   "path": "src/Parser/StdContainerTrait.php",
+   "beforeSha256": "06c8f587c71f2c7d357e319821939eec96c1f906a58cea03be814c03ec7ce2a9",
+   "afterSha256": "c26ec1425d9d20c3ef95e2239f40fe7e3007f625c493851eee0f951b67ba4c77"
+  },
+  {
+   "path": "src/Parser/SwitchTrait.php",
+   "beforeSha256": "b82266c73b156956d880b4e63b9ec092da06710269bfa645406ccef1e06ee896",
+   "afterSha256": "d4ed5e0384ab07da9f63e5148c113bce0b8d14e4c00b12156570dbcbb12e43ea"
+  },
+  {
+   "path": "src/Parser/TypeConversionTrait.php",
+   "beforeSha256": "62ad6ea84056b8aab7bee64d755c676da23597c3255b860a7900dab9a27a41f6",
+   "afterSha256": "863484ed799abb80d31d8910d077064c63dc786c48842db5249e340c7b6298ac"
+  },
+  {
+   "path": "src/Parser/TypedArrayTrait.php",
+   "beforeSha256": "a443c48088911f1d81ec530121b55f791b325cb7f5c50a306aa193016e5bc9f7",
+   "afterSha256": "8329ad651c998369040dc83e1792b5e7f6069debed4edf8b25a0c0d4535566b3"
+  },
+  {
+   "path": "src/Parser/UnaryExpressionTrait.php",
+   "beforeSha256": "343ec7637ef0c72072e898423ab16851b257d38041e98e2e27f0e6f9f07b5ef1",
+   "afterSha256": "6fca1b2f9531699eadc9be9828b9e822d863879ff45f38855b9057e9f8d1c4bd"
+  },
+  {
+   "path": "src/Parser/UniversalMethodCall.php",
+   "beforeSha256": "8c2b963287246a9b54d709ff1174a903e913d4c5c07d0fa3fe650bb523e6ffea",
+   "afterSha256": "aed7e9aa2120a9e0cccd27896a0f810612d6a8ae8de3784bea1acf55f2284c76"
+  },
+  {
+   "path": "src/Preprocessor.php",
+   "beforeSha256": "8a8526ddcb84081341568b3308992336f180365ca1a3205a32d7774127a8e0be",
+   "afterSha256": "dd261e0ffdd2ea3b806d7a18f2b0dc2e7cc0040116b5a98c8109f1d96dc1492c"
+  },
+  {
+   "path": "src/Resolver/DeclarationSymbolTrait.php",
+   "beforeSha256": "a21d762b53257ba665c5e6d1c0a833198f4cc76220e8b14157c703a3cd877063",
+   "afterSha256": "66e21d19d8651342ec97c689c225cd5b432c49577aa3233fc3c50833e7dd3e48"
+  },
+  {
+   "path": "src/Resolver/Reflection.php",
+   "beforeSha256": "417a60694e1a087c7c1f2055f4c1311cea56d86d9409c6f26e436bc6e34eb808",
+   "afterSha256": "ea13fa1326b9fddb734c28d3ce62f149e33a49977746913919c1697c90907a49"
+  },
+  {
+   "path": "src/Transform/ConstantExpressionValidationVisitor.php",
+   "beforeSha256": "53f8de5f3c49a71ca271bb882d9ebd2e76db7c3acc243951c69bf00a7a455ef7",
+   "afterSha256": "d2a7860ea242a9e45f5f4057339a95498b7472271330f4a34bec373404a64d96"
+  },
+  {
+   "path": "src/Transform/RuntimeDeclarationLowering.php",
+   "beforeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+   "afterSha256": "d2bfdcde1bb501cda6c3f6956a762399bf91495f1e7236f50d441b277370e322",
+   "added": true
+  },
+  {
+   "path": "src/Translator.php",
+   "beforeSha256": "b35744130995254057822a09c0bbb38fd7863b474be0d5747faf0069989d3894",
+   "afterSha256": "7936ad7dfa161ee319ee1747016c5a7414f9c2197214e48b2017a1e057c0d7d2"
+  },
+  {
+   "path": "src/TypeSystem/NativeTypeCompatibilityTrait.php",
+   "beforeSha256": "a993877d9455c07c01041aeb9f1bbc792eed331f353276ae0b76e71ebb10ecd2",
+   "afterSha256": "b0b22f8a1f4c3baccc19d465a942987945d8831176a8e342f992ae3dc4884740"
+  },
+  {
+   "path": "src/gen_stub.php",
+   "beforeSha256": "04d41b308e3d8adff3966f05fc95fe852d2aff0cd9e4ae510823c3979a660364",
+   "afterSha256": "4beacab4c4bd9afa26766cea361ee00ade7b7b8d1dc170564ad09a2b27f4701c"
+  },
+  {
+   "path": "vendor/swoole/phpx/full-static/sdk/include/phpx/phpx.h",
+   "beforeSha256": "1112ff62751fe6e3225e7c359e304291e97d9338aceadd4776fcc1561d4638ab",
+   "afterSha256": "e033d88b76f2d4a6e91b060c860c733fcbf6831340ce4f45b647debbf184f7a8"
+  },
+  {
+   "path": "vendor/swoole/phpx/include/phpx.h",
+   "beforeSha256": "1112ff62751fe6e3225e7c359e304291e97d9338aceadd4776fcc1561d4638ab",
+   "afterSha256": "e033d88b76f2d4a6e91b060c860c733fcbf6831340ce4f45b647debbf184f7a8"
+  },
+  {
+   "path": "vendor/swoole/phpx/include/typephp_helper.h",
+   "beforeSha256": "12e6f3094bb8c5a3291814913699560748af434615641043778510ff005df081",
+   "afterSha256": "83bf9723f21cc55364b639b5a826fec0d1d242d7c843d8ecc3af335beeb12898"
+  },
+  {
+   "path": "vendor/swoole/phpx/src/core/closure.cc",
+   "beforeSha256": "0964204f8edfd5f2b293b0fadf90e65156ca0da4d62ea955a37c90ede289de9b",
+   "afterSha256": "4d20d60433604a6b7b94dfd688de51b16c920090cab4bdedde89264c0efaf608"
+  },
+  {
+   "path": "vendor/swoole/phpx/src/core/scope.cc",
+   "beforeSha256": "da04dbbd830cf6397fb9ecf67507727762345ae03ed8030743494388d855d044",
+   "afterSha256": "1342579a35665ed054a1966a86b9862351bfa47899e07762415c22df5f14f6bf"
+  },
+  {
+   "path": "vendor/swoole/phpx/src/misc/typephp_runtime.cc",
+   "beforeSha256": "c16de4ca76275996c2d8778b97e46f289adb805b69679ccade36f8f6c55df48a",
+   "afterSha256": "d5aeeca685f643a4da9746f1312f3f6a74084078ea3ab4e1f23f1932c78176fc"
+  },
+  {
+   "path": "vendor/swoole/phpx/src/typephp/typephp_property.cc",
+   "beforeSha256": "bb5f5ce296dd54658ddbde3fc90b88a25f9ca96873215475532df71c4bc157b3",
+   "afterSha256": "566a9b6fe52d203f0decd0579bb3f1b69a4f74d7407186160ca218161638971b"
+  }
+ ],
+ "reason": "Derive the Linux musl target from the locked SDK, register locked static PECL modules, map generated source identities to a host-independent prefix including arginfo attributes, separate host filesystem behavior from Linux target code generation, normalize Windows object paths for Clang response files, preserve PCNTL and OpenSSL output references when build-host PHP lacks target extensions, avoid requiring Windows host PHP import libraries when linking the independent full-static target SDK, classify target builtins, preserve native-parent covariance and dynamic method dispatch, avoid speculative loop type probes before foreach variables exist, include declarations for unqualified calls that can fall back to global PHP functions, preserve runtime constant, object-default and fixed global reference semantics in generated C++, resolve full-static __DIR__ and __FILE__ from the portable runtime directory, keep embedded anonymous-class return and parent types valid on both build hosts, use portable anonymous-class source embedding for full-static output regardless of host OPcache, resolve PHP_EOL, PHP_MAXPATHLEN and tokenizer IDs from the Linux target rather than the build host, exclude Windows-only SAPI functions from Linux target builtins, internal functions and reflection metadata, and sort scanned source paths using portable separators. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Publish only completed objects as atomic immutable input-keyed checkpoints with size and SHA-256 verification; isolate resumable attempts and bind actual build-tool identities. Resolve and quote compiler executable paths containing spaces through target probing, native compilation, precompiled headers and linking while preserving explicitly configured compiler arguments. Preserve ordinary PHP toArray declarations, argument calls and dynamic return metadata while retaining Native conversion signatures and the PHPX runtime array bridge; preserve Composer lazy optional-trait loading failures with a complete unavailable declaration graph and scoped Zend loading guards. Preserve dynamic storage for ordinary PHP locals assigned unrelated concrete classes before any receiver metadata is emitted. Preserve PHP parameter entry contracts while sharing owned Zend reference storage across escaping Closure captures and known PHP call/override families; retain Closure carrier ownership during exception unwinding without checking an already pending exception during cleanup. Compile the repaired Closure translation unit ahead of the locked full-static PHPX archive; preserve ordinary by-value PHP parameter entry contracts while reserving local dynamic storage for completely resolved mixed value assignments. Limit persistent reference override propagation to compiler-known PHP declaration ancestry without dereferencing target-native or unknown ancestors. Use conservative selected-SDK single-return registration candidates only to reserve mutable PHP value-parameter storage without selecting functions; bind header content to prepared cache identities. Resolve runtime namespace shadows before their global fallback using request-local callsite selection; preserve global reference carriers and actual Zend parameter dispatch. Preserve ordinary PHP string bitwise complement bytes and Zend dynamic/float operator behavior while retaining Native and standard-container boundaries. Reserve ordinary PHP mixed-value local storage before emission using known assignment results and conservative definition checks. Bind complete internal-class declarations to the selected Linux x64 SDK archive for inheritance and Zend call-argument metadata. Predict ordinary PHP call assignments from return declarations without evaluating argument scope. Preserve lazy optional missing-interface declarations and PHP load-time Error semantics. Preserve ordinary constructor return values for explicit calls without changing Native ABI. Preserve ordinary destructor return values for explicit calls and Zend lifetime operations. Reserve PHP value storage for known related ordinary classes assigned to one local. Recognize existing goto lowering as a terminating switch case. Permit natural final switch exit and route outgoing goto through its lexical finally blocks. Preserve ordinary local values overwritten by known PHP catch bindings. Declare expression temporaries before source goto targets while preserving evaluation positions. Preserve ordinary inferred local values assigned through foreach list bindings. Release switch selector values at the switch scope exit on normal, goto, return, and throw paths. Preserve each native source declaration identity until PHP control flow binds its public Zend name; compile file initializers with caller references, canonical include_once, source manifest lookup, and original declaration/parse diagnostics without interpreting PHP source. Bound pure PHP array literal construction in fresh non-inlined factories while preserving key insertion semantics and ordinary fallbacks. Propagate ordinary PHP array append insertion failure with source location and correct value/reference ownership. Keep same-name declarations that were only scanned, and bind each public PHP name when its own file loads, without dropping either file or aborting prepare. Treat each runtime declaration's synthetic name and public name as the same class when checking protected visibility, and follow the parent recorded on the synthetic name."
+}

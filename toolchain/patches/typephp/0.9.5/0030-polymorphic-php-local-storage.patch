@@ -1,0 +1,271 @@
+--- a/src/Generator/FiberGenerator.php
++++ b/src/Generator/FiberGenerator.php
+@@ -23,6 +23,8 @@
+ 
+ trait FiberGenerator
+ {
++    private bool $generatorYieldsByReference = false;
++
+     protected function containsYield(Function_|ClassMethod $v): bool
+     {
+         return $this->containsYieldInNodes($v->stmts ?? []);
+@@ -64,22 +66,13 @@
+         if ($this->isWasiTarget()) {
+             $this->fatalError($v, 'Fiber and Generator are not supported by the WASI target');
+         }
+-        if ($v->byRef) {
+-            $this->fatalError($v, 'Generators returning by reference are not supported yet');
+-        }
+-        foreach ($v->params as $param) {
+-            if ($param->byRef || $param->variadic) {
+-                $this->fatalError($param, 'Generators with by-reference or variadic parameters are not supported yet');
+-            }
+-        }
++        // The ampersand controls yielded references, not the factory's C++ ABI.
++        $functionDef->returnsByRef = false;
+         if (!$this->generatorReturnTypeAcceptsFiber($v->returnType)) {
+             $this->fatalError($v, 'Generator return type must accept \\FiberGenerator; use Iterator, Traversable, iterable, object, mixed, or omit the return type');
+         }
+-        // Preserve the source-level declared return type before neutralizing the
+-        // runtime return type. The override compatibility check still needs it so
+-        // a generator method can satisfy an interface/abstract contract such as
+-        // `: \Generator` (the runtime object is a `\FiberGenerator`, not a Zend
+-        // `Generator`, so the C++ return type and runtime check stay neutral).
++        // A generator's return expressions describe getReturn(), not the
++        // Generator object returned by calling its factory.
+         if ($v->returnType !== null) {
+             $declared = $this->buildTypeCheckFromNode($v->returnType);
+             $functionDef->declaredReturnTypeCheck = $declared['check'] ?: null;
+@@ -127,10 +120,6 @@
+ 
+         [, $class] = $this->resolveTypeDecl($type, self::DECL_TYPE_OF_RETURN);
+         $class = strtolower(ltrim($class, '\\'));
+-        // `\Generator` is the return type PHP programmers naturally write for a
+-        // generator. TypePHP generators actually return a `\FiberGenerator`, so
+-        // accepting the declared `Generator` type keeps PHP source compatible
+-        // while the runtime object remains a `\FiberGenerator`.
+         return in_array($class, ['iterator', 'traversable', 'fibergenerator', 'generator'], true);
+     }
+ 
+@@ -139,7 +128,7 @@
+         if (!$this->inGeneratorBody) {
+             $this->fatalError($expr, 'The `Expr_Yield` is not supported outside generator functions');
+         }
+-        return 'typephp_fiber_suspend(' . $this->genYieldPayload($expr) . ', nullptr)';
++        return 'typephp_generator_suspend(' . $this->genYieldPayload($expr) . ', nullptr)';
+     }
+ 
+     protected function parseYieldStmt(Yield_ $expr): string
+@@ -148,7 +137,7 @@
+         $closed = $this->genTmpVarName();
+         $this->addLocalVar($closed, Type::BOOL);
+         return $closed . ' = false;' . PHP_EOL
+-            . $this->getIndent() . $closed . ' = typephp_fiber_yield(' . $payload . ');' . PHP_EOL
++            . $this->getIndent() . 'typephp_generator_suspend(' . $payload . ', &' . $closed . ');' . PHP_EOL
+             . $this->getIndent() . 'if (' . $closed . ') {' . PHP_EOL
+             . $this->getIndent() . '    return ' . self::VALUE_NULL . ';' . PHP_EOL
+             . $this->getIndent() . '}';
+@@ -159,7 +148,7 @@
+         $closed = $this->genTmpVarName();
+         $this->addLocalVar($closed, Type::BOOL);
+         return $closed . ' = false;' . PHP_EOL
+-            . $this->getIndent() . 'typephp_fiber_yield_from(' . $this->genYieldFromIterable($expr) . ', &' . $closed . ');' . PHP_EOL
++            . $this->getIndent() . 'typephp_generator_yield_from(' . $this->genYieldFromIterable($expr) . ', &' . $closed . ', _typephp_generator_roots);' . PHP_EOL
+             . $this->getIndent() . 'if (' . $closed . ') {' . PHP_EOL
+             . $this->getIndent() . '    return ' . self::VALUE_NULL . ';' . PHP_EOL
+             . $this->getIndent() . '}';
+@@ -167,22 +156,46 @@
+ 
+     protected function genYieldPayload(Yield_ $expr): string
+     {
++        $this->context->beforeStmtLines[] = '_typephp_generator_roots.setLine(' . $expr->getStartLine() . ');';
+         if ($expr->key) {
+             // PHP evaluates an explicit yield key before its value. Materialize
+             // both operands so lowering helpers cannot hoist value side effects
+             // ahead of the key or defer postfix side effects until after resume.
+             $key = $this->materializeYieldOperand($expr->key, true);
+             $value = $expr->value
+-                ? $this->materializeYieldOperand($expr->value, true)
++                ? $this->materializeGeneratorYieldValue($expr->value, true)
+                 : self::VALUE_NULL;
+-            return 'php::Array(php::StdStrKeyMap{{"key", ' . $key . '}, {"value", ' . $value . '}, {"has_key", true}})';
++            return $this->materializeGeneratorPayload('php::Array(php::StdStrKeyMap{{"key", ' . $key . '}, {"value", ' . $value . '}, {"has_key", true}})');
+         }
+         $value = $expr->value
+-            ? $this->materializeYieldOperand($expr->value)
++            ? $this->materializeGeneratorYieldValue($expr->value)
+             : self::VALUE_NULL;
+-        return 'php::Array(php::StdStrKeyMap{{"value", ' . $value . '}, {"has_key", false}})';
++        return $this->materializeGeneratorPayload('php::Array(php::StdStrKeyMap{{"value", ' . $value . '}, {"has_key", false}})');
+     }
+ 
++    private function materializeGeneratorPayload(string $expression): string
++    {
++        $payload = $this->addTmpVar(Type::ARRAY);
++        $this->context->beforeStmtLines[] = $payload . ' = ' . $expression . ';';
++        return $payload;
++    }
++
++    private function materializeGeneratorYieldValue(Node $expr, bool $force = false): string
++    {
++        if (!$this->generatorYieldsByReference) {
++            return $this->materializeYieldOperand($expr, $force);
++        }
++        if ($expr instanceof Node\Expr\Variable || $expr instanceof Node\Expr\ArrayDimFetch
++            || $expr instanceof Node\Expr\PropertyFetch || $expr instanceof Node\Expr\StaticPropertyFetch) {
++            $reference = $this->addTmpVar(Type::REF);
++            $this->context->beforeStmtLines[] = $reference . ' = ' . $this->convertToRef($expr) . ';';
++            return 'php::Var(&' . $reference . ')';
++        }
++        $this->context->beforeStmtLines[] =
++            'zend_error(E_NOTICE, "Only variable references should be yielded by reference");';
++        return $this->materializeYieldOperand($expr, $force);
++    }
++
+     private function materializeYieldOperand(Node $expr, bool $force = false): string
+     {
+         $this->assertImmutableObjectDoesNotEscape($expr, 'a yielded value');
+@@ -209,7 +222,11 @@
+ 
+     private function genYieldFromIterable(YieldFrom $expr): string
+     {
+-        return $this->materializeYieldOperand($expr->expr);
++        if ($this->generatorYieldsByReference) {
++            $this->fatalError($expr, 'Cannot use "yield from" inside a by-reference generator');
++        }
++        $this->context->beforeStmtLines[] = '_typephp_generator_roots.setLine(' . $expr->getStartLine() . ');' . PHP_EOL;
++        return $this->materializeYieldOperand($expr->expr, true);
+     }
+ 
+     protected function parseYieldFromExpr(YieldFrom $expr): string
+@@ -217,7 +234,7 @@
+         if (!$this->inGeneratorBody) {
+             $this->fatalError($expr, 'The `Expr_YieldFrom` is not supported outside generator functions');
+         }
+-        return 'typephp_fiber_yield_from(' . $this->genYieldFromIterable($expr) . ', nullptr)';
++        return 'typephp_generator_yield_from(' . $this->genYieldFromIterable($expr) . ', nullptr, _typephp_generator_roots)';
+     }
+ 
+     protected function genFiberGeneratorFunction(Function_|ClassMethod $v, FunctionDef $functionDef, string $nativeName): string
+@@ -225,6 +242,8 @@
+         $entryContext = $this->context;
+         $entryIndent = $this->indentLevel;
+         $entryInGeneratorBody = $this->inGeneratorBody;
++        $entryYieldReference = $this->generatorYieldsByReference;
++        $this->generatorYieldsByReference = $v->byRef;
+ 
+         try {
+             return $this->doGenFiberGeneratorFunction($v, $functionDef, $nativeName);
+@@ -232,6 +251,7 @@
+             $this->context = $entryContext;
+             $this->indentLevel = $entryIndent;
+             $this->inGeneratorBody = $entryInGeneratorBody;
++            $this->generatorYieldsByReference = $entryYieldReference;
+         }
+     }
+ 
+@@ -249,9 +269,15 @@
+ 
+         $uses = [];
+         foreach ($functionDef->argInfoList as $argInfo) {
+-            $uses[] = $argInfo->name;
++            // The closure owns the reference cell, not the caller's C++ slot.
++            // A variadic parameter is an array whose elements already carry
++            // any references; the array itself belongs to this invocation.
++            $uses[] = $argInfo->byRef && !$argInfo->variadic
++                ? '&' . $argInfo->name : $argInfo->name;
+         }
+ 
++        $frameVar = $this->genTmpVarName();
++        $uses[] = $frameVar;
+         $code = $functionDeclCode . ' {' . PHP_EOL;
+         $this->indentLevel++;
+         foreach ($functionDef->argInfoList as $i => $argInfo) {
+@@ -265,6 +291,7 @@
+             }
+         }
+ 
++        $code .= $this->getIndent() . 'php::Var ' . $frameVar . ' = typephp_new_generator_frame();' . PHP_EOL;
+         $closureVar = $this->genTmpVarName();
+         $code .= $this->getIndent() . 'php::ClosureFn ' . $closureVar . ' = []('
+             . 'INTERNAL_FUNCTION_PARAMETERS, '
+@@ -280,10 +307,28 @@
+         $this->indentLevel++;
+ 
+         $this->prepareReferenceCaptureDegradations($v->stmts);
++        if ($v->byRef) {
++            $scan = function (mixed $nodes) use (&$scan): void {
++                foreach (is_array($nodes) ? $nodes : [$nodes] as $node) {
++                    if (!$node instanceof Node || $node instanceof Node\FunctionLike
++                        || $node instanceof Node\Stmt\ClassLike) { continue; }
++                    if ($node instanceof Yield_ && $node->value instanceof Node\Expr\Variable
++                        && is_string($node->value->name)) {
++                        $name = $this->escapeVarName($node->value->name);
++                        $this->context->varTypeDegradations[$name] = Type::VAR;
++                    }
++                    foreach ($node->getSubNodeNames() as $name) { $scan($node->{$name}); }
++                }
++            };
++            $scan($v->stmts);
++        }
+ 
+         foreach ($functionDef->argInfoList as $i => $argInfo) {
+-            $code .= $this->getIndent() . Type::VAR . ' ' . $argInfo->name . ' = vars_.get(' . $i . ');' . PHP_EOL;
+-            $this->addArgument($argInfo->name, Type::VAR);
++            $reference = $argInfo->byRef && !$argInfo->variadic;
++            $type = $reference ? Type::REF : Type::VAR;
++            $code .= $this->getIndent() . $type . ' ' . $argInfo->name
++                . ($reference ? '(vars_.get(' . $i . ').const_ptr());' : ' = vars_.get(' . $i . ');') . PHP_EOL;
++            $this->addArgument($argInfo->name, $type);
+             $argumentClass = $argInfo->declaredClass ?: $argInfo->class;
+             if ($argumentClass !== '') {
+                 $this->addObject($argInfo->name, $argumentClass);
+@@ -296,6 +341,10 @@
+         // effect metadata so suspension does not erase Immutable guarantees.
+         $this->initializeImmutableFunctionContext();
+ 
++        $this->prepareValueParameterStorage($v->stmts);
++        $this->preparePersistentReferenceStorage($v->stmts);
++        $this->prepareObjectAssignmentJoins($v->stmts);
++        $this->prepareDynamicVariableStorage($v->stmts);
+         $body = '';
+         $this->indentLevel++;
+         if ($v->stmts) {
+@@ -316,6 +365,20 @@
+         }
+         $this->indentLevel--;
+         $code .= $this->genScopeVarDecl();
++        $rootSlots = [];
++        foreach ($this->context->arguments + $this->context->localVars as $name => $type) {
++            if (isset($this->context->globalVars[$name]) || isset($this->context->nativeLocalClosures[$name])) {
++                continue;
++            }
++            if (in_array($type, [Type::VAR, Type::REF, Type::OBJECT, Type::ARRAY,
++                Type::STR, Type::RESOURCE, Type::STREAM, Type::BIGINT, Type::BIGFLOAT,
++                Type::DECIMAL], true)) {
++                $rootSlots[] = $name . '.ptr()';
++            }
++        }
++        $code .= $this->getIndent() . 'TypephpGeneratorRoots _typephp_generator_roots('
++            . 'vars_.get(' . count($functionDef->argInfoList) . ').object(), {'
++            . implode(', ', $rootSlots) . '});' . PHP_EOL;
+         $code .= $this->getIndent() . 'try {' . PHP_EOL;
+         $code .= $body;
+         $code .= $this->getIndent() . '} catch (zend_object *) {' . PHP_EOL;
+@@ -329,7 +392,15 @@
+         $code .= $this->getIndent() . '};' . PHP_EOL;
+         $args = $uses ? '{ ' . implode(', ', $uses) . ' }' : '{}';
+         $closureExpr = $this->genNewClosure($closureVar, $args, $this->class !== '');
+-        $code .= $this->getIndent() . 'return typephp_new_fiber_generator(' . $closureExpr . ');' . PHP_EOL;
++        $sourceFunction = $this->class
++            ? $this->getMethodPtr($this->getFullClassName(), $functionDef->name)
++            : $this->getFuncPtr($functionDef->runtimePublicName ?: $functionDef->getNamespacedName());
++        $sourceFile = $this->parseMagicConst(new Node\Scalar\MagicConst\File());
++        $code .= $this->getIndent() . 'return typephp_new_native_generator(' . $closureExpr
++            . ', ' . ($v->byRef ? 'true' : 'false') . ', ' . $frameVar . ', ' . $sourceFunction
++            . ', ' . $sourceFile . ', ' . $v->getStartLine() . ', ' . $v->getEndLine()
++            . ', ' . ($v->stmts[0]->getStartLine() ?? $v->getStartLine()) . ', '
++            . ($this->class ? '(this_.isObject() ? this_.object() : nullptr)' : 'nullptr') . ');' . PHP_EOL;
+         $this->indentLevel--;
+         $code .= '}' . PHP_EOL;
+ 

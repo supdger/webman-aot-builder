@@ -1,0 +1,311 @@
+--- a/src/Build/NativeBuildConfigurationTrait.php
++++ b/src/Build/NativeBuildConfigurationTrait.php
+@@ -99,19 +99,35 @@
+     }
+ 
+     /**
+-     * The target triple used for fully-static links.
++     * Resolve the target triple from the SDK manifest instead of the build host.
+      *
+-     * libphp.a embeds musl libc, so the executable must be linked as a musl
+-     * target; the triple also drives the linker's search for musl startup files.
++     * A macOS ARM64 or Windows x64 host may consume the Linux x64 SDK, so
++     * php_uname('m') is not authoritative. The explicit target, when supplied,
++     * must agree with the locked SDK.
+      */
+     protected function getFullStaticTargetTriple(): string
+     {
+-        $arch = match (php_uname('m')) {
+-            'aarch64', 'arm64' => 'aarch64',
+-            'riscv64' => 'riscv64',
+-            default => 'x86_64',
++        $manifestPath = $this->getFullStaticSdkDir() . '/manifest.json';
++        $manifest = is_file($manifestPath)
++            ? json_decode((string) file_get_contents($manifestPath), true)
++            : null;
++        $sdkTarget = is_array($manifest) ? ($manifest['target'] ?? null) : null;
++        $target = match ($sdkTarget) {
++            'linux-x64' => 'x86_64-unknown-linux-musl',
++            'linux-arm64' => 'aarch64-unknown-linux-musl',
++            default => $this->error(
++                '--full-static SDK manifest has an unsupported target: '
++                . (is_scalar($sdkTarget) ? (string) $sdkTarget : 'missing')
++            ),
+         };
+-        return $arch . '-unknown-linux-musl';
++
++        if ($this->targetPlatform !== '' && $this->targetPlatform !== $target) {
++            $this->error(
++                "--target-platform={$this->targetPlatform} does not match "
++                . "the full-static SDK target {$target}"
++            );
++        }
++        return $target;
+     }
+ 
+     /**
+@@ -289,7 +305,7 @@
+                     $libraries[] = $this->windowsPhpCoreLib;  // do not quote
+                 }
+             }
+-            
++
+             // Add the Windows API libraries (required by Win32 GUI programs)
+             $libraries[] = 'user32.lib';   // Windows UI functions (CreateWindow, MessageBox, etc.)
+             $libraries[] = 'gdi32.lib';    // GDI graphics functions
+--- a/src/Build/NativeCommandOptionsTrait.php
++++ b/src/Build/NativeCommandOptionsTrait.php
+@@ -53,13 +53,17 @@
+             }
+         }
+ 
++        $targetPlatform = $this->fullStatic
++            ? $this->getFullStaticTargetTriple()
++            : $this->targetPlatform;
++
+         $values = [
+             'include_paths' => $includePaths,
+             'optimize' => $this->optimizeLevel,
+             'debug' => $this->debug,
+             'sanitize' => $this->sanitize,
+             'march' => $this->march,
+-            'target_platform' => $this->targetPlatform,
++            'target_platform' => $targetPlatform,
+             // Source-composed Nano owns its runtime configuration and uses the
+             // same single-threaded ABI on every native platform.
+             'is_zts' => $this->isNanoMode() ? false : $this->isPhpZts,
+@@ -219,7 +223,7 @@
+                 . basename($this->getTargetFileName()) . '.rsp',
+         ];
+ 
+-        $rpaths = $this->isNanoMode()
++        $rpaths = ($this->isNanoMode() || $this->fullStatic)
+             ? []
+             : $this->getPlatform()->getDefaultRpaths($this->getPhpxDir(), $this->getPhpDir());
+         if (!empty($rpaths)) {
+--- a/src/Build/SourcePipelineTrait.php
++++ b/src/Build/SourcePipelineTrait.php
+@@ -48,7 +48,7 @@
+ 
+     private function getOpcodeBuildPhpCli(): string
+     {
+-        return $this->getPhpDir() . ($this->isWindows() ? '/php.exe' : '/bin/php');
++        return $this->getPhpDir() . ($this->isHostWindows() ? '/php.exe' : '/bin/php');
+     }
+ 
+     /**
+@@ -97,11 +97,16 @@
+         $resolvedFiles = array_values(array_unique($resolvedFiles));
+         $this->sourceDirs = array_values(array_unique($this->sourceDirs));
+ 
++        $this->discoverUnavailableDeclarations($resolvedFiles);
+         $this->discoverNativeClassDeclarations($resolvedFiles);
+         foreach ($resolvedFiles as $key => $file) {
+             try {
+                 $this->prepareFile($file);
+             } catch (Unsupported $exception) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $exception->getMessage(), previous: $exception);
++                }
+                 $this->output(
+                     ' unsupported syntax: ' . $exception->getMessage()
+                     . "\n skip: {$file}\n",
+@@ -109,12 +114,22 @@
+                 );
+                 unset($resolvedFiles[$key]);
+             } catch (SyntaxError $exception) {
+-                $this->error('Syntax error in ' . $file . ': ' . $exception->getMessage());
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $exception->getMessage(), previous: $exception);
++                }
++                $this->output(
++                    ' syntax error: ' . $exception->getMessage()
++                    . "\n skip: {$file}\n",
++                    'error',
++                );
++                unset($resolvedFiles[$key]);
+             }
+         }
+ 
+         $resolvedFiles = array_values($resolvedFiles);
+         $this->composeTraitDeclarations($resolvedFiles);
++        $this->finalizePersistentReferences();
+         $this->discoverNativeGlobalObjects($resolvedFiles);
+         $resolvedFiles = $this->getSortedFiles($resolvedFiles);
+         $this->initializeIncrementalCompilation($resolvedFiles);
+@@ -204,7 +219,7 @@
+         }
+ 
+         $extensionCandidates = [[], ['-d', 'zend_extension=opcache']];
+-        if ($this->isWindows()) {
++        if ($this->isHostWindows()) {
+             $extensionCandidates[] = ['-d', 'zend_extension=' . $this->getPhpDir() . '/ext/php_opcache.dll'];
+         }
+         foreach ($extensionCandidates as $extensionArgs) {
+@@ -265,7 +280,9 @@
+ 
+     protected function canEmbedAnonymousClassOpcode(): bool
+     {
+-        return $this->isBuildModeBin() && !$this->isNanoMode()
++        // Full-static Linux output must not depend on whether the build-host
++        // PHP happens to have OPcache or on host-specific opcode file paths.
++        return !$this->fullStatic && $this->isBuildModeBin() && !$this->isNanoMode()
+             && !$this->isIosTarget() && !$this->isAndroidTarget() && !$this->isWasiTarget()
+             && $this->probeOpcodeBuildExtensionArgs() !== null;
+     }
+@@ -431,7 +448,7 @@
+                 $symbol = $this->isMacos()
+                     ? '_typephp_embedded_archive_start' : 'typephp_embedded_archive_start';
+                 $asmCode = "# archive-sha256: {$embeddedArchive->hash}\n.section {$section}\n.globl {$symbol}\n.p2align 4\n{$symbol}:\n.incbin {$quotedArchive}\n";
+-                $this->writeFile($assembly, $asmCode);
++                $this->writeFile($assembly, $asmCode, false, 'assembly-source');
+                 $this->generatedProjectSources[$assembly] = true;
+                 $sources[] = $assembly;
+             }
+@@ -451,6 +468,7 @@
+                 !$this->isSapiBuild(),
+                 $this->sapiEntryFile,
+             ),
++            false, 'cpp-source',
+         );
+         $this->generatedProjectSources[$output] = true;
+         return $sources;
+@@ -483,6 +501,10 @@
+             $files = array_values(array_diff($files, [$this->sapiEntryFile]));
+         }
+         $files = $this->excludeGeneratedLibraryStub($files);
++        if ($this->runtimeEntrySource !== null) {
++            $files[] = $this->runtimeEntrySource;
++            $files = array_values(array_unique($files));
++        }
+         return $this->filterIgnoredFiles($files);
+     }
+ 
+@@ -584,6 +606,9 @@
+     {
+         $files = $this->getFiles($path);
+         $this->prepareBuildEnvironment();
++        \TypePhp\Resolver\Reflection::setTargetInternalClasses($this->getFullStaticSdkDir(),
++            ExecutableLocator::resolve('llvm-nm'));
++        $this->discoverUnavailableDeclarations($files);
+         $preparedKey = $this->preparedProjectKey($files);
+         if (!$this->restorePreparedProject($preparedKey)) {
+             $files = $this->preprocessProjectFiles($files, $preparedKey);
+@@ -685,7 +710,9 @@
+ 
+         // All Windows build modes depend on the PHPX import library and runtime.
+         // Other platforms only run the existing checks in embedded build mode.
+-        if (!$this->isNanoMode() && !$this->isPhpBuilderBuild()
++        if (!$this->fullStatic
++            && !$this->isNanoMode()
++            && !$this->isPhpBuilderBuild()
+             && ($this->isBuildModeEmbed() || $this->getPlatform() instanceof Windows)) {
+             foreach ($this->getPlatform()->getBuildLibraryWarnings(
+                 $this->getPhpDir(),
+@@ -874,26 +901,48 @@
+         $this->discoverNativeClassDeclarations($files);
+         // Analyze and preprocess the PHP files
+         foreach ($files as $k => $file) {
+-            if (FileScanner::isPhpFile($file)) {
++            if ($this->isPhpSourceFile($file)) {
+                 try {
+                     $this->prepareFile($file);
+                 } catch (Unsupported $e) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $e->getMessage(), previous: $e);
++                }
+                     $this->output(' unsupported syntax: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
+                     $this->registerUnsupportedSapiFile($file);
+                     unset($files[$k]);
+                 } catch (SyntaxError $e) {
+-                    $this->error('Syntax error in ' . $file . ': ' . $e->getMessage());
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $e->getMessage(), previous: $e);
+                 }
++                    $this->output(' syntax error: ' . $e->getMessage() . "\n" . ' skip: ' . $file . "\n", 'error');
++                    unset($files[$k]);
++                }
+             }
+         }
+         // Trait declarations can only be flattened after the complete source
+         // set has been prepared: a consuming class may precede its Trait file.
+         // Complete the declaration graph before any body is converted.
++        $stageStarted = microtime(true);
++        $this->climate->info('prepare stage: trait composition started');
+         $this->composeTraitDeclarations(array_values($files));
++        $this->climate->info(sprintf('prepare stage: trait composition completed in %.2fs',
++            microtime(true) - $stageStarted));
++        $stageStarted = microtime(true);
++        $this->climate->info('prepare stage: reference analysis started');
++        $this->finalizePersistentReferences();
++        $this->climate->info(sprintf('prepare stage: reference analysis completed in %.2fs',
++            microtime(true) - $stageStarted));
+         // Global slots are shared by every translation unit. Fix any Native
+         // pointer ABI now, after declarations are known and before the first
+         // per-file C++ body is generated.
++        $stageStarted = microtime(true);
++        $this->climate->info('prepare stage: native global discovery started');
+         $this->discoverNativeGlobalObjects(array_values($files));
++        $this->climate->info(sprintf('prepare stage: native global discovery completed in %.2fs',
++            microtime(true) - $stageStarted));
+         if (count($files) === $inputCount && $this->preprocessingWarningCount === $warningsBefore) {
+             $this->storePreparedProject($preparedKey);
+         }
+@@ -995,11 +1044,15 @@
+             // identity only after those rules have selected the surviving
+             // aliases, then compile each physical file once.
+             $identity = realpath($file) ?: $file;
++            if ($this->runtimeDeclarationsEnabled) {
++                $this->runtimeFileAliases[$identity][] = $this->getSourceIdentity($file);
++                $this->runtimeFileAliases[$identity][] = $this->getSourceIdentity($this->normalizeLexicalPath($file));
++            }
+             if (isset($seenRealPaths[$identity])) {
+                 continue;
+             }
+             $seenRealPaths[$identity] = true;
+-            $filteredFiles[] = $file;
++            $filteredFiles[] = $this->runtimeDeclarationsEnabled ? $identity : $file;
+         }
+ 
+         return $filteredFiles;
+@@ -1013,6 +1066,7 @@
+         $previousPhase = null;
+         try {
+             $this->composeTraitDeclarations($files);
++            $this->finalizePersistentReferences();
+             $previousPhase = $this->enterCompilerPhase(self::PHASE_CONVERT);
+             $this->initializeProjectConversion($files);
+             $conversion = $this->convertProjectFiles($files);
+@@ -1068,6 +1122,10 @@
+                 $validSourceCount++;
+                 array_push($sourceFiles, ...$generated);
+             } catch (Unsupported $error) {
++                if ($this->fullStatic) {
++                    throw new \RuntimeException("Full-static compilation cannot omit source: {$file}: "
++                        . $error->getMessage(), previous: $error);
++                }
+                 $this->reportUnsupportedProjectFile($file, $error);
+                 unset($files[$key]);
+             }
+@@ -1078,7 +1136,7 @@
+     /** @return list<string>|null */
+     private function convertProjectFile(string $file): ?array
+     {
+-        if (FileScanner::isPhpFile($file)) {
++        if ($this->isPhpSourceFile($file)) {
+             return $this->convertPhpProjectFile(realpath($file) ?: $file);
+         }
+         return FileScanner::isNativeSourceFile($file) ? [$file] : null;
+@@ -1181,7 +1239,7 @@
+         $this->writeFile($manifest, json_encode(
+             array_values(array_unique($this->currentAnonymousFiles)),
+             JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR,
+-        ));
++        ), false, 'generation-manifest');
+     }
+ 
+     /** @return list<string> */

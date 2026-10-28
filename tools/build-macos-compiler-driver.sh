@@ -2,8 +2,8 @@
 
 set -eu
 
-if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
-    echo "Usage: build-macos-compiler-driver.sh <locked-php-source.tar.xz> <output-php> <empty-workspace> [toolchain-manifest]" >&2
+if [ "$#" -ne 3 ]; then
+    echo "Usage: build-macos-compiler-driver.sh <locked-php-source.tar.xz> <output-php> <empty-workspace>" >&2
     exit 64
 fi
 
@@ -15,12 +15,10 @@ fi
 archive=$1
 output=$2
 workspace=$3
-repository=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-manifest=${4:-"$repository/toolchain.lock.json"}
-expected=$(php -r '$m=json_decode(file_get_contents($argv[1]),true,flags:JSON_THROW_ON_ERROR);foreach($m["components"] as $c){if($c["id"]==="php-source"){echo $c["sha256"];exit;}}exit(1);' "$manifest")
+expected=32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1
 actual=$(shasum -a 256 "$archive" | awk '{print $1}')
 [ "$actual" = "$expected" ] || {
-    echo "Selected PHP source digest mismatch." >&2
+    echo "Locked PHP 8.4.26 source digest mismatch." >&2
     exit 78
 }
 [ -d "$workspace" ] && [ -z "$(ls -A "$workspace")" ] || {
@@ -34,19 +32,14 @@ actual=$(shasum -a 256 "$archive" | awk '{print $1}')
 
 workspace=$(cd "$workspace" && pwd -P)
 /usr/bin/tar -xf "$archive" -C "$workspace"
-source_root=
-for entry in "$workspace"/*; do
-    [ -d "$entry" ] || continue
-    [ -z "$source_root" ] || { echo "PHP source archive requires one root." >&2; exit 78; }
-    source_root=$entry
-done
+source_root="$workspace/php-8.4.26"
 [ -f "$source_root/configure" ] || {
     echo "Locked PHP source archive has an unexpected root." >&2
     exit 78
 }
 sdk=$(xcrun --show-sdk-path)
 prefix=/opt/webman-aot-builder/compiler-php
-export CFLAGS="-O2 -ffile-prefix-map=$source_root=/usr/src/webman-aot-builder/php-source"
+export CFLAGS="-O2 -ffile-prefix-map=$source_root=/usr/src/webman-aot-builder/php-8.4.26"
 export SOURCE_DATE_EPOCH=0
 
 (
@@ -80,7 +73,10 @@ export SOURCE_DATE_EPOCH=0
 
 cp "$source_root/sapi/cli/php" "$output"
 chmod 700 "$output"
-"$output" -n "$repository/tools/check-toolchain-capabilities.php" php "$output"
+[ "$("$output" -n -r 'echo PHP_VERSION;')" = 8.4.26 ] || {
+    echo "Compiler PHP driver version mismatch." >&2
+    exit 78
+}
 if strings "$output" | grep -F "$workspace" >/dev/null; then
     echo "Compiler PHP driver contains its private build workspace." >&2
     exit 78

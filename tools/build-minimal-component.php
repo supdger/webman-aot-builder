@@ -7,195 +7,56 @@ declare(strict_types=1);
  * prepared generation. The resulting ZIP is shared by small and full installers.
  */
 
-/** Create a new generation using a locked released component, not local caches. */
-function reuseComponent(array $arguments, string $repository): array
-{
-    $options = [];
-    foreach (array_slice($arguments, 3) as $argument) {
-        if (!preg_match('/^--(reuse|typephp|sdk)=(.+)$/D', $argument, $match)
-            || isset($options[$match[1]])) {
-            throw new RuntimeException('Unknown or duplicate component reuse option');
-        }
-        $options[$match[1]] = $match[2];
-    }
-    if (count($options) !== 3) {
-        throw new RuntimeException('Reuse requires --reuse=ZIP --typephp=SOURCE --sdk=TAR.XZ');
-    }
-    $lock = json_decode(file_get_contents($repository . '/toolchain.lock.json'), true, flags: JSON_THROW_ON_ERROR);
-    $zip = new ZipArchive();
-    if (!is_file($options['reuse']) || is_link($options['reuse']) || $zip->open($options['reuse']) !== true) {
-        throw new RuntimeException('Predecessor component archive is missing');
-    }
-    try {
-        $json = $zip->getFromName('minimal-component.json');
-        $manifest = is_string($json) ? json_decode($json, true, flags: JSON_THROW_ON_ERROR) : null;
-        $host = $manifest['host'] ?? null;
-        $policy = $lock['evidence']['patchedSdk']['componentInputs'][$host ?? ''] ?? null;
-        if (!is_array($policy) || !is_string($json)
-            || hash_file('sha256', $options['reuse']) !== ($policy['sha256'] ?? null)
-            || hash('sha256', $json) !== ($policy['manifestSha256'] ?? null)
-            || ($manifest['toolchainLockSha256'] ?? null) !== ($policy['toolchainLockSha256'] ?? null)) {
-            throw new RuntimeException('Predecessor differs from the approved released component');
-        }
-    } finally {
-        $zip->close();
-    }
-    spl_autoload_register(static function (string $class) use ($repository): void {
-        $prefix = 'WebmanAotBuilder\\';
-        if (str_starts_with($class, $prefix)) {
-            require $repository . '/src/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
-        }
-    });
-    $lockErrors = (new WebmanAotBuilder\Toolchain\LockValidator())->validate($lock);
-    if ($lockErrors !== []) { throw new RuntimeException('Component reuse lock is invalid: ' . implode('; ', $lockErrors)); }
-    $component = new WebmanAotBuilder\Toolchain\MinimalComponent();
-    fwrite(STDERR, "[reuse] Verify every predecessor file, link and executable mode\n");
-    $component->extract($options['reuse'], $policy['sha256'], $arguments[1], $host,
-        $policy['toolchainLockSha256'], static fn (string $message) => fwrite(STDERR, "[reuse] {$message}\n"));
-    $generation = realpath($arguments[1]);
-    $predecessorLock = json_decode(file_get_contents($generation . '/toolchain.lock.json'), true, flags: JSON_THROW_ON_ERROR);
-    $comparison = $lock;
-    unset($comparison['evidence']['patchedSdk']);
-    $predecessorComparison = $predecessorLock;
-    unset($predecessorComparison['evidence']['patchedSdk']);
-    foreach ($comparison['components'] as &$componentDefinition) {
-        if ($componentDefinition['id'] === 'phpx-sdk-linux-x64') {
-            foreach ($predecessorLock['components'] as $previousDefinition) {
-                if ($previousDefinition['id'] === 'phpx-sdk-linux-x64') { $componentDefinition = $previousDefinition; }
-            }
-        }
-    }
-    unset($componentDefinition);
-    $coveredIds = ['openssl', 'curl', 'libzip', 'icu', 'libpq', 'zlib', 'libxml2', 'oniguruma'];
-    $seenCovered = [];
-    $oldSdkDigest = null;
-    foreach ($predecessorLock['components'] as $definition) {
-        if ($definition['id'] === 'phpx-sdk-linux-x64') { $oldSdkDigest = $definition['sha256']; }
-    }
-    $newSdkDigest = null;
-    foreach ($lock['components'] as $definition) {
-        if ($definition['id'] === 'phpx-sdk-linux-x64') { $newSdkDigest = $definition['sha256']; }
-    }
-    foreach ($comparison['embeddedLibraries'] as &$componentDefinition) {
-        if (($componentDefinition['coveredBy'] ?? null) === 'phpx-sdk-linux-x64') {
-            if (!in_array($componentDefinition['id'], $coveredIds, true)
-                || $componentDefinition['artifactSha256'] !== $newSdkDigest) {
-                throw new RuntimeException('Embedded library derived SDK binding drifted');
-            }
-            $seenCovered[] = $componentDefinition['id'];
-            foreach ($predecessorLock['embeddedLibraries'] as $previousDefinition) {
-                if ($previousDefinition['id'] === $componentDefinition['id']) {
-                    if ($previousDefinition['artifactSha256'] !== $oldSdkDigest) {
-                        throw new RuntimeException('Predecessor embedded SDK binding drifted');
-                    }
-                    $componentDefinition['artifactSha256'] = $previousDefinition['artifactSha256'];
-                }
-            }
-        }
-    }
-    unset($componentDefinition);
-    sort($coveredIds); sort($seenCovered);
-    if ($coveredIds !== $seenCovered || $comparison !== $predecessorComparison) {
-        throw new RuntimeException('Component reuse cannot change other locked toolchain inputs');
-    }
-    $prepared = json_decode(file_get_contents($generation . '/prepared/prepared-toolchain.json'), true, flags: JSON_THROW_ON_ERROR);
-    $typephp = $generation . '/prepared/' . $prepared['typephp'];
-    $source = realpath($options['typephp']);
-    (new WebmanAotBuilder\Toolchain\TypePhpPatchSourceVerifier())->verify(
-        $options['typephp'], $repository . '/toolchain/patches/typephp/0.9.2/manifest.json');
-    $rules = json_decode(file_get_contents($repository . '/toolchain/patches/typephp/0.9.2/manifest.json'), true, flags: JSON_THROW_ON_ERROR);
-    $replacements = [];
-    foreach ($rules['rules'] as $rule) {
-        $target = $typephp . '/' . $rule['path'];
-        if (is_link($target) || !is_dir(dirname($target))) {
-            throw new RuntimeException('Approved source replacement has an unsafe parent');
-        }
-        if (!copy($source . '/' . $rule['path'], $target)) {
-            throw new RuntimeException('Cannot install approved TypePHP source');
-        }
-        $replacements[substr($target, strlen($generation) + 1)] = $rule['afterSha256'];
-    }
-    (new WebmanAotBuilder\Toolchain\TypePhpPatchSourceVerifier())->verify(
-        $typephp, $repository . '/toolchain/patches/typephp/0.9.2/manifest.json');
-    $sdkLock = null;
-    foreach ($lock['components'] as $entry) {
-        if ($entry['id'] === 'phpx-sdk-linux-x64') { $sdkLock = $entry; }
-    }
-    if (!is_array($sdkLock) || !is_file($options['sdk']) || is_link($options['sdk'])
-        || hash_file('sha256', $options['sdk']) !== $sdkLock['sha256']) {
-        throw new RuntimeException('Derived SDK archive differs from the approved lock');
-    }
-    $sdk = $generation . '/prepared/' . $prepared['phpx'] . '/full-static/sdk';
-    $sdkPrefix = substr($sdk, strlen($generation) + 1) . '/';
-    $staging = $generation . '-sdk-input';
-    if (file_exists($staging) || !mkdir($staging, 0700)) { throw new RuntimeException('SDK staging must be new'); }
-    fwrite(STDERR, "[reuse] Extract the approved derived SDK archive\n");
-    $tar = PHP_OS_FAMILY === 'Windows' ? 'tar.exe' : '/usr/bin/tar';
-    $process = proc_open([$tar, '-xf', $options['sdk'], '-C', $staging], [STDIN, STDOUT, STDERR], $pipes);
-    if (!is_resource($process) || proc_close($process) !== 0) { throw new RuntimeException('Derived SDK extraction failed'); }
-    $sdkRoot = $staging . '/' . $lock['evidence']['patchedSdk']['archiveRoot'];
-    if (!is_dir($sdkRoot) || is_link($sdkRoot)
-        || !rename($sdk, $generation . '-predecessor-sdk') || !rename($sdkRoot, $sdk)) {
-        throw new RuntimeException('Cannot replace the private derived SDK');
-    }
-    $guard = new WebmanAotBuilder\Toolchain\SdkArchiveGuard();
-    $guard->assertDerivation($sdk, $lock['evidence']['patchedSdk']);
-    if ((new WebmanAotBuilder\Toolchain\StaticSdkFingerprint())->digest($sdk)
-        !== $lock['evidence']['patchedSdk']['sdkSha256']) {
-        throw new RuntimeException('Derived SDK fingerprint differs');
-    }
-    foreach ($manifest['entries'] as $relative => $entry) {
-        if (str_starts_with($relative, $sdkPrefix) || isset($replacements[$relative])) { continue; }
-        $path = $generation . '/' . $relative;
-        if ($entry['type'] === 'file' && (!is_file($path) || is_link($path)
-            || hash_file('sha256', $path) !== $entry['sha256'] || filesize($path) !== $entry['size']
-            || is_executable($path) !== $entry['executable'])) {
-            throw new RuntimeException('Unapproved predecessor file changed: ' . $relative);
-        }
-        if ($entry['type'] === 'link' && (!is_link($path) || readlink($path) !== $entry['target'])) {
-            throw new RuntimeException('Unapproved predecessor link changed: ' . $relative);
-        }
-    }
-    copy($repository . '/toolchain.lock.json', $generation . '/toolchain.lock.json');
-    $generationData = json_decode(file_get_contents($generation . '/manifest.json'), true, flags: JSON_THROW_ON_ERROR);
-    $generationData['lockSha256'] = hash_file('sha256', $repository . '/toolchain.lock.json');
-    $generationData['generation'] = basename($generation);
-    foreach ($generationData['components'] as &$entry) {
-        if ($entry['id'] === 'phpx-sdk-linux-x64') {
-            $entry['version'] = $sdkLock['version'];
-            $entry['artifact'] = basename(parse_url($sdkLock['sourceUrl'], PHP_URL_PATH));
-            $entry['sha256'] = $sdkLock['sha256'];
-        }
-    }
-    unset($entry);
-    $prepared['lockSha256'] = $generationData['lockSha256'];
-    $prepared['sdkSha256'] = $lock['evidence']['patchedSdk']['sdkSha256'];
-    foreach (['manifest.json' => $generationData, 'prepared/prepared-toolchain.json' => $prepared] as $path => $data) {
-        file_put_contents($generation . '/' . $path, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
-    }
-    $ledger = ['schema' => 'webman-aot-builder-component-derivation-v1', 'host' => $host,
-        'predecessor' => $policy, 'sourceReplacements' => $replacements,
-        'patchManifestSha256' => hash_file('sha256', $repository . '/toolchain/patches/typephp/0.9.2/manifest.json'),
-        'sdkArchiveSha256' => $sdkLock['sha256'], 'sdkSha256' => $prepared['sdkSha256'],
-        'toolchainLockSha256' => $prepared['lockSha256']];
-    file_put_contents($generation . '/component-derivation.json', json_encode($ledger, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_THROW_ON_ERROR) . "\n");
-    fwrite(STDERR, "[reuse] Predecessor verified; approved source and complete SDK replaced\n");
-    return $ledger;
+if ($argc < 3) {
+    fwrite(STDERR, "Usage: php tools/build-minimal-component.php GENERATION OUTPUT.zip [--prepared-root=PATH] [--artifacts-root=PATH] [--compiler-source-root=PATH]\n");
+    exit(64);
 }
 
-$reuse = $argc === 6 ? reuseComponent($argv, dirname(__DIR__)) : null;
+function componentInputRoots(array $arguments, string $generation): array
+{
+    $roots = ['prepared-root' => $generation . '/prepared', 'artifacts-root' => $generation . '/artifacts'];
+    $seen = [];
+    foreach ($arguments as $argument) {
+        if (preg_match('/^--(prepared-root|artifacts-root|compiler-source-root)=(.+)$/D', $argument, $match) !== 1
+            || isset($seen[$match[1]])
+        ) {
+            throw new InvalidArgumentException('unknown or repeated minimal component input option: ' . $argument);
+        }
+        $path = $match[2];
+        $canonical = realpath($path);
+        if (!is_string($canonical) || !is_dir($canonical) || is_link($path)
+            || $canonical !== rtrim($path, DIRECTORY_SEPARATOR)
+        ) {
+            throw new InvalidArgumentException('minimal component input root must be a canonical directory: ' . $path);
+        }
+        $roots[$match[1]] = $canonical;
+        $seen[$match[1]] = true;
+    }
+    return $roots;
+}
 
-if ($argc !== 3 && $argc !== 6) {
-    fwrite(STDERR, "Usage: php tools/build-minimal-component.php GENERATION OUTPUT.zip [--reuse=OLD.zip --typephp=SOURCE --sdk=NEW.tar.xz]\n");
-    exit(64);
+function componentPreparedEntry(string $path, string $prepared): string
+{
+    $prefix = str_replace('\\', '/', rtrim($prepared, '/\\')) . '/';
+    $normalized = str_replace('\\', '/', $path);
+    if (!str_starts_with($normalized, $prefix)) {
+        throw new RuntimeException('prepared component entry escaped its declared input root');
+    }
+    return 'prepared/' . substr($normalized, strlen($prefix));
 }
 
 $generation = realpath($argv[1]);
 $output = $argv[2];
-if (!is_string($generation) || !is_dir($generation . '/prepared')
+if (!is_string($generation)
     || !str_ends_with(strtolower($output), '.zip')
 ) {
     throw new RuntimeException('prepared generation or output ZIP is invalid');
+}
+$inputRoots = componentInputRoots(array_slice($argv, 3), $generation);
+$prepared = $inputRoots['prepared-root'];
+$artifacts = $inputRoots['artifacts-root'];
+if (!is_dir($prepared) || !is_dir($artifacts)) {
+    throw new RuntimeException('prepared generation input directories are missing');
 }
 $root = dirname(__DIR__);
 $lockContents = file_get_contents($generation . '/toolchain.lock.json');
@@ -213,6 +74,8 @@ if (!is_array($lock) || !in_array($host, ['macos-arm64', 'windows-x86_64'], true
 }
 
 $selected = [];
+$sourceArchives = [];
+$archiveDigests = [];
 $generatorFound = false;
 foreach ($lock['components'] ?? [] as $component) {
     if (!is_array($component)) {
@@ -226,16 +89,15 @@ foreach ($lock['components'] ?? [] as $component) {
     }
     $urlPath = parse_url((string) ($component['sourceUrl'] ?? ''), PHP_URL_PATH);
     $name = is_string($urlPath) ? basename($urlPath) : '';
-    $path = $generation . '/artifacts/' . $name;
+    $path = $artifacts . '/' . $name;
     $digest = is_file($path) && !is_link($path) ? hash_file('sha256', $path) : false;
-    if ($reuse !== null && $id !== 'webman-typephp-generator-source') {
-        continue;
-    }
     if ($name === '' || !is_string($digest)
         || !hash_equals((string) ($component['sha256'] ?? ''), $digest)
     ) {
         throw new RuntimeException("original source artifact is missing or corrupt: {$id}");
     }
+    $sourceArchives[$id] = $path;
+    $archiveDigests[$id] = $digest;
     if ($id === 'webman-typephp-generator-source') {
         $selected['artifacts/' . $name] = $path;
         $generatorFound = true;
@@ -246,11 +108,27 @@ if (!$generatorFound) {
     throw new RuntimeException('locked Webman generator archive is missing');
 }
 
-if ($reuse !== null) { $selected['component-derivation.json'] = $generation . '/component-derivation.json'; }
-foreach (['manifest.json', 'toolchain.lock.json', 'prepared/prepared-toolchain.json'] as $relative) {
+$composition = null;
+$compilerSource = $inputRoots['compiler-source-root'] ?? null;
+if (is_string($compilerSource)) {
+    spl_autoload_register(static function (string $class) use ($root): void {
+        $prefix = 'WebmanAotBuilder\\';
+        if (str_starts_with($class, $prefix)) {
+            $file = $root . '/src/' . str_replace('\\', '/', substr($class, strlen($prefix))) . '.php';
+            if (is_file($file)) { require $file; }
+        }
+    });
+    fwrite(STDERR, "[compose] Verifying complete compiler source and prepared runtime compatibility\n");
+    $sourceVerifier = new WebmanAotBuilder\Toolchain\CompilerComponentSource();
+    $composition = $sourceVerifier->verify($compilerSource, $prepared, $sourceArchives,
+        $root . '/toolchain/patches/typephp/0.9.5/manifest.json');
+    fwrite(STDERR, "[compose] Verified complete source, maintenance rules, runtime and authoritative Composer map\n");
+}
+
+foreach (['manifest.json', 'toolchain.lock.json'] as $relative) {
     $selected[$relative] = $generation . '/' . $relative;
 }
-$prepared = $generation . '/prepared';
+$selected['prepared/prepared-toolchain.json'] = $prepared . '/prepared-toolchain.json';
 $selected['prepared/php-config'] = $prepared . '/php-config';
 if (!is_dir($selected['prepared/php-config']) || is_link($selected['prepared/php-config'])) {
     throw new RuntimeException('prepared PHP configuration directory is missing or unsafe');
@@ -265,10 +143,11 @@ foreach (['php-driver', 'sysroot', 'typephp-source'] as $directory) {
         RecursiveIteratorIterator::LEAVES_ONLY
     );
     foreach ($iterator as $item) {
-        $relative = str_replace('\\', '/', substr($item->getPathname(), strlen($generation) + 1));
+        $relative = componentPreparedEntry($item->getPathname(), $prepared);
         if ($relative === 'prepared/sysroot/usr/lib/bfd-plugins/liblto_plugin.so') {
             if (!$item->isLink()
-                || preg_match('~^//usr/libexec/gcc/x86_64-alpine-linux-musl/[^/]+/liblto_plugin\.so$~D', (string) readlink($item->getPathname())) !== 1
+                || readlink($item->getPathname())
+                    !== '//usr/libexec/gcc/x86_64-alpine-linux-musl/12.2.1/liblto_plugin.so'
             ) {
                 throw new RuntimeException('locked sysroot bfd plugin link drifted');
             }
@@ -282,24 +161,44 @@ foreach (['php-driver', 'sysroot', 'typephp-source'] as $directory) {
         ) {
             continue;
         }
+        if ($composition !== null && $directory === 'typephp-source') {
+            $oldPrefix = 'prepared/' . substr($composition['oldCompilerRoot'], strlen($prepared) + 1) . '/';
+            // The entire prepared SDK remains the runtime input; compiler source
+            // replacement never replaces its libraries, headers or metadata.
+            if (!str_starts_with($relative, $oldPrefix . 'vendor/swoole/phpx/full-static/sdk/')) { continue; }
+        }
         if ($item->isFile() || $item->isLink()) {
             $selected[$relative] = $item->getPathname();
         }
     }
 }
 
-$llvmRelative = 'llvm';
-if ($host !== 'macos-arm64') {
-    $roots = glob($prepared . '/llvm-payload/*', GLOB_ONLYDIR) ?: [];
-    if (count($roots) !== 1 || is_link($roots[0])) { throw new RuntimeException('prepared LLVM needs one safe payload root'); }
-    $llvmRelative = 'llvm-payload/' . basename($roots[0]);
+$compositionJson = null;
+$inlineEntries = [];
+if ($composition !== null) {
+    $compilerEntry = 'prepared/' . substr($composition['oldCompilerRoot'], strlen($prepared) + 1) . '/';
+    foreach ($composition['files'] as $relative => $_) {
+        if (!str_starts_with($relative, 'vendor/swoole/phpx/full-static/sdk/')) {
+            $selected[$compilerEntry . $relative] = $compilerSource . '/' . $relative;
+        }
+    }
+    $compositionMetadata = $composition;
+    unset($compositionMetadata['files'], $compositionMetadata['runtimeFiles'], $compositionMetadata['oldCompilerRoot']);
+    $compositionJson = json_encode($compositionMetadata, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
+    $preparedMetadata = json_decode(file_get_contents($prepared . '/prepared-toolchain.json'), true, flags: JSON_THROW_ON_ERROR);
+    $preparedMetadata['compilerSourceProvenanceSha256'] = hash('sha256', $compositionJson);
+    $inlineEntries['prepared/prepared-toolchain.json'] = json_encode($preparedMetadata, JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n";
 }
+
+$llvmRelative = $host === 'macos-arm64'
+    ? 'llvm'
+    : 'llvm-payload/clang+llvm-19.1.7-x86_64-pc-windows-msvc';
 $llvm = $prepared . '/' . $llvmRelative;
 if (!is_dir($llvm) || is_link($llvm)) {
     throw new RuntimeException('prepared LLVM directory is missing or unsafe');
 }
 $llvmTools = $host === 'macos-arm64'
-    ? ['clang++', 'clang', 'ld.lld', 'lld', 'llvm-nm', 'llvm-objcopy']
+    ? ['clang++', 'clang', 'clang-19', 'ld.lld', 'lld', 'llvm-nm', 'llvm-objcopy']
     : ['clang++.exe', 'clang.exe', 'ld.lld.exe', 'lld.exe', 'lld-link.exe', 'llvm-ar.exe',
         'llvm-nm.exe', 'llvm-objcopy.exe', 'llvm-ranlib.exe'];
 foreach ($llvmTools as $name) {
@@ -308,25 +207,8 @@ foreach ($llvmTools as $name) {
         throw new RuntimeException("required LLVM tool is missing: {$name}");
     }
     $selected['prepared/' . $llvmRelative . '/bin/' . $name] = $path;
-    $linkedTool = $path;
-    $seenLinks = [];
-    while (is_link($linkedTool)) {
-        $linkTarget = readlink($linkedTool);
-        $target = is_string($linkTarget) ? dirname($linkedTool) . '/' . $linkTarget : '';
-        if (isset($seenLinks[$linkedTool]) || !is_string($linkTarget)
-            || $linkTarget === '' || str_starts_with($linkTarget, '/')
-            || str_contains($linkTarget, '\\') || !is_file($target)
-            || realpath(dirname($target)) !== realpath($llvm . '/bin')) {
-            throw new RuntimeException("required LLVM tool target is unsafe: {$name}");
-        }
-        $seenLinks[$linkedTool] = true;
-        $selected['prepared/' . $llvmRelative . '/bin/' . basename($target)] = $target;
-        $linkedTool = $target;
-    }
 }
-$resourceRoots = glob($llvm . '/lib/clang/*', GLOB_ONLYDIR) ?: [];
-if (count($resourceRoots) !== 1) { throw new RuntimeException('selected LLVM needs one resource directory'); }
-$clangResources = $resourceRoots[0];
+$clangResources = $llvm . '/lib/clang/19';
 if (!is_dir($clangResources) || is_link($clangResources)) {
     throw new RuntimeException('locked Clang resource directory is missing');
 }
@@ -336,7 +218,7 @@ $iterator = new RecursiveIteratorIterator(
 );
 foreach ($iterator as $item) {
     if ($item->isFile() || $item->isLink()) {
-        $relative = str_replace('\\', '/', substr($item->getPathname(), strlen($generation) + 1));
+        $relative = componentPreparedEntry($item->getPathname(), $prepared);
         $selected[$relative] = $item->getPathname();
     }
 }
@@ -348,11 +230,18 @@ if ($zip->open($output, ZipArchive::CREATE | ZipArchive::EXCL) !== true) {
 }
 $entries = [];
 $omittedLinks = [];
+$projectionFailure = null;
 try {
     $done = 0;
     $total = count($selected);
     foreach ($selected as $relative => $path) {
         $done++;
+        if (isset($inlineEntries[$relative])) {
+            $contents = $inlineEntries[$relative];
+            if (!$zip->addFromString($relative, $contents)) { throw new RuntimeException('cannot add composed prepared metadata'); }
+            $entries[$relative] = ['type'=>'file', 'sha256'=>hash('sha256', $contents), 'size'=>strlen($contents), 'executable'=>false];
+            continue;
+        }
         if (is_dir($path) && !is_link($path)) {
             $entries[$relative] = ['type' => 'directory'];
             continue;
@@ -423,6 +312,14 @@ try {
             fwrite(STDERR, "[bundle] Added {$done}/{$total} entries\n");
         }
     }
+    if ($compositionJson !== null) {
+        $relative = 'prepared/compiler-source-provenance.json';
+        if (!$zip->addFromString($relative, $compositionJson)) {
+            throw new RuntimeException('cannot add compiler source provenance');
+        }
+        $entries[$relative] = ['type' => 'file', 'sha256' => hash('sha256', $compositionJson),
+            'size' => strlen($compositionJson), 'executable' => false];
+    }
     $manifest = [
         'schema' => 'webman-aot-builder-minimal-component-v1',
         'host' => $host,
@@ -430,6 +327,7 @@ try {
         'entries' => $entries,
         'omittedDanglingLinks' => $omittedLinks,
     ];
+    if ($compositionJson !== null) { $manifest['compilerSourceProvenanceSha256'] = hash('sha256', $compositionJson); }
     $manifestJson = json_encode(
         $manifest,
         JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES
@@ -437,8 +335,23 @@ try {
     if (!$zip->addFromString('minimal-component.json', $manifestJson)) {
         throw new RuntimeException('cannot add minimal component manifest');
     }
+} catch (Throwable $error) {
+    $projectionFailure = $error;
+    throw $error;
 } finally {
-    $zip->close();
+    $closed = $zip->close();
+    if ($composition !== null && !$closed && $projectionFailure === null) {
+        throw new RuntimeException('composed component ZIP could not be finalized');
+    }
+}
+if ($composition !== null) {
+    $sourceVerifier->unchanged($compilerSource, $composition['files']);
+    $sourceVerifier->unchanged($composition['oldCompilerRoot'] . '/vendor/swoole/phpx', $composition['runtimeFiles'], true);
+    foreach ($sourceArchives as $id => $path) {
+        if (hash_file('sha256', $path) !== $archiveDigests[$id]) {
+            throw new RuntimeException('locked source archive changed during compiler composition');
+        }
+    }
 }
 $bundleDigest = hash_file('sha256', $output);
 $bundleSize = filesize($output);

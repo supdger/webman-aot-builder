@@ -20,7 +20,6 @@ final class DistributionAssembler
      * @param array{
      *   sourceTreeSha256:string,
      *   composerLockSha256:string,
-     *   profile:string,
      *   compatibilityLockSha256:string,
      *   toolchainLockSha256:string,
      *   normalizedInputSha256:string,
@@ -30,8 +29,8 @@ final class DistributionAssembler
      * @param list<string> $sensitiveMarkers
      * @param (\Closure(string):void)|null $beforeStage
      * @param list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}> $generatedMappings
-     * @param array<string,string> $generatedAdaptations
-     * @return array{path:string,previous:?string,verification:array<string,mixed>}
+     * @param list<array{path:string,reason:string}> $interpreted
+     * @return array{path:string,previous:?string,verification:array<string,mixed>,coverage:array{direct:int,shadow:int,interpreted:int}}
      */
     public function assemble(
         string $projectDirectory,
@@ -44,7 +43,7 @@ final class DistributionAssembler
         array $sensitiveMarkers = [],
         ?\Closure $beforeStage = null,
         array $generatedMappings = [],
-        array $generatedAdaptations = []
+        array $interpreted = []
     ): array {
         $project = realpath($projectDirectory);
         $mirror = realpath($mirrorDirectory);
@@ -55,7 +54,8 @@ final class DistributionAssembler
             || is_link($projectDirectory)
             || is_link($mirrorDirectory)
             || is_link($elfFile)
-            || !ProjectMirror::isOwnedPath($mirror, $project)
+            || $this->normalizePath($mirror)
+                !== $this->normalizePath($project) . '/.webman-aot-builder/build/project'
             || $this->normalizePath(dirname($elf))
                 !== $this->normalizePath($mirror) . '/build'
             || !is_file($elf)
@@ -84,12 +84,6 @@ final class DistributionAssembler
                 'distribution assembly inputs differ from locked project sources'
             );
         }
-        $profile = (new ProfileDetector($mirror))->detect();
-        if ($profile->name() !== ($inputs['profile'] ?? null)) {
-            throw new ConfigurationException(
-                'distribution assembly profile differs from the generated project'
-            );
-        }
         $sensitiveMarkers = array_values(array_unique(array_merge(
             $sensitiveMarkers,
             [$project, $mirror],
@@ -99,10 +93,8 @@ final class DistributionAssembler
         $beforeStage?->__invoke('coverage');
         $plan = (new GeneratedProjectCoveragePlanner())->plan(
             $mirror,
-            $profile,
             $compatibilityLockFile,
-            $generatedMappings,
-            $generatedAdaptations
+            $generatedMappings
         );
         foreach ($plan['resources']->entries() as $resource) {
             if ($resource['kind'] !== 'file') {
@@ -144,7 +136,8 @@ final class DistributionAssembler
             $plan['coverage'],
             $plan['resources'],
             $inputs,
-            $host
+            $host,
+            $interpreted
         );
         $beforeStage?->__invoke('verify');
         $verification = $this->verifier->verify($candidate, $sensitiveMarkers);
@@ -161,7 +154,14 @@ final class DistributionAssembler
                 $this->assertSourceUnchanged($project, $source);
             }
         );
-        return $published + ['verification' => $verification];
+        return $published + [
+            'verification' => $verification,
+            'coverage' => [
+                'direct' => $plan['compiled']['direct'] ?? 0,
+                'shadow' => $plan['compiled']['shadow'] ?? 0,
+                'interpreted' => $plan['compiled']['interpreted'] ?? count($interpreted),
+            ],
+        ];
     }
 
     /**

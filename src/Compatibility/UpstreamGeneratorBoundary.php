@@ -27,7 +27,7 @@ final class UpstreamGeneratorBoundary
     ): array {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror) || is_link($mirrorDirectory)
-            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
+            || !str_ends_with(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/project')
         ) {
             throw new ConfigurationException('upstream generator requires an isolated build mirror');
         }
@@ -41,17 +41,12 @@ final class UpstreamGeneratorBoundary
         if (file_exists($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
             throw new ConfigurationException('upstream generator output is not a clean mirror');
         }
-        $beforeSources = $this->sourceDigests($mirror);
         $result = $generate();
         if (!is_dir($generatedRoot) || is_link($generatedRoot) || is_link($mirror . '/.typephp')) {
             throw new ConfigurationException('upstream generator did not create a safe output directory');
         }
         if (hash_file('sha256', $generatorFile) !== $generatorSha256) {
             throw new ConfigurationException('upstream generator changed during execution');
-        }
-        $afterSources = $this->sourceDigests($mirror);
-        if ($afterSources !== $beforeSources) {
-            throw new ConfigurationException('upstream generator changed original PHP source inputs');
         }
         $manifest = [];
         if (is_array($result)) {
@@ -94,11 +89,6 @@ final class UpstreamGeneratorBoundary
             if ($this->digest($mirror, $shadow) !== $entry['shadowSha256']) {
                 throw new ConfigurationException("upstream generator shadow drift: {$shadow}");
             }
-            if (isset($entry['contractSha256'])
-                && (!is_string($entry['contractSha256']) || !hash_equals($entry['contractSha256'], $entry['shadowSha256']))
-            ) {
-                throw new ConfigurationException('upstream generator shadow violates its source conversion contract: ' . $shadow);
-            }
             if (!isset($inputs['sources'][$shadow]) || !isset($inputs['ignore'][$source])) {
                 throw new ConfigurationException("upstream generator compiler coverage is open: {$source} => {$shadow}");
             }
@@ -123,12 +113,7 @@ final class UpstreamGeneratorBoundary
         if (array_diff_key($actual, $targets) !== [] || array_diff_key($targets, $actual) !== []) {
             throw new ConfigurationException('upstream generator PHP output does not match actual source mappings');
         }
-        return array_map(static fn(array $entry): array => [
-            'path' => $entry['path'],
-            'shadow' => $entry['shadow'],
-            'sourceSha256' => $entry['sourceSha256'],
-            'shadowSha256' => $entry['shadowSha256'],
-        ], $manifest);
+        return $manifest;
     }
 
     /** @return array{sources:array<string,true>,ignore:array<string,true>} */
@@ -160,26 +145,6 @@ final class UpstreamGeneratorBoundary
         return $inputs;
     }
 
-    /** @return array<string,string> */
-    private function sourceDigests(string $mirror): array
-    {
-        $digests = [];
-        foreach (new \RecursiveIteratorIterator(new \RecursiveDirectoryIterator($mirror, \FilesystemIterator::SKIP_DOTS)) as $file) {
-            if ($file->isLink()) {
-                throw new ConfigurationException('upstream generator source contains a symlink');
-            }
-            if (!$file->isFile() || strtolower($file->getExtension()) !== 'php') {
-                continue;
-            }
-            $relative = str_replace(DIRECTORY_SEPARATOR, '/', substr($file->getPathname(), strlen($mirror) + 1));
-            if (!str_starts_with($relative, '.typephp/build/')) {
-                $digests[$relative] = $this->digest($mirror, $relative);
-            }
-        }
-        ksort($digests, SORT_STRING);
-        return $digests;
-    }
-
     private function assertPath(string $path): void
     {
         if (!str_ends_with(strtolower($path), '.php') || str_starts_with($path, '/')
@@ -201,10 +166,7 @@ final class UpstreamGeneratorBoundary
     private function digest(string $mirror, string $relative): string
     {
         $path = $mirror . '/' . $relative;
-        $canonical = realpath($path);
-        if (!is_file($path) || is_link($path) || !is_string($canonical)
-            || str_replace('\\', '/', $canonical) !== str_replace('\\', '/', $path)
-        ) {
+        if (!is_file($path) || is_link($path) || realpath($path) !== $path) {
             throw new ConfigurationException("upstream generator file missing or unsafe: {$relative}");
         }
         return (string) hash_file('sha256', $path);

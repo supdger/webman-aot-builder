@@ -1,0 +1,126 @@
+--- a/src/Parser/ConstantExpressionTrait.php
++++ b/src/Parser/ConstantExpressionTrait.php
+@@ -26,7 +26,7 @@
+         }
+         $expr->setAttribute(self::ATTR_LOWERED_TYPE, Type::VAR);
+ 
+-        if ($expr->name->getType() != 'Name' and !($expr->name instanceof Node\Name\FullyQualified)) {
++        if (!$expr->name instanceof Node\Name) {
+             $this->unsupportedSyntax($expr);
+         }
+         $name = $this->parseIdentifier($expr->name);
+@@ -61,13 +61,21 @@
+                     . ', php::ConstantLookup::UnqualifiedInNamespace)';
+             }
+ 
++            if ($this->runtimeDeclarationsEnabled && !($this->classDef?->nativeObject ?? false)) {
++                return Symbol::constant() . '(' . $this->getLiteralString($name) . ')';
++            }
+             if ($this->hasConstant($name)) {
+                 $expr->setAttribute(self::ATTR_LOWERED_TYPE, $this->getConstantType($name));
+                 return $this->getConstant($name);
+             }
+             if ($name === 'PHP_EOL') {
+-                $expr->setAttribute(self::ATTR_LOWERED_TYPE, Type::STR);
+-                return $this->getLiteralString(PHP_EOL);
++                if ($this->fullStatic) {
++                    // The generated Linux binary must not inherit the build
++                    // host's newline convention.
++                    return $this->getInternalScalarConstantValue($name);
++                    $expr->setAttribute(self::ATTR_LOWERED_TYPE, Type::STR);
++                }
++                return '"' . $this->escapeString(PHP_EOL) . '"';
+             }
+             if ($this->isInternalScalarConstant($name)) {
+                 $value = $this->internalConstants[$name];
+@@ -91,13 +99,16 @@
+      */
+     private function resolveConstantFetchName(Expr\ConstFetch $expr, string $name): array
+     {
+-        if (isset($this->useConstants[$name])) {
++        if (!$expr->name instanceof Node\Name\FullyQualified
++            && !$expr->name instanceof Node\Name\Relative
++            && isset($this->useConstants[$name])) {
+             return [$this->useConstants[$name], false];
+         }
+         if ($expr->name->isUnqualified()) {
+             if ($this->namespace) {
+                 $namespacedName = $this->namespace . '\\' . $name;
+-                return [$namespacedName, !$this->hasConstant($namespacedName)];
++                return [$namespacedName, ($this->runtimeDeclarationsEnabled && !($this->classDef?->nativeObject ?? false))
++                    || !$this->hasConstant($namespacedName)];
+             }
+ 
+             // A class import with the same alias does not affect a bare
+@@ -138,6 +149,9 @@
+             return false;
+         }
+ 
++        if ($this->runtimeDeclarationsEnabled && !($this->classDef?->nativeObject ?? false)) {
++            return false;
++        }
+         return $this->hasConstant($name)
+             || $name === 'PHP_EOL'
+             || $this->isInternalScalarConstant($name);
+@@ -152,10 +166,32 @@
+         if ($function !== '' && $this->methodDef === null && $this->namespace !== '') {
+             $function = $this->namespace . '\\' . $function;
+         }
++        if ($this->functionDef !== null && $this->functionDef->runtimePublicName !== '') {
++            $function = $this->functionDef->runtimePublicName;
++        }
++        if ($this->functionDef?->runtimeFileInitializer) { $function = ''; }
+         switch ($expr->getType()) {
+             case 'Scalar_MagicConst_Dir':
++                if ($this->fullStatic && $this->sourceIdentityRoot !== '') {
++                    $identity = $this->getSourceIdentity($this->dir);
++                    if ($identity === $this->sourceIdentityPrefix
++                        || str_starts_with($identity, $this->sourceIdentityPrefix . '/')
++                    ) {
++                        return $this->getLiteralString($identity);
++                    }
++                    $this->error('Full-static __DIR__ is outside the reproducible project root');
++                }
+                 return $this->getLiteralString($this->dir);
+             case 'Scalar_MagicConst_File':
++                if ($this->fullStatic && $this->sourceIdentityRoot !== '') {
++                    $identity = $this->getSourceIdentity($this->file);
++                    if ($identity === $this->sourceIdentityPrefix
++                        || str_starts_with($identity, $this->sourceIdentityPrefix . '/')
++                    ) {
++                        return $this->getLiteralString($identity);
++                    }
++                    $this->error('Full-static __FILE__ is outside the reproducible project root');
++                }
+                 return $this->getLiteralString($this->file);
+             case 'Scalar_MagicConst_Line':
+                 return (string) $expr->getStartLine();
+@@ -173,9 +209,17 @@
+                 return $this->getLiteralString($function);
+             case 'Scalar_MagicConst_Class':
+                 if (!$this->classDef) {
+-                    $this->fatalError($expr, 'The magic constant `__CLASS__` is not allowed in global scope');
++                    if ($this->interfaceDef !== null) {
++                        $name = $this->getFullClassLikeName();
++                        $declaration = $this->runtimeDeclaration($name);
++                        return $this->getLiteralString($declaration['name'] ?? $name);
++                    }
++                    return '""';
+                 }
+                 if ($this->classDef->trait) {
++                    if ($this->runtimeDeclarationsEnabled && $this->classDef->runtimePublicName !== '') {
++                        return 'php::Str(php::FakeScopeGuard::current()->name)';
++                    }
+                     return $this->getCalledClassExpr();
+                 }
+                 return $this->getLiteralString($class);
+@@ -213,6 +257,9 @@
+             return Type::BOOL;
+         }
+ 
++        if ($this->runtimeDeclarationsEnabled && !($this->classDef?->nativeObject ?? false)) {
++            return Type::VAR;
++        }
+         if (isset($this->useConstants[$name])) {
+             $name = $this->useConstants[$name];
+         } elseif ($expr->name->isUnqualified() && $this->namespace) {

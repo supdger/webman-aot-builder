@@ -8,8 +8,8 @@ use WebmanAotBuilder\Doctor\Doctor;
 use WebmanAotBuilder\Doctor\NativeSystemProbe;
 use WebmanAotBuilder\Platform\UserDirectoryLayout;
 use WebmanAotBuilder\Project\DistributionVerifier;
-use WebmanAotBuilder\Project\ProfileDetector;
 use WebmanAotBuilder\Project\ProjectBuilder;
+use WebmanAotBuilder\Project\CompilationEntryResolver;
 use WebmanAotBuilder\Toolchain\NativeDownloader;
 use WebmanAotBuilder\Toolchain\MacosToolchainPreparer;
 use WebmanAotBuilder\Toolchain\MinimalComponentLock;
@@ -221,9 +221,8 @@ final class Application
             '  help       Show this help',
             '  version    Show the CLI version',
             '  doctor     Check the host and toolchain; prepare missing components',
-            '  build [--fresh]  Compile and verify; reuse completed units, --fresh recompiles all units',
+            '  build [--entry=<script>]  Compile a project; choose an original PHP script when needed',
             '  verify     Independently check dist-aot (use --deployed after editing external resources)',
-            '  uninstall [--list]  List installations and confirm removal one by one',
             '  self-update [--rollback]  Install or roll back a verified CLI generation',
             '  toolchain update [--rollback]  Install or roll back a verified toolchain',
             '',
@@ -241,38 +240,29 @@ final class Application
      */
     private function runBuild(array $options): void
     {
-        $explicitProfile = null;
-        $fresh = false;
+        $explicitEntry = null;
         $json = false;
         foreach ($options as $option) {
-            if ($option === '--fresh' && !$fresh) { $fresh = true; continue; }
             if ($option === '--json' || $option === '--format=json') {
                 $json = true;
                 continue;
             }
-            if (str_starts_with($option, '--profile=') && $explicitProfile === null) {
-                $explicitProfile = substr($option, strlen('--profile='));
+            if (str_starts_with($option, '--entry=') && $explicitEntry === null) {
+                $explicitEntry = substr($option, strlen('--entry='));
+                if ($explicitEntry === '' || str_starts_with($explicitEntry, '/')
+                    || preg_match('/^[A-Za-z]:/', $explicitEntry) === 1) {
+                    throw new UsageException('build --entry requires a script path relative to the project, for example --entry=start.php');
+                }
                 continue;
             }
             throw new UsageException("Unknown build option: {$option}");
-        }
-        if ($explicitProfile === '') {
-            throw new UsageException('build --profile requires php, webman or saiadmin');
         }
         $project = getcwd();
         if (!is_string($project) || $project === '') {
             throw new ConfigurationException('cannot resolve the current project directory');
         }
-        fwrite(STDERR, $fresh ? "[构建] 全量重建，所有单元重新编译。\n" : "[构建] 自动恢复：复用校验通过的已完成单元，未完成单元从头编译。\n");
-        fwrite(STDERR, "[构建] 检查项目与构建环境...\n");
-        try {
-            (new ProfileDetector($project))->detect();
-        } catch (ConfigurationException $exception) {
-            throw new ConfigurationException(
-                'build requires a PHP project directory; current directory: ' . $project
-                    . '; ' . $exception->getMessage()
-                    . '; change to the project root and run webman-aot build'
-            );
+        if ($explicitEntry !== null) {
+            $explicitEntry = (new CompilationEntryResolver($project))->resolve($explicitEntry);
         }
         $host = (new NativeSystemProbe())->hostId();
         $manager = $this->minimalManager($host);
@@ -287,28 +277,17 @@ final class Application
             }
         }
         if ($manager !== null) {
-            fwrite(STDERR, "[构建] 校验并准备锁定工具链，缺少的组件将显示下载状态...\n");
             $output = new ProgressOutput(STDERR);
-            $sampleTime = microtime(true);
-            $sampleBytes = null;
-            $downloadStarted = $sampleTime;
             try {
                 $manager->ensure(
                     null,
                     static function (string $message) use ($output): void {
                         $output->message('[prepare] ' . $message);
                     },
-                    static function (int $bytes, ?int $total) use ($output, &$sampleTime, &$sampleBytes, &$downloadStarted): void {
-                        $now = microtime(true);
-                        $speed = $sampleBytes === null || $bytes < $sampleBytes
-                            ? null : ($bytes - $sampleBytes) / max(0.001, $now - $sampleTime);
+                    static function (int $bytes, ?int $total) use ($output): void {
                         $status = $total === null
-                            ? sprintf('[prepare] %d bytes received', $bytes)
-                            : sprintf('[prepare] %d / %d bytes (%.1f%%)', $bytes, $total, min(100, $bytes * 100 / max(1, $total)));
-                        $status .= $speed === null ? '; measuring speed' : sprintf('; %.2f MiB/s', $speed / 1048576);
-                        $status .= sprintf('; preparation elapsed %.0fs', $now - $downloadStarted);
-                        $sampleTime = $now;
-                        $sampleBytes = $bytes;
+                            ? sprintf('[prepare] %.1f MiB received', $bytes / 1048576)
+                            : sprintf('[prepare] %.1f%%', min(99.9, $bytes * 100 / $total));
                         $output->update($status);
                     }
                 );
@@ -316,7 +295,6 @@ final class Application
                 $output->finish();
             }
         }
-        fwrite(STDERR, "[构建] 验证已准备的工具链...\n");
         $doctor = ($this->doctorFactory)()->inspect();
         if (!$doctor->healthy()) {
             throw new UnavailableException('build doctor failed; run webman-aot doctor for details');
@@ -346,15 +324,14 @@ final class Application
             $cache,
             dirname(__DIR__, 2) . '/compatibility/locks/webman-workerman-2026-09-25.json',
             $lockFile,
-            dirname(__DIR__, 2) . '/toolchain/patches/typephp/0.9.2/manifest.json',
+            dirname(__DIR__, 2) . '/toolchain/patches/typephp/0.9.5/manifest.json',
             $tools,
             $host,
             function (string $stage): void {
                 $this->logger?->event('info', 'build-stage', $stage, "build entered {$stage}");
                 fwrite(STDERR, "[build] {$stage}\n");
             },
-            $explicitProfile,
-            $fresh
+            $explicitEntry
         );
         if ($json) {
             fwrite(
@@ -370,12 +347,50 @@ final class Application
         fwrite(
             STDOUT,
             sprintf(
-                "Built %s: %s (%s)\n",
-                $result['profile'],
+                "Built %s (%s)\n",
                 $result['distribution']['path'],
                 $result['elfSha256']
             )
         );
+        $this->reportCompilationTiers($result);
+    }
+
+    /**
+     * Report how each PHP source reached the artifact.
+     *
+     * A source that the native compiler cannot translate still ships, with its
+     * original text executed by the embedded Zend engine. Naming those files
+     * and the reason keeps the trade-off visible instead of implying that the
+     * whole project was compiled ahead of time.
+     *
+     * @param array<string,mixed> $result
+     */
+    private function reportCompilationTiers(array $result): void
+    {
+        $coverage = $result['distribution']['coverage'] ?? [];
+        $compiled = (int) ($coverage['direct'] ?? 0) + (int) ($coverage['shadow'] ?? 0);
+        $interpreted = is_array($result['interpreted'] ?? null) ? $result['interpreted'] : [];
+        fwrite(
+            STDOUT,
+            sprintf(
+                "compiled: %d, interpreted: %d\n",
+                $compiled,
+                count($interpreted)
+            )
+        );
+        foreach ($interpreted as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+            fwrite(
+                STDOUT,
+                sprintf(
+                    "  interpreted %s: %s\n",
+                    (string) ($entry['path'] ?? '?'),
+                    (string) ($entry['reason'] ?? 'compilation failed')
+                )
+            );
+        }
     }
 
     private function generatorArchive(string $lockFile, string $artifacts): string

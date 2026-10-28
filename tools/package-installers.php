@@ -56,10 +56,13 @@ final class InstallerPackager
         try {
             $licenseDirectory = $workspace . '/typephp-license';
             $this->createDirectory($licenseDirectory);
-            $typePhpLicense = $licenseDirectory . '/LICENSE';
-            $typePhpLicenses = $this->sourceLicenses($typePhpSource, $typePhpComponent['sha256'], ['LICENSE']);
-            if (file_put_contents($typePhpLicense, $typePhpLicenses['LICENSE']) === false) {
-                throw new RuntimeException('unable to stage selected TypePHP source license');
+            (new PharData($typePhpSource))->extractTo(
+                $licenseDirectory,
+                'typephp-0.9.5/LICENSE'
+            );
+            $typePhpLicense = $licenseDirectory . '/typephp-0.9.5/LICENSE';
+            if (!is_file($typePhpLicense)) {
+                throw new RuntimeException('locked TypePHP source license is missing');
             }
             $packages = [];
             if ($platform !== 'windows-x86_64') {
@@ -131,7 +134,6 @@ final class InstallerPackager
         }
         $stage = $workspace . '/macos-arm64';
         $this->stageApplication($stage, $typePhpLicense);
-        $this->stageProcessSupervisor($stage, true);
         $this->createDirectory($stage . '/payload/runtime/bin');
         if (!copy($runtimePath, $stage . '/payload/runtime/bin/php')) {
             throw new RuntimeException('unable to stage macOS private PHP runtime');
@@ -142,14 +144,11 @@ final class InstallerPackager
         chmod($stage . '/payload/runtime/bin/php', 0700);
         chmod($stage . '/payload/runtime/bin/php-compiler', 0700);
         $this->copyDirectory($runtimeLicenseDirectory, $stage . '/payload/runtime/licenses');
-        $phpLicenses = $this->sourceLicenses($phpSourceArchive, $runtime['compilerDriver']['sourceSha256'], [
-            'ext/mbstring/libmbfl/LICENSE', 'ext/bcmath/libbcmath/LICENSE',
-        ]);
         foreach ([
-            'libmbfl-LGPL-2.1.txt' => 'ext/mbstring/libmbfl/LICENSE',
-            'libbcmath-LGPL-2.1.txt' => 'ext/bcmath/libbcmath/LICENSE',
+            'libmbfl-LGPL-2.1.txt' => 'php-8.4.26/ext/mbstring/libmbfl/LICENSE',
+            'libbcmath-LGPL-2.1.txt' => 'php-8.4.26/ext/bcmath/libbcmath/LICENSE',
         ] as $name => $member) {
-            $license = $phpLicenses[$member];
+            $license = $this->readTarMember($phpSourceArchive, $member);
             if (!str_contains($license, 'GNU LESSER GENERAL PUBLIC LICENSE')
                 || file_put_contents($stage . '/payload/runtime/licenses/' . $name, $license) === false
             ) {
@@ -160,8 +159,6 @@ final class InstallerPackager
         copy($this->root . '/bin/webman-aot', $stage . '/payload/launcher/webman-aot');
         chmod($stage . '/payload/launcher/webman-aot', 0700);
         copy($this->root . '/installer/macos/install.sh', $stage . '/install.sh');
-        $this->copyRequiredFile($this->root . '/installer/macos/install.command', $stage . '/install.command');
-        chmod($stage . '/install.command', 0700);
         copy($this->root . '/installer/macos/uninstall.sh', $stage . '/uninstall.sh');
         chmod($stage . '/install.sh', 0700);
         chmod($stage . '/uninstall.sh', 0700);
@@ -233,7 +230,6 @@ final class InstallerPackager
         }
         $stage = $workspace . '/windows-x86_64';
         $this->stageApplication($stage, $typePhpLicense);
-        $this->stageProcessSupervisor($stage, false);
         $extract = $workspace . '/windows-runtime-extract';
         $this->extractLockedZip($runtimeArchive, $extract);
         $source = $extract;
@@ -271,7 +267,6 @@ final class InstallerPackager
         ) === false) {
             throw new RuntimeException('unable to write Windows PHP runtime configuration');
         }
-        $this->copyRequiredFile($this->root . '/tools/windows-php-bootstrap.php', $stage . '/payload/app/tools/windows-php-bootstrap.php');
         $this->copyRequiredFile(
             $source . '/extras/sbom/php.spdx.json',
             $runtimeStage . '/upstream-php.spdx.json'
@@ -279,8 +274,6 @@ final class InstallerPackager
         $this->createDirectory($stage . '/payload/launcher');
         copy($this->root . '/bin/webman-aot.cmd', $stage . '/payload/launcher/webman-aot.cmd');
         copy($this->root . '/installer/windows/install.ps1', $stage . '/install.ps1');
-        $this->copyRequiredFile($this->root . '/installer/windows/install.cmd', $stage . '/install.cmd');
-        $this->copyRequiredFile($this->root . '/installer/windows/install-guided.ps1', $stage . '/install-guided.ps1');
         copy($this->root . '/installer/windows/uninstall.ps1', $stage . '/uninstall.ps1');
         $this->stageMinimalComponent($stage, 'windows-x86_64', $minimalComponent, $full);
         $this->writeMetadata($stage, 'windows-x86_64', $runtime, $full);
@@ -341,61 +334,6 @@ final class InstallerPackager
             ) {
                 throw new RuntimeException('minimal component has an incompatible manifest identity');
             }
-            if (!$full && isset($this->options['prepared-typephp'])) {
-            // Ship exact target bytes, not a patch replay against unknown older prepared sources.
-            $upgrade = $stage . '/payload/app/toolchain/minimal-upgrade';
-            $this->createDirectory($upgrade . '/files');
-            if (file_put_contents($upgrade . '/minimal-component.json', $manifest) === false) {
-                throw new RuntimeException('cannot stage locked upgrade manifest');
-            }
-            $preparedJson = $zip->getFromName('prepared/prepared-toolchain.json');
-            $prepared = is_string($preparedJson) ? json_decode($preparedJson, true, flags: JSON_THROW_ON_ERROR) : [];
-            $typephp = $prepared['typephp'] ?? null;
-            if (!is_string($typephp) || !preg_match('~^[A-Za-z0-9._/-]+$~D', $typephp)
-                || in_array('..', explode('/', $typephp), true)) {
-                throw new RuntimeException('target prepared TypePHP path is unsafe');
-            }
-            $patch = $this->readJson($this->root . '/toolchain/patches/typephp/0.9.2/manifest.json');
-            $selected = ['manifest.json' => null, 'toolchain.lock.json' => null,
-                'prepared/prepared-toolchain.json' => null, 'component-derivation.json' => null];
-            $preparedTypephp = $this->requiredOption('prepared-typephp');
-            require_once __DIR__ . '/../src/Cli/ConfigurationException.php';
-            require_once __DIR__ . '/../src/Toolchain/TypePhpPatchSourceVerifier.php';
-            (new WebmanAotBuilder\Toolchain\TypePhpPatchSourceVerifier())->verify(
-                $preparedTypephp, $this->root . '/toolchain/patches/typephp/0.9.2/manifest.json'
-            );
-            $guards = [];
-            foreach ($patch['rules'] ?? [] as $rule) {
-                $guards['prepared/' . $typephp . '/' . $rule['path']] = $rule;
-                $selected['prepared/' . $typephp . '/' . $rule['path']] = $rule['afterSha256'];
-            }
-            foreach ($selected as $name => $ruleHash) {
-                $entry = $manifestData['entries'][$name] ?? null;
-                if ($entry === null && $ruleHash === null) { continue; }
-                $bytes = $zip->getFromName($name);
-                if (!is_array($entry) || ($entry['type'] ?? null) !== 'file' || !is_string($bytes)
-                    || strlen($bytes) !== $entry['size'] || hash('sha256', $bytes) !== $entry['sha256']
-                    || str_contains($name, '..') || str_starts_with($name, '/') || str_contains($name, '\\')) {
-                    throw new RuntimeException('target upgrade replacement differs from locked component: ' . $name);
-                }
-                if ($ruleHash !== null) {
-                    $rule = $guards[$name];
-                    if (!in_array($entry['sha256'], array_filter([
-                        $rule['beforeSha256'], $rule['preparedBeforeSha256'] ?? null, $rule['afterSha256'],
-                    ]), true)) { throw new RuntimeException('target source is outside its reviewed patch chain: ' . $name); }
-                    $sourceFile = rtrim($preparedTypephp, '/\\') . '/' . $rule['path'];
-                    $bytes = is_file($sourceFile) && !is_link($sourceFile) ? file_get_contents($sourceFile) : false;
-                    if (!is_string($bytes) || hash('sha256', $bytes) !== $ruleHash) {
-                        throw new RuntimeException('prepared replacement differs from reviewed source: ' . $name);
-                    }
-                }
-                $path = $upgrade . '/files/' . $name;
-                $this->createDirectory(dirname($path));
-                if (file_put_contents($path, $bytes) === false || hash_file('sha256', $path) !== hash('sha256', $bytes)) {
-                    throw new RuntimeException('cannot stage target upgrade replacement: ' . $name);
-                }
-            }
-            }
         } finally {
             $zip->close();
         }
@@ -420,22 +358,6 @@ final class InstallerPackager
         ));
     }
 
-    private function stageProcessSupervisor(string $stage, bool $mac): void
-    {
-        $destination = $stage . '/payload/app/installer/process-supervisor';
-        $this->createDirectory($destination);
-        $source = $this->root . '/installer/process-supervisor/' . ($mac ? 'macos.c' : 'windows.ps1');
-        $this->copyRequiredFile($source, $destination . '/' . basename($source));
-        if (!$mac) { return; }
-        $binary = $stage . '/payload/app/bin/process-supervisor';
-        $process = proc_open(['/usr/bin/clang', '-std=c11', '-Wall', '-Wextra', '-Werror', '-O2', $source, '-o', $binary],
-            [0 => ['file', '/dev/null', 'r'], 1 => STDOUT, 2 => STDERR], $pipes);
-        if (!is_resource($process) || proc_close($process) !== 0 || !is_file($binary)) {
-            throw new RuntimeException('unable to build macOS command cleanup component');
-        }
-        chmod($binary, 0700);
-    }
-
     private function stageApplication(string $stage, string $typePhpLicense): void
     {
         $app = $stage . '/payload/app';
@@ -450,20 +372,10 @@ final class InstallerPackager
         );
         $this->createDirectory($app . '/installer');
         copy($this->root . '/installer/runtime.lock.json', $app . '/installer/runtime.lock.json');
-        $this->createDirectory($app . '/packages/composer-installer/src');
-        $this->copyRequiredFile($this->root . '/packages/composer-installer/src/Uninstaller.php', $app . '/packages/composer-installer/src/Uninstaller.php');
-        $this->createDirectory($app . '/packages/composer-installer/resources');
-        $this->copyRequiredFile($this->root . '/packages/composer-installer/resources/uninstall-launchers.json', $app . '/packages/composer-installer/resources/uninstall-launchers.json');
-        $this->createDirectory($app . '/installer/windows');
-        $this->copyRequiredFile($this->root . '/installer/windows/uninstall.ps1', $app . '/installer/windows/uninstall.ps1');
-        $this->createDirectory($app . '/installer/macos');
-        $this->copyRequiredFile($this->root . '/installer/macos/uninstall.sh', $app . '/installer/macos/uninstall.sh');
         $this->createDirectory($app . '/tools');
         foreach ([
-            'guided.php',
             'windows-replay.ps1',
             'macos-prepare.php',
-            'check-toolchain-capabilities.php',
             'apply-typephp-patches.php',
             'strip-sdk-debug.php',
             'assemble-sysroot.php',
@@ -473,8 +385,8 @@ final class InstallerPackager
             }
         }
         $this->copyDirectory(
-            $this->root . '/toolchain/patches/typephp/0.9.2',
-            $app . '/toolchain/patches/typephp/0.9.2',
+            $this->root . '/toolchain/patches/typephp/0.9.5',
+            $app . '/toolchain/patches/typephp/0.9.5',
             ['patch', 'json']
         );
         $this->createDirectory($app . '/compatibility/locks');
@@ -573,55 +485,6 @@ final class InstallerPackager
         if (!is_file($source) || is_link($source) || !copy($source, $destination)) {
             throw new RuntimeException("unable to stage required runtime file: {$source}");
         }
-    }
-
-    /** @param list<string> $members @return array<string,string> */
-    private function sourceLicenses(string $archive, string $sha256, array $members): array
-    {
-        if (!hash_equals($sha256, $this->digest($archive))) {
-            throw new RuntimeException('selected source license archive digest differs');
-        }
-        $process = proc_open(['tar', '-tf', $archive], [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
-        if (!is_resource($process)) {
-            throw new RuntimeException('unable to inspect selected source archive root');
-        }
-        fclose($pipes[0]);
-        $listing = stream_get_contents($pipes[1]);
-        fclose($pipes[1]);
-        $error = stream_get_contents($pipes[2]);
-        fclose($pipes[2]);
-        if (proc_close($process) !== 0 || !is_string($listing) || trim($listing) === '') {
-            throw new RuntimeException('selected source archive listing failed: ' . trim((string) $error));
-        }
-        $roots = [];
-        $entries = [];
-        foreach (explode("\n", rtrim($listing, "\n")) as $entry) {
-            if (PHP_OS_FAMILY === 'Windows' && str_ends_with($entry, "\r")) {
-                $entry = substr($entry, 0, -1);
-            }
-            $entry = rtrim($entry, '/');
-            $parts = explode('/', $entry);
-            if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._+-]*$/D', $parts[0]) !== 1
-                || str_contains($entry, '\\') || preg_match('/[\x00-\x1f]/', $entry) === 1
-                || in_array('..', $parts, true) || in_array('.', $parts, true) || in_array('', $parts, true)
-                || isset($entries[$entry])) {
-                throw new RuntimeException('selected source archive contains unsafe or repeated entries');
-            }
-            $roots[$parts[0]] = true;
-            $entries[$entry] = true;
-        }
-        if (count($roots) !== 1) {
-            throw new RuntimeException('selected source archive requires one source root');
-        }
-        $root = array_key_first($roots);
-        $licenses = [];
-        foreach ($members as $member) {
-            if (!isset($entries[$root . '/' . $member])) {
-                throw new RuntimeException('selected source license is missing: ' . $member);
-            }
-            $licenses[$member] = $this->readTarMember($archive, $root . '/' . $member);
-        }
-        return $licenses;
     }
 
     private function readTarMember(string $archive, string $member): string

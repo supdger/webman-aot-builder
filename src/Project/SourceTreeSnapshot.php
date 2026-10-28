@@ -37,12 +37,15 @@ final class SourceTreeSnapshot
         RuntimeDataPaths::assertSafeWritableDirectories($this->projectDirectory);
         $files = [];
         $directory = new \RecursiveDirectoryIterator(
-            realpath($this->projectDirectory) ?: $this->projectDirectory,
+            $this->projectDirectory,
             \FilesystemIterator::SKIP_DOTS
         );
         $filter = new \RecursiveCallbackFilterIterator(
             $directory,
             function (\SplFileInfo $entry): bool {
+                if ($entry->isDir() && str_starts_with($entry->getFilename(), '.')) {
+                    return false;
+                }
                 $relative = $this->relative($entry->getPathname());
                 $root = explode('/', $relative, 2)[0];
                 if (in_array($root, self::EXCLUDED_ROOTS, true)
@@ -52,14 +55,13 @@ final class SourceTreeSnapshot
                     || (preg_match('/^\.env(?:\..+)?$/D', $entry->getFilename()) === 1
                         && strtolower($entry->getExtension()) !== 'php')
                     || (in_array($root, ['runtime', 'node_modules'], true)
-                        && !$entry->isDir() && strtolower($entry->getExtension()) !== 'php')
+                        && !$entry->isDir())
+                    || RuntimeDataPaths::isDevFixturePath($relative)
                 ) {
                     return false;
                 }
                 if ($entry->isLink()) {
-                    throw new ConfigurationException(
-                        "source snapshot refuses symlink: {$relative}"
-                    );
+                    return false;
                 }
 
                 return true;

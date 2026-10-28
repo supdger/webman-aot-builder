@@ -120,7 +120,7 @@ try {
 
     (new TypePhpPatchSourceVerifier())->verify(
         $typephp,
-        dirname(__DIR__) . '/toolchain/patches/typephp/0.9.2/manifest.json'
+        dirname(__DIR__) . '/toolchain/patches/typephp/0.9.5/manifest.json'
     );
 
     $installedSdk = realpath($phpx . '/full-static/sdk');

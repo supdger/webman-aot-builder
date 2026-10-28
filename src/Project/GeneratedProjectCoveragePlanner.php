@@ -18,15 +18,16 @@ final class GeneratedProjectCoveragePlanner
      */
     public function plan(
         string $mirrorDirectory,
-        ProjectProfile $profile,
         string $compatibilityLockFile,
-        array $generatedMappings = [],
-        array $generatedAdaptations = []
+        array $generatedMappings = []
     ): array {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror)
             || is_link($mirrorDirectory)
-            || !ProjectMirror::isOwnedPath($mirror)
+            || !str_ends_with(
+                str_replace('\\', '/', $mirror),
+                '/.webman-aot-builder/build/project'
+            )
         ) {
             throw new ConfigurationException(
                 'generated coverage requires an isolated project mirror'
@@ -58,7 +59,7 @@ final class GeneratedProjectCoveragePlanner
         }
 
         $discovery = (new ProjectDiscovery($mirror, $lock['dynamicPhp']))
-            ->discover($profile);
+            ->discover();
         $coverage = (new CoveragePlanner($mirror))->plan($discovery);
         $compiled = (new CompilerCoverageAudit())->audit($mirror, $coverage);
         $resources = (new RuntimeResourcePlanner($mirror))->plan(

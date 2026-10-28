@@ -6,7 +6,7 @@ namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
 use WebmanAotBuilder\Project\ProjectDiscovery;
-use WebmanAotBuilder\Project\ProjectProfile;
+use WebmanAotBuilder\Project\CompilationEntryResolver;
 
 final class GenericProjectGenerator
 {
@@ -20,42 +20,53 @@ final class GenericProjectGenerator
         string $outputName,
         array $dynamicPhp = [],
         ?string $targetPhpVersion = null,
-        array $targetCapabilities = []
+        array $targetCapabilities = [],
+        ?string $explicitEntry = null
     ): array {
         $resolved = realpath($mirror);
-        if (!is_string($resolved)
-            || str_replace('\\', '/', $resolved) !== str_replace('\\', '/', $mirror)
-            || is_link($mirror)
-            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
+        if (!is_string($resolved) || $resolved !== $mirror || is_link($mirror)
+            || !str_ends_with(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/project')
             || is_link($mirror . '/.typephp') || is_link($mirror . '/.typephp/build')
         ) {
             throw new ConfigurationException('PHP generation requires an isolated project mirror');
         }
-        $mirror = $resolved;
         $build = $mirror . '/.typephp/build';
         if (!is_dir($build) && !mkdir($build, 0700, true) && !is_dir($build)) {
             throw new ConfigurationException('cannot create PHP generation directory');
         }
-        $profile = new ProjectProfile(ProjectProfile::PHP, [], []);
-        $sourceFiles = (new ProjectDiscovery($mirror))->discover($profile, false)->files();
+        $sourceFiles = (new ProjectDiscovery($mirror))->discover(false, explicitEntry: $explicitEntry)->files();
         $paths = array_column(array_filter(
             $sourceFiles,
             static fn(array $file): bool => $file['category'] === ProjectDiscovery::BUSINESS_PHP
         ), 'path');
-        $mainFile = in_array('main.php', $paths, true) ? 'main.php' : ($paths[0] ?? null);
+        (new \WebmanAotBuilder\Project\PathLiteralSanitizer(dirname(dirname(dirname($resolved)))))
+            ->sanitize($resolved, $paths);
+        $manifestFile = is_file($mirror . '/project.linux.yml') ? $mirror . '/project.linux.yml' : $mirror . '/project.yml';
+        $entry = (new CompilationEntryResolver($mirror))->resolve(
+            $explicitEntry,
+            is_file($manifestFile) ? $this->read($manifestFile) : null
+        );
+        $mainFile = $entry ?? (in_array('main.php', $paths, true) ? 'main.php' : null);
         $this->write($build . '/entrypoint-mapping.json', "null\n");
-        $this->manifest($mirror, $outputName);
+        $this->manifest($mirror, $paths, $outputName, $entry);
+        // The mirror's build/ tree is owned by the TypePHP compiler: its cache
+        // entries, generated sources and binary output are rewritten or pruned
+        // during compilation, so they can never be stable recorded inputs.
         $this->write(
             $build . '/source-inputs.json',
             json_encode([
                 'schema' => 'webman-aot-builder-source-inputs-v1',
-                'paths' => array_column($sourceFiles, 'path'),
+                'paths' => array_values(array_filter(
+                    array_column($sourceFiles, 'path'),
+                    static fn(string $path): bool => explode('/', $path, 2)[0] !== 'build'
+                )),
             ], JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n"
         );
         return ['mappings' => [], 'mainFile' => $mainFile, 'entrypointMapping' => null];
     }
 
-    private function manifest(string $mirror, string $outputName): void
+    /** @param list<string> $paths */
+    private function manifest(string $mirror, array $paths, string $outputName, ?string $entry): void
     {
         $projectFile = $mirror . '/project.linux.yml';
         if (!is_file($projectFile) && is_file($mirror . '/project.yml')) {
@@ -70,6 +81,14 @@ final class GenericProjectGenerator
         }
         $project = $this->read($projectFile);
         $project = str_replace("\r\n", "\n", $project);
+        if ($entry !== null) {
+            $encodedEntry = json_encode($entry, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES);
+            if (preg_match('/^entry-source:/m', $project) === 1) {
+                $project = (string) preg_replace('/^entry-source:[^\n]*$/m', 'entry-source: ' . $encodedEntry, $project);
+            } else {
+                $project .= "\nentry-source: {$encodedEntry}\n";
+            }
+        }
         $project = (string) preg_replace('/^output:[^\r\n]*$/m', "output: build/{$outputName}", $project);
         $project = (string) preg_replace('/^mode:[^\r\n]*$/m', 'mode: bin', $project);
         if (preg_match('/^output:/m', $project) !== 1) {
@@ -79,7 +98,7 @@ final class GenericProjectGenerator
             $project .= "\nmode: bin\n";
         }
         $this->write($projectFile, $project);
-        (new PluginSourceCompletion())->apply($mirror, ProjectProfile::PHP, []);
+        (new PluginSourceCompletion())->apply($mirror, []);
     }
 
     private function read(string $path): string

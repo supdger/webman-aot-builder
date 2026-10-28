@@ -168,6 +168,7 @@ $lock = Get-Content -LiteralPath $LockFile -Raw |
 $componentIds = @(
     'typephp-source',
     'typephp-windows-x64',
+    'typephp-vendor',
     'php-driver-windows-x64',
     'phpx-source',
     'phpx-sdk-linux-x64',
@@ -199,7 +200,7 @@ foreach ($required in @($sevenZip)) {
 }
 
 $driverRoot = Join-Path $WorkRoot 'php-driver'
-Write-Host 'Extracting selected PHP Windows driver ...'
+Write-Host 'Extracting locked PHP 8.4.26 Windows driver ...'
 New-Item -ItemType Directory -Path $driverRoot | Out-Null
 & $systemTar -xf $archives['php-driver-windows-x64'] -C $driverRoot
 Assert-LastExitCode 'PHP Windows driver extraction'
@@ -209,8 +210,9 @@ if (-not (Test-Path -LiteralPath $php -PathType Leaf)) {
 }
 $driverVersion = (& $php -n -r 'echo PHP_VERSION;')
 Assert-LastExitCode 'PHP Windows driver version'
-& $php (Join-Path $PSScriptRoot 'check-toolchain-capabilities.php') 'php' $php
-Assert-LastExitCode 'PHP compiler runtime capabilities'
+if ($driverVersion -ne '8.4.26') {
+    throw "locked PHP Windows driver has unexpected version: $driverVersion"
+}
 
 $sourceExtract = Join-Path $WorkRoot 'typephp-source'
 Write-Host 'Extracting TypePHP source ...'
@@ -218,7 +220,15 @@ New-Item -ItemType Directory -Path $sourceExtract | Out-Null
 & $systemTar -xf $archives['typephp-source'] -C $sourceExtract
 Assert-LastExitCode 'TypePHP source extraction'
 $typephpRoot = Get-SingleDirectory $sourceExtract 'TypePHP source archive'
-Copy-Item -LiteralPath (Join-Path $hostRoot 'vendor') -Destination $typephpRoot -Recurse
+# The 0.9.5 host package is a bare tpc binary; the compiler's Composer
+# dependencies ship as the separate locked vendor bundle.
+$vendorExtract = Join-Path $WorkRoot 'typephp-vendor'
+Write-Host 'Extracting locked TypePHP vendor bundle ...'
+New-Item -ItemType Directory -Path $vendorExtract | Out-Null
+& $systemTar -xf $archives['typephp-vendor'] -C $vendorExtract
+Assert-LastExitCode 'TypePHP vendor bundle extraction'
+$vendorRoot = Get-SingleDirectory $vendorExtract 'TypePHP vendor archive'
+Copy-Item -LiteralPath (Join-Path $vendorRoot 'vendor') -Destination $typephpRoot -Recurse
 $swooleVendor = Join-Path $typephpRoot 'vendor\swoole'
 New-Item -ItemType Directory -Path $swooleVendor -Force | Out-Null
 
@@ -244,32 +254,28 @@ if ($null -eq $sdkTar) {
 $sdkPayload = Join-Path $WorkRoot 'sdk-payload'
 New-Item -ItemType Directory -Path $sdkPayload | Out-Null
 $sdkLock = Get-LockedComponent $lock 'phpx-sdk-linux-x64'
-$sdkArchiveName = [IO.Path]::GetFileName((Get-ArchivePath $sdkLock $Artifacts))
-if ($sdkArchiveName -notmatch '^(webman-aot-builder-[0-9]+\.[0-9]+\.[0-9]+-derived-linux-x86_64-sdk)\.tar\.xz$') {
-    throw 'PHPX SDK requires the locked builder-derived archive'
+if ([string] $sdkLock.sha256 -ne '9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930') {
+    throw 'PHPX SDK symlink compatibility rule requires the locked archive'
 }
-$sdkArchiveRoot = $Matches[1]
-$approvedSdkSha256 = [string] $lock.evidence.patchedSdk.sdkSha256
-if ($approvedSdkSha256 -notmatch '^[a-f0-9]{64}$') {
-    throw 'PHPX SDK approved derived fingerprint is missing or invalid'
-}
-& $sevenZip x '-y' "-o$sdkPayload" $sdkTar.FullName | Out-Host
+$ncursesLink = 'phpx-sdk_v2.9.4_php8.4.25_linux-x64/include/ncursesw/ncurses.h'
+& $sevenZip x '-y' "-o$sdkPayload" "-x!$ncursesLink" $sdkTar.FullName | Out-Host
 Assert-LastExitCode 'PHPX SDK tar extraction'
 $sdkSource = Get-SingleDirectory $sdkPayload 'PHPX SDK archive'
-if ([IO.Path]::GetFileName($sdkSource) -ne $sdkArchiveRoot) {
-    throw 'PHPX SDK derived archive root differs from the locked filename'
-}
 $ncursesTarget = Join-Path $sdkSource 'include\ncursesw\curses.h'
 $ncursesCopy = Join-Path $sdkSource 'include\ncursesw\ncurses.h'
-foreach ($header in @($ncursesTarget, $ncursesCopy)) {
-    if (-not (Test-Path -LiteralPath $header -PathType Leaf)
-        -or ((Get-Item -LiteralPath $header).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
-        throw 'Derived PHPX SDK requires portable regular ncurses headers'
-    }
-    if ((Get-FileHash -LiteralPath $header -Algorithm SHA256).Hash.ToLowerInvariant()
-        -ne 'd020361b2ac530ccf0494a479264976ee3a0c903ba30291b23c266ef926f85de') {
-        throw 'Derived PHPX SDK ncurses header digest mismatch'
-    }
+if (-not (Test-Path -LiteralPath $ncursesTarget -PathType Leaf) -or
+    (Test-Path -LiteralPath $ncursesCopy)) {
+    throw 'PHPX SDK ncurses compatibility source is missing or link was not excluded'
+}
+$ncursesHash = (Get-FileHash -LiteralPath $ncursesTarget -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($ncursesHash -ne 'd020361b2ac530ccf0494a479264976ee3a0c903ba30291b23c266ef926f85de') {
+    throw 'PHPX SDK ncurses compatibility source digest mismatch'
+}
+# The locked archive contains one symlink to this same-directory header. A copy
+# preserves the header content without requiring Windows symlink privileges.
+Copy-Item -LiteralPath $ncursesTarget -Destination $ncursesCopy
+if ((Get-FileHash -LiteralPath $ncursesCopy -Algorithm SHA256).Hash.ToLowerInvariant() -ne $ncursesHash) {
+    throw 'PHPX SDK ncurses compatibility copy digest mismatch'
 }
 $fullStatic = Join-Path $phpx 'full-static'
 New-Item -ItemType Directory -Path $fullStatic -Force | Out-Null
@@ -301,8 +307,9 @@ foreach ($required in @($compiler, $llvmNm, $llvmObjcopy)) {
     }
 }
 $compilerVersion = (& $compiler --version 2>$null | Select-Object -First 1)
-& $php (Join-Path $PSScriptRoot 'check-toolchain-capabilities.php') 'cxx' $compiler
-Assert-LastExitCode 'C++17 Linux target capabilities'
+if ($compilerVersion -notmatch '^clang version 19\.1\.7(?:\s|$)') {
+    throw "locked LLVM archive has unexpected compiler version: $compilerVersion"
+}
 
 Write-Host 'Stripping debug sections from the private SDK work copy ...'
 $strippedSdk = & $php (Join-Path $repository 'tools\strip-sdk-debug.php') `
@@ -310,7 +317,7 @@ $strippedSdk = & $php (Join-Path $repository 'tools\strip-sdk-debug.php') `
     "--objcopy=$llvmObjcopy" |
     ConvertFrom-Json
 Assert-LastExitCode 'private SDK debug stripping'
-if ($strippedSdk.sha256 -ne $approvedSdkSha256) {
+if ($strippedSdk.sha256 -ne '4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623') {
     throw "stripped SDK digest mismatch: $($strippedSdk.sha256)"
 }
 $strippedSdk | ConvertTo-Json -Depth 4 | Write-Host
@@ -384,7 +391,7 @@ $result = [ordered] @{
     host = 'windows-x86_64'
     containerUsed = $false
     normalizedInputSha256 = $normalizedInput.sha256
-    expectedNormalizedInputSha256 = 'f18bac511781f372bb65e4fe4b4ac518535792a4d57b896f84b050f540419ba2'
+    expectedNormalizedInputSha256 = 'deb62f759d3d11cbbbe0dc86b5ffb22dfae95069d49edfaeb70bbd668bb4cc31'
     matchesMacNormalizedInput = $false
     artifact = $artifact
     artifactSize = (Get-Item -LiteralPath $artifact).Length

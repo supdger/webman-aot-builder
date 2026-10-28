@@ -29,15 +29,8 @@ final class ProjectWorkspace
         if (is_link($this->root)) {
             throw new ConfigurationException('project workspace cannot be a symlink');
         }
-        if (is_dir($this->root) && is_file($this->root . '/workspace.json')) {
+        if (is_dir($this->root)) {
             $this->assertOwnedWorkspace();
-        }
-        if (is_dir($this->root) && !is_file($this->root . '/workspace.json')) {
-            foreach (new \FilesystemIterator($this->root, \FilesystemIterator::SKIP_DOTS) as $entry) {
-                if ($entry->getFilename() !== 'build.lock') {
-                    throw new ConfigurationException('refusing to adopt unmarked project workspace');
-                }
-            }
         }
         foreach ([$this->root, $this->build(), $this->cache(), $this->runs()] as $directory) {
             if (is_link($directory)) {
@@ -63,36 +56,15 @@ final class ProjectWorkspace
 
         return [
             'root' => $this->root,
-            'build' => $this->newAttempt(),
+            'build' => $this->build(),
             'cache' => $this->cache(),
             'runs' => $this->runs(),
             'cacheEntry' => $this->cache() . DIRECTORY_SEPARATOR . $cacheKey,
         ];
     }
 
-    public function finishAttempt(string $attempt): void
-    {
-        $this->assertOwnedWorkspace();
-        $actual = realpath($attempt);
-        if (!is_string($actual) || is_link($attempt) || dirname($actual) !== realpath($this->build())
-            || preg_match('/^attempt-[a-f0-9]{24}$/D', basename($actual)) !== 1) {
-            throw new ConfigurationException('refusing to clean an unrelated build attempt');
-        }
-        // Called only after compiler/link processes have exited and publication
-        // has succeeded. Failed attempts may still have orphan writers.
-        $this->removeDirectory($actual);
-    }
-
-    private function newAttempt(): string
-    {
-        $path = $this->build() . '/attempt-' . bin2hex(random_bytes(12));
-        $this->createDirectory($path);
-        return $path;
-    }
-
     public function cleanTransient(): void
     {
-        $lease = new ProjectBuildLease($this->projectDirectory);
         $this->assertOwnedWorkspace();
         foreach ([$this->build(), $this->runs()] as $directory) {
             $this->removeContents($directory);
@@ -103,14 +75,7 @@ final class ProjectWorkspace
     public function remove(): void
     {
         $this->assertOwnedWorkspace();
-        $lease = new ProjectBuildLease($this->projectDirectory);
-        // Retain the lock inode and ownership marker so another process cannot
-        // create a different lock while cleanup still owns this one.
-        foreach (new \FilesystemIterator($this->root, \FilesystemIterator::SKIP_DOTS) as $entry) {
-            if (in_array($entry->getFilename(), ['build.lock', 'workspace.json'], true)) { continue; }
-            if ($entry->isDir() && !$entry->isLink()) { $this->removeDirectory($entry->getPathname()); }
-            elseif (!unlink($entry->getPathname())) { throw new ConfigurationException('cannot remove workspace file'); }
-        }
+        $this->removeDirectory($this->root);
     }
 
     private function assertOwnedWorkspace(): void
@@ -183,101 +148,29 @@ final class ProjectWorkspace
             }
             return;
         }
-        $canonical = realpath($directory);
-        $identity = lstat($directory);
         $iterator = new \FilesystemIterator($directory, \FilesystemIterator::SKIP_DOTS);
         foreach ($iterator as $entry) {
-            clearstatcache(true);
-            $current = lstat($directory);
-            if (is_link($directory) || realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
-                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
-                throw new ConfigurationException("workspace directory changed during content cleanup: {$directory}");
-            }
             if ($entry->isDir() && !$entry->isLink()) {
                 $this->removeDirectory($entry->getPathname());
             } else {
-                $path = $entry->getPathname();
-                $windowsLink = PHP_OS_FAMILY === 'Windows' && $entry->isLink();
-                $reason = 'file removal failed';
-                $removed = false;
-                for ($attempt = 0; $attempt < 6; $attempt++) {
-                    clearstatcache(true);
-                    $current = lstat($directory);
-                    if (is_link($directory) || realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
-                        || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
-                        throw new ConfigurationException("workspace directory changed during file cleanup: {$directory}");
-                    }
-                    set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
-                        $reason = $message;
-                        return true;
-                    }, E_WARNING);
-                    try {
-                        $removed = unlink($path);
-                        if (!$removed && $windowsLink) {
-                            clearstatcache(true);
-                            $current = lstat($directory);
-                            if (is_link($directory) || realpath($directory) !== $canonical || !is_array($current)
-                                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
-                                throw new ConfigurationException("workspace directory changed during file cleanup: {$directory}");
-                            }
-                            if (is_link($path)) { $removed = rmdir($path); }
-                        }
-                    }
-                    finally { restore_error_handler(); }
-                    if ($removed) { break; }
-                    clearstatcache(true, $path);
-                    if (!file_exists($path) && !is_link($path)) { $removed = true; break; }
-                    if ($attempt < 5) { usleep(50000 * (2 ** $attempt)); }
-                }
-                if (!$removed) {
-                    $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', str_replace($path, '<file>', $reason)) ?? 'file removal failed';
-                    throw new ConfigurationException("unable to remove workspace file after 6 attempts: {$path}; " . substr($reason, 0, 400));
-                }
+                unlink($entry->getPathname());
             }
         }
     }
 
     private function removeDirectory(string $directory): void
     {
-        clearstatcache(true);
         if (!is_dir($directory) || is_link($directory)) {
             throw new ConfigurationException("workspace directory is unsafe: {$directory}");
         }
-        $canonical = realpath($directory);
-        $identity = lstat($directory);
-        $reason = 'directory removal failed';
-        for ($attempt = 0; $attempt < 6; $attempt++) {
-            clearstatcache(true);
-            if (!is_dir($directory) || is_link($directory)) {
-                throw new ConfigurationException("workspace directory is unsafe: {$directory}");
-            }
-            $current = lstat($directory);
-            if (realpath($directory) !== $canonical || !is_array($identity) || !is_array($current)
-                || $identity['dev'] !== $current['dev'] || $identity['ino'] !== $current['ino']) {
-                throw new ConfigurationException("workspace directory changed during directory cleanup: {$directory}");
-            }
-            $this->removeContents($directory);
-            set_error_handler(static function (int $severity, string $message) use (&$reason): bool {
-                $reason = $message;
-                return true;
-            }, E_WARNING);
-            try {
-                $removed = rmdir($directory);
-            } finally {
-                restore_error_handler();
-            }
-            if ($removed) {
-                return;
-            }
-            if ($attempt < 5) {
-                usleep(50000 * (2 ** $attempt));
-            }
+        $this->removeContents($directory);
+        foreach (scandir($directory) ?: [] as $stray) {
+            if ($stray === '.' || $stray === '..') { continue; }
+            $p = $directory . '/' . $stray;
+            if (is_file($p) && !is_link($p)) { unlink($p); }
         }
-        $reason = str_replace($directory, '<directory>', $reason);
-        $reason = preg_replace('/[\x00-\x20\x7f]+/', ' ', $reason) ?? 'directory removal failed';
-        throw new ConfigurationException(
-            "unable to remove workspace directory after 6 attempts: {$directory}; " . substr($reason, 0, 400)
-            . '; close programs writing to the build workspace, check directory permissions, and retry webman-aot build'
-        );
+        if (!rmdir($directory)) {
+            throw new ConfigurationException("unable to remove workspace directory: {$directory}");
+        }
     }
 }

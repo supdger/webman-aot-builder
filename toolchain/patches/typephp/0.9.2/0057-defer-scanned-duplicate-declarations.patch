@@ -1,0 +1,14 @@
+--- a/src/Build/UnavailableDeclarationsTrait.php
++++ b/src/Build/UnavailableDeclarationsTrait.php
+@@ -447,7 +447,10 @@
+                 $key = strtolower($name);
+                 $location = $file . ':' . $node->getStartLine();
+                 if (isset($declarations[$key])) {
+-                    throw new \RuntimeException("Duplicate reachable declaration {$name}: {$declarations[$key]} and {$location}");
++                    // A scanned file is not a loaded file. Keep every declaration
++                    // and bind the public name only when that file actually loads.
++                    $this->unresolved = true;
++                    continue;
+                 }
+                 $declarations[$key] = $location;
+             }

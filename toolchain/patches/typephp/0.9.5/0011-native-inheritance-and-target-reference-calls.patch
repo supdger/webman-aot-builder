@@ -1,0 +1,356 @@
+--- a/src/Parser/MethodCallTrait.php
++++ b/src/Parser/MethodCallTrait.php
+@@ -526,6 +526,21 @@
+ 
+     protected function parseParentMethodCall(Expr\StaticCall $expr): string
+     {
++        if ($this->runtimeDeclarationsEnabled && $this->classDef->runtimePublicName !== '') {
++            $scope = $this->classDef->trait !== null ? 'php::FakeScopeGuard::current()'
++                : $this->getClassEntryPtr($this->getFullClassName());
++            $name = $this->isIdExpr($expr->name) ? $this->parseIdentifier($expr->name) : '';
++            $pointer = 'typephp_runtime_parent_method(' . $scope . ', '
++                . $this->methodNameToStr($expr->name) . ')';
++            if ($this->methodDef->flags & Modifiers::STATIC) {
++                $callable = $this->getCalledCeExpr() . ', ' . $pointer;
++                return $expr->args === [] ? 'php::call(' . $callable . ')'
++                    : $this->genRuntimeFunctionCall($pointer, $expr->args, $name, $this->classDef->extends,
++                        scope: $this->getCalledCeExpr());
++            }
++            return 'this_.call(' . $pointer . ($expr->args === [] ? '' : ', '
++                . $this->parseCallArgs($expr->args, $name, $this->classDef->extends)) . ')';
++        }
+         if (!$this->classDef->extends) {
+             $this->fatalError($expr, 'Cannot call parent method because class `' . $this->classDef->name . '` does not extend any class');
+         }
+@@ -577,7 +592,8 @@
+             if (empty($expr->args)) {
+                 return 'php::call(' . $callable . ')';
+             }
+-            return $this->genRuntimeFunctionCall($callable, $expr->args, $method, $parentClass);
++            return $this->genRuntimeFunctionCall($methodPtr, $expr->args, $method, $parentClass,
++                scope: $this->getCalledCeExpr());
+         }
+         if (empty($expr->args)) {
+             return 'this_.call(' . $methodPtr . ')';
+@@ -692,7 +708,7 @@
+         }
+ 
+         if ($this->isNamedMethod($expr->name)
+-            && in_array(strtolower($expr->name->toString()), ['call', 'bind', 'bindto'], true)
++            && in_array(strtolower($expr->name->toString()), ['call'], true)
+             && strtolower(ltrim($class, '\\')) === 'closure') {
+             $closureMethod = $expr->name->toString();
+             $this->fatalError(
+@@ -732,7 +748,14 @@
+         }
+ 
+         $magicMethod = false;
++        $methodBeforeStart = count($this->context->beforeStmtLines);
++        $methodAfterStart = count($this->context->afterStmtLines);
+         $method = $this->methodNameToStr($expr->name, literal: true);
++        $methodBefore = $methodAfter = [];
++        if ($this->runtimeDeclarationsEnabled && !$this->isNamedMethod($expr->name)) {
++            $methodBefore = array_splice($this->context->beforeStmtLines, $methodBeforeStart);
++            $methodAfter = array_splice($this->context->afterStmtLines, $methodAfterStart);
++        }
+         // Keep the statically named method available to every later branch.
+         // Re-checking isNamedMethod() does not prove the earlier assignment to
+         // static analyzers and previously left the object path uninitialized.
+@@ -775,16 +798,26 @@
+             return $pythonFacadeCall;
+         }
+ 
+-        // Keyword methods are dispatched before all receiver-specific logic.
++        // Native keyword conversions do not replace PHP object methods.
+         if ($this->isNamedMethod($expr->name)) {
+             $receiverType = $this->isVarExpr($expr->var) ? $this->getVarType($object) : $this->detectTypeOfExpr($expr->var);
+             if ($receiverType === Type::VOID) {
+                 $receiverType = Type::VAR;
+             }
++            $runtimeObjectDispatch = $this->usesRuntimeObjectMethodDispatch($expr->var, $class, $receiverType);
+             $keywordType = $this->findKeywordMethod($methodName);
+-            if ($keywordType !== null
++            if (!$runtimeObjectDispatch && $keywordType !== null
++                && !$this->isDeclaredObjectToArrayCall($expr, $class)
+                 && isset(self::KEYWORD_METHOD_MAP[$methodName])
+                 && !$expr->getAttribute('nativeKeywordCall', false)
++                && !($expr->args !== []
++                    && !isset(self::KEYWORD_METHOD_WITH_ARGUMENTS[$methodName])
++                    && $class === ''
++                    && $this->detectClassOfExpr($expr->var) === '')
++                && !($class !== ''
++                    && $this->hasClass($class)
++                    && $this->getClass($class)->hasMethod('__call')
++                    && !$this->getClass($class)->hasMethod($methodName))
+             ) {
+                 if ($this->isVarExpr($expr->var)) {
+                     $this->assertStdContainerDoesNotEscapeNativeObjects($expr, $object);
+@@ -798,28 +831,16 @@
+                 if ($methodName === 'toRef') {
+                     return $this->genToRefCall($expr);
+                 }
+-                $receiverClass = $class;
+-                if ($receiverClass === '' && !$this->isVarExpr($expr->var)) {
+-                    $receiverClass = $this->detectClassOfExpr($expr->var);
+-                }
+-                // A declared conversion method is called directly. Otherwise
+-                // php::toArray() applies the PHP-compatible object-property
+-                // fallback (and invokes a real toArray() method when present).
+-                $useDeclaredToArray = $methodName === 'toArray'
+-                    && $receiverClass !== ''
+-                    && $this->objectTypeDeclaresMethod($receiverClass, $methodName);
+-                if (!$useDeclaredToArray) {
+-                    return $this->genToConvertCall($object, $methodName, $receiverType);
+-                }
++                return $this->genToConvertCall($object, $methodName, $receiverType);
+             }
+             // MethodsFor('*') extensions apply to every receiver type.
+             $kwExt = $this->findKeywordExtensionMethod($methodName);
+-            if ($kwExt) {
++            if (!$runtimeObjectDispatch && $kwExt) {
+                 return $this->parseUniversalMethodCall($expr, $object, $methodName, $kwExt, $this->isVarExpr($expr->var));
+             }
+             // A provider targeting Type::Any only applies when
+             // the receiver's static type is actually mixed/any.
+-            if ($receiverType === Type::VAR) {
++            if (!$runtimeObjectDispatch && $receiverType === Type::VAR) {
+                 $anyExtension = $this->findExtensionMethod(Type::VAR, $methodName);
+                 if ($anyExtension) {
+                     return $this->parseUniversalMethodCall($expr, $object, $methodName, $anyExtension, $this->isVarExpr($expr->var));
+@@ -1015,7 +1036,7 @@
+             $funcName,
+             $magicMethod,
+             $this->isVarExpr($expr->var) && $this->parseIdentifier($expr->var) === 'this_',
+-        ) || $typedPropertyLexicalPrivateClass !== '';
++        ) || $typedPropertyLexicalPrivateClass !== '' || $this->context->inClosure;
+         $resolvedMethodPtr = false;
+         if ($class && $funcName && !$magicMethod) {
+             if ($this->isInternalClass($class)) {
+@@ -1028,20 +1049,47 @@
+             $methodPtr = $method;
+         }
+ 
++        if ($this->runtimeDeclarationsEnabled) {
++            // Runtime dispatch validates its receiver after evaluating the
++            // method name but before evaluating any arguments. Keep both
++            // operands stable even if the method-name expression mutates a local.
++            $receiver = $this->addTmpVar(Type::VAR);
++            $this->context->beforeStmtLines[] = $receiver . ' = ' . $object . ';';
++            $this->context->afterStmtLines[] = $receiver . '.unset();';
++            $object = $receiver;
++            $this->appendCapturedStmtLinesToContext($methodBefore);
++            if (!$this->isNamedMethod($expr->name)) {
++                $name = $this->addTmpVar(Type::VAR);
++                $this->context->beforeStmtLines[] = $name . ' = ' . $method . ';';
++                $this->context->afterStmtLines[] = $name . '.unset();';
++                $method = $name;
++                if (!$resolvedMethodPtr) { $methodPtr = $name; }
++            }
++            $this->appendCapturedStmtLinesToContext($methodAfter);
++            $this->context->beforeStmtLines[] = 'typephp_check_method_receiver(' . $object . ', ' . $method . ');';
++        }
+         if (empty($expr->args)) {
+-            if ($requiresDynamicScope && $this->methodDef) {
++            if ($requiresDynamicScope && ($this->methodDef || $this->context->inClosure)) {
+                 if (!$resolvedMethodPtr) {
+                     if (!$cacheMethod) {
+-                        return 'php::callScoped(' . $object . ', ' . $methodPtr . ', '
+-                            . $this->getCallableScopeExpr() . ')';
++                        return $this->genClosureMethodDispatch(
++                            'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')',
++                            $object . '.call(' . $methodPtr . ')',
++                        );
+                     }
+-                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+-                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ')';
++                    $cache = $this->getMethodCallCache();
++                    return $this->genClosureMethodDispatch(
++                        'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $cache . ')',
++                        'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', ' . $cache . ')',
++                    );
+                 }
+                 // The method is already a stable zend_function* from the
+                 // project symbol cache. A second callable cache would only
+                 // add guards before the same direct call.
+-                return 'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')';
++                return $this->genClosureMethodDispatch(
++                    'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ')',
++                    $object . '.call(' . $methodPtr . ')',
++                );
+             }
+             if (!$resolvedMethodPtr) {
+                 if (!$cacheMethod) {
+@@ -1060,19 +1108,32 @@
+                         ? self::DYNAMIC_CALLED_CLASS
+                         : $typedPropertySignatureClass)
+                     : $class;
++                $runtimeFunction = '';
++                if ($this->runtimeDeclarationsEnabled) {
++                    $runtimeFunction = $this->addTmpVar('zend_function *');
++                    $scope = ($this->methodDef || $this->context->inClosure) ? '&' . $this->getCallableScopeExpr() : 'nullptr';
++                    $this->context->beforeStmtLines[] = $runtimeFunction . ' = typephp_runtime_method_function('
++                        . $object . ', ' . $methodPtr . ', ' . $scope . ');';
++                }
+                 $callArgs = $this->parseCallArgs(
+                     $expr->args,
+                     $funcName,
+                     $callArgClass,
++                    runtimeFunction: $runtimeFunction,
++                    requiresArgsContainer: $cacheMethod,
+                 );
+-                if ($requiresDynamicScope && $this->methodDef) {
++                if ($requiresDynamicScope && ($this->methodDef || $this->context->inClosure)) {
+                     if (!$cacheMethod) {
+-                        return 'php::callScoped(' . $object . ', ' . $methodPtr . ', '
+-                            . $this->getCallableScopeExpr() . ', ' . $callArgs . ')';
++                        return $this->genClosureMethodDispatch(
++                            'php::callScoped(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $callArgs . ')',
++                            $object . '.call(' . $methodPtr . ', ' . $callArgs . ')',
++                        );
+                     }
+-                    return 'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', '
+-                        . $this->getCallableScopeExpr() . ', ' . $this->getMethodCallCache() . ', '
+-                        . $callArgs . ')';
++                    $cache = $this->getMethodCallCache();
++                    return $this->genClosureMethodDispatch(
++                        'typephp_call_method_scoped_cached(' . $object . ', ' . $methodPtr . ', ' . $this->getCallableScopeExpr() . ', ' . $cache . ', ' . $callArgs . ')',
++                        'typephp_call_method_cached(' . $object . ', ' . $methodPtr . ', ' . $cache . ', ' . $callArgs . ')',
++                    );
+                 }
+                 if (!$cacheMethod) {
+                     return $object . '.call(' . $methodPtr . ', ' . $callArgs . ')';
+@@ -1093,6 +1154,32 @@
+         }
+     }
+ 
++    protected function usesRuntimeObjectMethodDispatch(
++        Expr $receiver,
++        ?string $class = null,
++        ?string $type = null,
++    ): bool {
++        if (!$this->runtimeDeclarationsEnabled) {
++            return false;
++        }
++        if ($receiver instanceof Expr\Variable && is_string($receiver->name)) {
++            $name = $this->escapeVarName($receiver->name);
++            if ($receiver->name === 'this' && $this->classDef !== null) {
++                return !$this->classDef->nativeObject;
++            }
++            $class ??= $this->context->objects[$name] ?? $this->context->declaredObjects[$name] ?? '';
++            if ($type === null && $this->hasVar($name)) {
++                $type = $this->getVarType($name);
++            }
++        }
++        if ($class !== null && $class !== '') {
++            return !$this->isNativeObjectClass($class);
++        }
++        // Pre-analysis has not registered every local or evaluated receivers.
++        // Unknown PHP values retain method dispatch until concrete metadata exists.
++        return $type === null || in_array($type, [Type::OBJECT, Type::VAR, Type::REF], true);
++    }
++
+     private function isDefinitelyObjectReceiver(
+         Expr $receiver,
+         string $object,
+@@ -1182,6 +1269,13 @@
+         }
+ 
+         $class = $this->getFullClassName();
++        $methodClass = $this->classDef;
++        while (!$methodClass->hasMethod($method)) {
++            if (!$methodClass->extends || !$this->hasClass($methodClass->extends)) {
++                return null;
++            }
++            $methodClass = $this->getClass($methodClass->extends);
++        }
+         try {
+             $nativeFunc = $this->getNativeMethod($expr, $class, $method);
+         } catch (DynamicCall) {
+@@ -1247,7 +1341,7 @@
+         if ($this->isNameExpr($expr->class)
+             && $this->isIdExpr($expr->name)
+             && strtolower(ltrim($expr->class->toString(), '\\')) === 'closure'
+-            && in_array(strtolower($expr->name->toString()), ['bind', 'bindto', 'call'], true)) {
++            && in_array(strtolower($expr->name->toString()), ['call'], true)) {
+             $closureMethod = $expr->name->toString();
+             $this->fatalError(
+                 $expr,
+@@ -1323,6 +1417,17 @@
+             }
+             $method = $this->parseIdentifier($expr->name);
+             $methodPtr = $this->methodNameToStr($expr->name, literal: true);
++            if ($this->runtimeDeclarationsEnabled && $this->classDef?->runtimePublicName) {
++                $target = $this->getCalledCeExpr();
++                $function = 'php::getMethod(' . $target . ', ' . $methodPtr . ')';
++                if ($this->methodDef !== null && !($this->methodDef->flags & Modifiers::STATIC)) {
++                    return 'this_.call(' . $function
++                        . ($expr->args === [] ? '' : ', ' . $this->parseCallArgs($expr->args, $method, $this->getFullClassName()))
++                        . ')';
++                }
++                return $this->genRuntimeFunctionCall($function,
++                    $expr->args, $method, $this->getFullClassName(), scope: $target);
++            }
+             $exactCall = $this->parseExactLateStaticCall($expr, $method, $methodPtr);
+             if ($exactCall !== null) {
+                 return $exactCall;
+@@ -1424,21 +1529,29 @@
+             return 'php::call(' . $fn . ')';
+         }
+         try {
++            $runtimeFunction = '';
++            if ($this->runtimeDeclarationsEnabled
++                && ($scopedInstanceCall || $scopedStaticCall || $directStaticCall || $cacheCallable)) {
++                $runtimeFunction = $this->addTmpVar('zend_function *');
++                $scope = ($this->methodDef || $this->context->inClosure) ? '&' . $this->getCallableScopeExpr() : 'nullptr';
++                $this->context->beforeStmtLines[] = $runtimeFunction . ' = typephp_runtime_callable_function('
++                    . $fn . ', ' . $scope . ');';
++            }
+             if ($scopedInstanceCall) {
+                 return 'php::callScoped(this_, ' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
+-                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
++                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass, runtimeFunction: $runtimeFunction) . ')';
+             }
+             if ($scopedStaticCall) {
+                 return 'php::callScoped(' . $fn . ', ' . $this->getCallableScopeExpr() . ', '
+-                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
++                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass, runtimeFunction: $runtimeFunction) . ')';
+             }
+             if ($directStaticCall) {
+                 return 'php::callStaticMethod(' . $staticCallTarget . ', ' . $staticCallMethod . ', '
+-                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
++                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass, runtimeFunction: $runtimeFunction) . ')';
+             }
+             if ($cacheCallable) {
+                 return 'typephp_call_cached(' . $fn . ', ' . $this->getFunctionCallCache() . ', '
+-                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass) . ')';
++                    . $this->parseCallArgs($expr->args, $rtFunc, $rtClass, runtimeFunction: $runtimeFunction, requiresArgsContainer: true) . ')';
+             }
+             return $this->genRuntimeFunctionCall($fn, $expr->args, $rtFunc, $rtClass);
+         } catch (PlaceHolder) {
+--- a/src/TypeSystem/NativeTypeCompatibilityTrait.php
++++ b/src/TypeSystem/NativeTypeCompatibilityTrait.php
+@@ -139,7 +139,7 @@
+                 // however, $expected must also be a built-in class/interface,
+                 // otherwise runtime reflection cannot cross into the external user
+                 // class namespace.
+-                return $internal && is_subclass_of($class, $expected);
++                return $internal && (strcasecmp($class, $expected) === 0 || is_subclass_of($class, $expected));
+             }
+             $classDef = $this->getClass($class);
+         }
+@@ -236,6 +236,15 @@
+         }
+ 
+         if ($argInfo->byRef) {
++            if ($argInfo->persistentReference) {
++                if ($this->isReferenceWrapperCall($arg->value)) {
++                    $arg = clone $arg;
++                    $arg->value = $this->unwrapReferenceWrapperCall($arg->value, $arg);
++                }
++                $this->assertNativeObjectReferenceForbidden($arg->value, $arg);
++                $this->assertReadonlyPropertyReferenceForbidden($arg->value, $arg, false);
++                return $this->convertToRef($arg->value);
++            }
+             // A fixed Native field already is the exact C++ storage required by
+             // a typed-reference parameter. Bind the call directly to that field
+             // instead of attempting to manufacture a Zend reference around it.

@@ -1,0 +1,18 @@
+--- a/src/Translator.php
++++ b/src/Translator.php
+@@ -7419,8 +7419,14 @@
+                 . ($multiReturn ? $this->getMultiReturnImplName($name) : $nativeName) . '(';
+         }
+         if ($this->class && !$nativeClassMethod) {
++            // A degraded `$this` keeps the same `php::Object &` ABI under the
++            // renamed captured-argument slot so the preamble can initialize a
++            // local Var copy of the bound receiver.
+             $functionDeclCode .= ($this->getNativeObjectMethodThisType($this->functionDef)
+-                ?? (Type::OBJECT . ' &')) . 'this_';
++                ?? (Type::OBJECT . ' &'))
++                . (isset($this->context->varTypeDegradations['this_'])
++                    ? $this->getDegradedArgumentStorageName('this_')
++                    : 'this_');
+             if ($this->functionDef->params) {
+                 $functionDeclCode .= ', ';
+             }

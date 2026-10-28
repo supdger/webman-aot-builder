@@ -84,7 +84,7 @@ final class MacosToolchainPreparer implements ToolchainPreparer
         );
         (new TypePhpPatchSourceVerifier())->verify(
             $tools['typephp'],
-            dirname($this->script, 2) . '/toolchain/patches/typephp/0.9.2/manifest.json'
+            dirname($this->script, 2) . '/toolchain/patches/typephp/0.9.5/manifest.json'
         );
         $installed = $this->compilerDriver();
         if (hash_file('sha256', $tools['php']) !== hash_file('sha256', $installed)) {

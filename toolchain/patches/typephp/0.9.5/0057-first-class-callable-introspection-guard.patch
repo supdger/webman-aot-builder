@@ -1,0 +1,10 @@
+--- a/src/Parser/FunctionCallTrait.php
++++ b/src/Parser/FunctionCallTrait.php
+@@ -408,6 +408,7 @@
+             }
+             if ($mayCallGlobalBuiltin
+                 && ($globalName === 'get_class' || $globalName === 'get_parent_class')
++                && !$expr->isFirstClassCallable()
+                 && (($expr->args === [] && $this->classDef?->nativeObject)
+                     || ($expr->args !== []
+                         && $this->isNativeObjectClass($this->detectClassOfExpr($expr->args[0]->value))))

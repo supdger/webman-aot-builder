@@ -13,6 +13,23 @@ final class RuntimeDataPaths
         'plugin/saiadmin/public/export',
     ];
 
+    private const DEV_FIXTURE_DIRECTORIES = [
+        'test', 'tests', 'testing', 'doc', 'docs',
+        'fixture', 'fixtures', 'spec', 'specs', 'benchmark', 'benchmarks',
+        '.github', '.gitlab',
+    ];
+
+    public static function isDevFixturePath(string $path): bool
+    {
+        foreach (explode('/', str_replace('\\', '/', $path)) as $component) {
+            if (in_array(strtolower($component), self::DEV_FIXTURE_DIRECTORIES, true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     public static function isWritableDataPath(string $path): bool
     {
         $path = str_replace('\\', '/', $path);

@@ -5,27 +5,23 @@ declare(strict_types=1);
 namespace WebmanAotBuilder\Compatibility;
 
 use WebmanAotBuilder\Cli\ConfigurationException;
-use WebmanAotBuilder\Project\ProjectProfile;
 
 final class UpstreamProjectGenerator
 {
     /**
-     * @return array{projectFile:string,projectSha256:string,mainFile:?string,mainSha256:string,mappings:int,coverageMappings:list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>,entrypointMapping:?array,generatorRevision:string,status:string,adaptations:array<string,string>}
+     * @return array{projectFile:string,projectSha256:string,mainFile:string,mainSha256:string,mappings:int,coverageMappings:list<array{path:string,shadow:string,sourceSha256:string,shadowSha256:string}>,entrypointMapping:?array,generatorRevision:string,status:string,adaptations:array<string,string>}
      */
     public function generate(
         string $mirror,
         string $archive,
         string $privateCache,
         string $lockFile,
-        string $profile,
         string $outputName,
-        ?string $sdkDirectory = null,
-        array $sdkContext = []
+        ?string $targetSdkRoot = null,
+        ?string $explicitEntry = null
     ): array {
-        if (!in_array($profile, [ProjectProfile::PHP, ProjectProfile::WEBMAN, ProjectProfile::SAIADMIN], true)
-            || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1
-        ) {
-            throw new ConfigurationException('invalid PHP project profile or output name');
+        if (preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1) {
+            throw new ConfigurationException('invalid PHP project output name');
         }
         $contents = is_file($lockFile) && !is_link($lockFile) ? file_get_contents($lockFile) : false;
         if (!is_string($contents)) {
@@ -53,12 +49,13 @@ final class UpstreamProjectGenerator
             $generatorSha256,
             [],
             [],
-            static function () use ($mirror, $generatorRoot, $lock, $outputName, &$generated): array {
+            static function () use ($mirror, $generatorRoot, $lock, $outputName, $explicitEntry, &$generated): array {
                 $generated = (new GenericProjectGenerator())->generate(
                     $mirror,
                     $generatorRoot . '/src/Stubs/main.php.stub',
                     $lock['generator']['mainStubSha256'],
                     $outputName,
+                    explicitEntry: $explicitEntry,
                 );
                 return $generated['mappings'];
             }

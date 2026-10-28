@@ -1,0 +1,35 @@
+--- a/src/Context/CompilationStateTrait.php
++++ b/src/Context/CompilationStateTrait.php
+@@ -195,11 +195,30 @@
+                 if (isset($nonLocals[$source[2]]) || $this->isSuperGlobal($name)
+                     || $this->hasScopeGlobalVar($name) || $this->hasStaticVar($name)) { continue; }
+                 if ($this->hasArgument($name)) {
+-                    if (!in_array($this->getRawVarType($name), [Type::REF, Type::VAR], true)
+-                        || $this->isNativeObjectVar($name) || $this->isStdContainerParameter($name)
++                    if ($this->isNativeObjectVar($name) || $this->isStdContainerParameter($name)
+                         || isset($this->context->typedArrays[$name])) {
+                         $this->fatalError(new Variable($source[2]), 'Persistent PHP reference requires owned Zend storage');
+                     }
++                    $type = $this->getRawVarType($name);
++                    if ($type !== Type::VAR && $type !== Type::REF && !Type::isTypedRefType($type)) {
++                        if ($this->context->inClosure) {
++                            // Closure and Fiber arguments have no renamed ABI
++                            // storage slot to copy a Var local from.
++                            $this->fatalError(new Variable($source[2]), 'Persistent PHP reference requires owned Zend storage');
++                        }
++                        // Keep the public/native ABI fixed, but make the PHP-visible
++                        // parameter a local Var copy. Its declaration is emitted in the
++                        // function preamble under the original source name.
++                        $this->context->varTypeDegradations[$name] = Type::VAR;
++                        $this->context->localVars[$name] = Type::VAR;
++                        unset(
++                            $this->context->objects[$name],
++                            $this->context->declaredObjects[$name],
++                            $this->context->stableObjects[$name],
++                            $this->context->exactObjects[$name],
++                            $this->context->nonNullNativeObjects[$name],
++                        );
++                    }
+                     continue;
+                 }
+                 $this->context->varTypeDegradations[$name] = Type::VAR;

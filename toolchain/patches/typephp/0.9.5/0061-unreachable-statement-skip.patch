@@ -1,0 +1,35 @@
+--- a/src/CompilerBase.php
++++ b/src/CompilerBase.php
+@@ -2439,8 +2439,20 @@
+         $breakableIsSwitchTop = $this->context->breakableIsSwitch;
+         $breakableDepthTop = $this->context->breakableDepth;
+         $last = array_key_last($stmts);
++        $terminated = false;
+         foreach ($stmts as $i => $v) {
+             $class                 = $v->getType();
++            if ($terminated) {
++                if ($class === 'Stmt_Label') {
++                    // A goto target revives the linear flow inside this list.
++                    $terminated = false;
++                } else {
++                    // Statements after a linear terminator cannot execute;
++                    // PHP still permits them, so skip instead of rejecting
++                    // constructs that only fail in reachable code.
++                    continue;
++                }
++            }
+             $this->context->beforeStmtLines = [];
+             $this->context->afterStmtLines  = [];
+             $result                = '';
+@@ -2548,6 +2560,11 @@
+                 default:
+                     $this->unsupportedSyntax($v);
+                     break;
++            }
++            if (in_array($class, ['Stmt_Return', 'Stmt_Goto', 'Stmt_Break', 'Stmt_Continue'], true)
++                || ($class === 'Stmt_Expression'
++                    && ($v->expr instanceof Expr\Throw_ || $v->expr instanceof Expr\Exit_))) {
++                $terminated = true;
+             }
+             // Reference bridges, argument arrays, and call guards live for
+             // this statement only. Keep their initialization and cleanup in a

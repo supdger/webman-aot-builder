@@ -1,0 +1,186 @@
+--- a/src/Build/DynamicVariablesTrait.php
++++ b/src/Build/DynamicVariablesTrait.php
+@@ -108,7 +108,22 @@
+                 if ($node instanceof Expr\Assign || $node instanceof Expr\AssignOp || $node instanceof Expr\AssignRef) {
+                     $bind($node->var);
+                     $scan($node->var, 'write');
+-                    $scan($node->expr, $node instanceof Expr\AssignRef ? 'write' : 'read');
++                    $rhsMode = 'read';
++                    if ($node instanceof Expr\Assign && $node->var instanceof Expr\List_) {
++                        $referenced = function (Expr\List_ $list) use (&$referenced): bool {
++                            foreach ($list->items as $item) {
++                                if ($item !== null && ($item->byRef
++                                    || ($item->value instanceof Expr\List_ && $referenced($item->value)))) {
++                                    return true;
++                                }
++                            }
++                            return false;
++                        };
++                        if ($referenced($node->var)) {
++                            $rhsMode = 'read-reference';
++                        }
++                    }
++                    $scan($node->expr, $node instanceof Expr\AssignRef ? 'write' : $rhsMode);
+                     continue;
+                 }
+                 if ($node instanceof Expr\Isset_ || $node instanceof Node\Stmt\Unset_) {
+--- a/src/Parser/AssignOpTrait.php
++++ b/src/Parser/AssignOpTrait.php
+@@ -310,29 +310,41 @@
+             return false;
+         };
+         $byReference = $references($left);
+-        $source = $this->addTmpVar(Type::VAR);
+-        $sourceNode = new Variable($source, $right->getAttributes());
+-        $before = count($this->context->beforeStmtLines);
+-        $after = count($this->context->afterStmtLines);
+-        if ($byReference && !$right instanceof Expr\CallLike) {
+-            $value = $this->convertToRef($right);
++        $aliasRhs = $byReference && $right instanceof Expr\Variable && is_string($right->name);
++        if ($aliasRhs) {
++            if ($this->isDynamicScopeVariable($right)) {
++                $right->setAttribute('dynamicVariableMode', 'read-reference');
++            }
++            $this->assertVariableReferenceStorage($right, $right);
++            $source = $this->parseIdentifier($right);
++            $sourceNode = $right;
++            $rhsBefore = [];
++            $rhsAfter = [];
+         } else {
+-            $value = $this->parseExprAsValue($right);
+-        }
+-        $rhsBefore = array_splice($this->context->beforeStmtLines, $before);
+-        $rhsAfter = array_splice($this->context->afterStmtLines, $after);
++            $source = $this->addTmpVar(Type::VAR);
++            $sourceNode = new Variable($source, $right->getAttributes());
++            $before = count($this->context->beforeStmtLines);
++            $after = count($this->context->afterStmtLines);
++            if ($byReference && !$right instanceof Expr\CallLike) {
++                $value = $this->convertToRef($right);
++            } else {
++                $value = $this->parseExprAsValue($right);
++            }
++            $rhsBefore = array_splice($this->context->beforeStmtLines, $before);
++            $rhsAfter = array_splice($this->context->afterStmtLines, $after);
++        }
+         $code = '[&]() -> php::Var {' . PHP_EOL;
+         $this->indentLevel++;
+         $code .= $this->formatCapturedStmtLines($rhsBefore);
+-        if ($byReference && $right instanceof Expr\CallLike) {
++        if (!$aliasRhs && $byReference && $right instanceof Expr\CallLike) {
+             $code .= $this->getIndent() . '{ php::Var value(' . $value . '); '
+                 . 'if (!value.isReference()) { '
+                 . ($this->runtimeDeclarationsEnabled ? 'TypephpNativeCallLine line(' . max(1, $left->getStartLine()) . '); ' : '')
+                 . 'zend_error(E_NOTICE, "Attempting to set reference to non referenceable value"); php::throwErrorIfOccurred(); } '
+                 . $source . '.rebindReference(value.toReference()); }' . PHP_EOL;
+-        } elseif ($byReference) {
++        } elseif (!$aliasRhs && $byReference) {
+             $code .= $this->getIndent() . $source . '.rebindReference(' . $value . ');' . PHP_EOL;
+-        } else {
++        } elseif (!$aliasRhs) {
+             $code .= $this->getIndent() . $source . ' = ' . $value . ';' . PHP_EOL;
+         }
+         $code .= $this->formatCapturedStmtLines($rhsAfter);
+@@ -1817,8 +1829,7 @@
+                 }
+             } else {
+                 $array = $this->parseWritableIdentifier($expr->expr->var);
+-                $rightExpr = $tmpVar . ' = ' . $array . '.itemRef('
+-                    . $this->parseIdentifier($expr->expr->dim) . ')';
++                $rightExpr = $tmpVar . ' = ' . $this->arrayElementReference($array, $this->parseIdentifier($expr->expr->dim));
+             }
+         } else {
+             $this->fatalError($expr, 'Cannot assign reference to ' . $this->parseIdentifier($expr->expr));
+--- a/src/Parser/TypeConversionTrait.php
++++ b/src/Parser/TypeConversionTrait.php
+@@ -304,7 +304,16 @@
+         }
+         $this->checkLeftValue($expr);
+         if ($expr instanceof Node\Expr\ArrayDimFetch) {
+-            return $this->parseArrayDimFetchUpdate($expr) . '.toReference()';
++            if ($expr->dim === null) {
++                $this->fatalError($expr, 'Cannot assign reference to array dim fetch without dim');
++            }
++            if ($expr->var instanceof Expr\Variable && is_string($expr->var->name)
++                && $this->isDynamicScopeVariable($expr->var)
++                && $expr->var->getAttribute('dynamicVariableMode', 'read') === 'read') {
++                $expr->var->setAttribute('dynamicVariableMode', 'read-reference');
++            }
++            $array = $this->parseWritableIdentifier($expr->var);
++            return $this->arrayElementReference($array, $this->parseIdentifier($expr->dim));
+         }
+         if ($expr instanceof Node\Expr\PropertyFetch) {
+             // A normal property read may return a temporary zval. Turning that
+@@ -319,6 +328,23 @@
+         $var = $this->parseIdentifier($expr);
+         $this->assertVariableReferenceStorage($expr, $expr, $var);
+         return $var . '.toReference()';
++    }
++
++    protected function arrayElementReference(string $array, string $key): string
++    {
++        return '[&]() -> php::Reference { php::Var key(' . $key . '); '
++            . 'zval *container = ' . $array . '.unwrap_ptr(); ZVAL_DEREF(container); '
++            . 'if (Z_TYPE_P(container) != IS_ARRAY) { array_init(container); } else { SEPARATE_ARRAY(container); } '
++            . 'zval *slot = nullptr; if (Z_TYPE_P(key.ptr()) == IS_LONG) { '
++            . 'slot = zend_hash_index_find(Z_ARRVAL_P(container), Z_LVAL_P(key.ptr())); '
++            . 'if (slot == nullptr) { zval empty_value; ZVAL_NULL(&empty_value); '
++            . 'slot = zend_hash_index_update(Z_ARRVAL_P(container), Z_LVAL_P(key.ptr()), &empty_value); } '
++            . '} else { zend_string *name = zval_get_string(key.ptr()); '
++            . 'slot = zend_symtable_find(Z_ARRVAL_P(container), name); '
++            . 'if (slot == nullptr) { zval empty_value; ZVAL_NULL(&empty_value); '
++            . 'slot = zend_symtable_update(Z_ARRVAL_P(container), name, &empty_value); } '
++            . 'zend_string_release(name); } if (slot == nullptr) { return php::Reference(); } '
++            . 'ZVAL_MAKE_REF(slot); return php::Reference(slot); }()';
+     }
+ 
+     /**
+--- a/src/Transform/ConstantExpressionValidationVisitor.php
++++ b/src/Transform/ConstantExpressionValidationVisitor.php
+@@ -68,7 +68,6 @@
+                     $constant->value,
+                     'Closures in constant declarations are not supported by TypePHP',
+                 );
+-                $this->validator->validate($constant->value, allowDynamic: false);
+             }
+             return null;
+         }
+@@ -106,7 +105,6 @@
+                     $constant->value,
+                     'Closures in constant declarations are not supported by TypePHP',
+                 );
+-                $this->validator->validate($constant->value, allowDynamic: true);
+             }
+             return null;
+         }
+--- a/src/gen_stub.php
++++ b/src/gen_stub.php
+@@ -3064,6 +3064,28 @@
+                 $nodes[$children[0]]['attr'] = 'ZEND_DIM_IS';
+             }
+             $children[] = $this->appendConstantAstNode($expr->right, $nodes);
++        } elseif ($expr instanceof Expr\Ternary) {
++            $kind = 'ZEND_AST_CONDITIONAL';
++            $children[] = $this->appendConstantAstNode($expr->cond, $nodes);
++            $children[] = $expr->if === null ? null : $this->appendConstantAstNode($expr->if, $nodes);
++            $children[] = $this->appendConstantAstNode($expr->else, $nodes);
++        } elseif ($expr instanceof Expr\FuncCall && $expr->name instanceof Name) {
++            $kind = 'ZEND_AST_CALL';
++            $children[] = $this->appendConstantAstNode(new Node\Scalar\String_($expr->name->toString(), $expr->getAttributes()), $nodes);
++            $arguments = count($nodes);
++            $nodes[] = [];
++            $argumentChildren = [];
++            foreach ($expr->args as $argument) {
++                if (!$argument instanceof Node\Arg || $argument->unpack || $argument->name !== null) {
++                    throw new Exception('Unsupported deferred constant call argument');
++                }
++                $argumentChildren[] = $this->appendConstantAstNode($argument->value, $nodes);
++            }
++            $nodes[$arguments] = [
++                'kind' => 'ZEND_AST_ARG_LIST', 'attr' => '0', 'children' => $argumentChildren,
++                'list' => true, 'value' => null, 'line' => $expr->getStartLine(),
++            ];
++            $children[] = $arguments;
+         } else {
+             $value = self::createFromExpression($expr, null, null, [])->value;
+             if (!is_scalar($value) && $value !== null) {

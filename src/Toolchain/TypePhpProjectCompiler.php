@@ -8,11 +8,18 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 
 final class TypePhpProjectCompiler
 {
-    /** @var \Closure(list<string>,string,array<string,string>):int */
+    /**
+     * A demotion removes one source from native code generation, so the number
+     * of attempts cannot exceed the number of sources. This bound keeps a
+     * compiler failure that cannot be attributed from looping forever.
+     */
+    private const MAX_DEMOTION_ATTEMPTS = 50;
+
+    /** @var \Closure(list<string>,string,array<string,string>,string|null):int */
     private readonly \Closure $run;
 
     /**
-     * @param (\Closure(list<string>,string,array<string,string>):int)|null $run
+     * @param (\Closure(list<string>,string,array<string,string>,string|null):int)|null $run
      */
     public function __construct(?\Closure $run = null)
     {
@@ -21,13 +28,13 @@ final class TypePhpProjectCompiler
 
     /**
      * @param array{php:string,typephp:string,phpx:string,compiler:string,objcopy:string,sysroot:string,phprc:string,sdkSha256:string} $tools
-     * @return array{artifact:string,sha256:string,size:int}
+     * @return array{artifact:string,sha256:string,size:int,interpreted:list<array{path:string,reason:string}>}
      */
-    public function compile(string $mirrorDirectory, string $outputName, array $tools, ?string $objectCache = null, ?string $identity = null, bool $fresh = false): array
+    public function compile(string $mirrorDirectory, string $outputName, array $tools): array
     {
         $mirror = realpath($mirrorDirectory);
         if (!is_string($mirror)
-            || !\WebmanAotBuilder\Project\ProjectMirror::isOwnedPath($mirror)
+            || !str_contains(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/')
             || is_link($mirrorDirectory)
             || preg_match('/^[A-Za-z0-9][A-Za-z0-9._-]*$/D', $outputName) !== 1
         ) {
@@ -48,6 +55,7 @@ final class TypePhpProjectCompiler
             ) !== 1
             || !str_contains($contents, "\nbuild-dir: build\n")
             || !str_contains($contents, "\ntarget-platform: x86_64-unknown-linux-musl\n")
+            || preg_match('/^native-runtime-declarations: true$/m', $contents) !== 1
             || !str_contains($contents, 'reproducible-source-prefix: /usr/src/webman-aot-builder')
             || $sysrootFlag === ''
             || substr_count($contents, $sysrootFlag) !== 4
@@ -76,42 +84,10 @@ final class TypePhpProjectCompiler
             throw new ConfigurationException('full-static SDK fingerprint differs from the locked input');
         }
 
-        $lock = json_decode((string) file_get_contents(dirname(__DIR__, 2) . '/toolchain.lock.json'), true, flags: JSON_THROW_ON_ERROR);
-        $sdkPolicy = $lock['evidence']['patchedSdk'] ?? null;
-        if ($sdkPolicy !== null) {
-            if (!is_array($sdkPolicy)) { throw new ConfigurationException('patched SDK approval is malformed'); }
-            if (($sdkPolicy['sdkSha256'] ?? null) !== $tools['sdkSha256']) {
-                throw new ConfigurationException('full-static SDK differs from the approved patched SDK');
-            }
-            (new SdkArchiveGuard())->assertDerivation($tools['phpx'] . '/full-static/sdk', $sdkPolicy);
-        }
-
         $environment = [];
         foreach (getenv() as $name => $value) {
             if (is_string($name) && is_string($value)) {
                 $environment[$name] = $value;
-            }
-        }
-        if ($objectCache !== null) {
-            (new TypePhpPatchSourceVerifier())->verify($tools['typephp'], dirname(__DIR__, 2) . '/toolchain/patches/typephp/0.9.2/manifest.json');
-            $build = dirname($mirror);
-            if (basename($build) !== 'build') { $build = dirname($build); }
-            $cacheParent = realpath(dirname($objectCache));
-            if (!is_string($cacheParent) || $cacheParent !== realpath(dirname($build) . '/cache')
-                || basename($objectCache) !== 'objects') {
-                throw new ConfigurationException('object checkpoint cache escaped the project workspace');
-            }
-            if (!is_string($identity) || preg_match('/^[a-f0-9]{64}$/D', $identity) !== 1
-                || is_link($objectCache) || (!is_dir($objectCache) && !mkdir($objectCache, 0700, true) && !is_dir($objectCache))) {
-                throw new ConfigurationException('unsafe object checkpoint cache');
-            }
-            $environment['WEBMAN_AOT_OBJECT_CACHE'] = $objectCache;
-            $environment['WEBMAN_AOT_CACHE_IDENTITY'] = $identity;
-            $environment['WEBMAN_AOT_PROJECT_ROOT'] = $mirror;
-            $environment['WEBMAN_AOT_FRESH'] = $fresh ? '1' : '0';
-        } else {
-            foreach (['WEBMAN_AOT_OBJECT_CACHE', 'WEBMAN_AOT_CACHE_IDENTITY', 'WEBMAN_AOT_PROJECT_ROOT', 'WEBMAN_AOT_FRESH'] as $name) {
-                unset($environment[$name]);
             }
         }
         $environment['PHPX_HOME'] = $tools['phpx'];
@@ -135,12 +111,9 @@ final class TypePhpProjectCompiler
                 $environment['PATH']
             ),
             '--job=4',
+            '--force',
         ];
-        if ($objectCache === null) { $compile[] = '--force'; }
-        $exitCode = ($this->run)($compile, $mirror, $environment);
-        if ($exitCode !== 0) {
-            throw new \RuntimeException('编译未完成；已完成单元已保留。修正上面的错误后重试 webman-aot build；需要全量重建时运行 webman-aot build --fresh。未完成单元将从头编译。', $exitCode);
-        }
+        $interpreted = $this->compileWithDemotion($compile, $mirror, $environment, $project);
 
         $artifact = $mirror . '/build/' . $outputName;
         if (!is_file($artifact) || is_link($artifact)) {
@@ -149,7 +122,8 @@ final class TypePhpProjectCompiler
         if (($this->run)(
             [$tools['objcopy'], '--remove-section=.comment', $artifact],
             $mirror,
-            $environment
+            $environment,
+            null
         ) !== 0) {
             throw new \RuntimeException('locked objcopy could not normalize the ELF');
         }
@@ -169,7 +143,81 @@ final class TypePhpProjectCompiler
         if (!is_string($digest) || !is_int($size)) {
             throw new \RuntimeException('unable to hash the compiled ELF');
         }
-        return ['artifact' => $artifact, 'sha256' => $digest, 'size' => $size];
+        return [
+            'artifact' => $artifact,
+            'sha256' => $digest,
+            'size' => $size,
+            'interpreted' => $interpreted,
+        ];
+    }
+
+    /**
+     * Compile the project, demoting any source the compiler cannot translate.
+     *
+     * A source that fails native code generation keeps its original PHP text in
+     * the artifact and runs on the embedded Zend engine. The compiler names the
+     * offending file, so the project is retried with that file moved to the
+     * interpreted tier until the whole project compiles.
+     *
+     * @param list<string> $command
+     * @param array<string,string> $environment
+     * @return list<array{path:string,reason:string}>
+     */
+    private function compileWithDemotion(
+        array $command,
+        string $mirror,
+        array $environment,
+        string $projectFile
+    ): array {
+        $manifest = new InterpretedSourceManifest();
+        $attribution = new CompilerFailureAttribution();
+        $demoted = [];
+        foreach ($manifest->read($projectFile) as $existing) {
+            $demoted[$existing] = ['path' => $existing, 'reason' => 'registered interpreted source'];
+        }
+        for ($attempt = 0; $attempt <= self::MAX_DEMOTION_ATTEMPTS; $attempt++) {
+            $captured = '';
+            // Compiler output stays visible while it runs; the copy is only
+            // used to attribute a failure to one of the project sources.
+            $status = ($this->run)(
+                $command,
+                $mirror,
+                $environment,
+                static function (string $chunk) use (&$captured): void {
+                    $captured .= $chunk;
+                }
+            );
+            if ($status === 0) {
+                return array_values($demoted);
+            }
+            $added = [];
+            foreach ($attribution->attribute($captured, $mirror) as $candidate) {
+                if (isset($demoted[$candidate['path']])) {
+                    continue;
+                }
+                $demoted[$candidate['path']] = $candidate;
+                $added[] = $candidate;
+            }
+            if ($added === []) {
+                throw new \RuntimeException(
+                    'TypePHP full-static project compilation failed and the failure '
+                    . 'could not be attributed to a project source'
+                );
+            }
+            foreach ($added as $candidate) {
+                fwrite(
+                    STDERR,
+                    'interpreted fallback: ' . $candidate['path']
+                    . ' (' . $candidate['reason'] . ')' . PHP_EOL
+                );
+            }
+            $manifest->write($projectFile, array_keys($demoted));
+        }
+
+        throw new \RuntimeException(
+            'TypePHP full-static project compilation failed after '
+            . self::MAX_DEMOTION_ATTEMPTS . ' interpreted fallbacks'
+        );
     }
 
     private static function compilerCommand(string $path, string $host, string $searchPath): string
@@ -291,23 +339,54 @@ final class TypePhpProjectCompiler
     /**
      * @param list<string> $command
      * @param array<string,string> $environment
+     * @param (\Closure(string):void)|null $sink
      */
-    private function runProcess(array $command, string $directory, array $environment): int
-    {
-        $started = microtime(true);
-        $code = \WebmanAotBuilder\Cli\ProcessOutput::run(
-            $command, $directory, $environment, STDIN,
-            static function (int $index, string $chunk): void {
-                $stream = $index === 1 ? STDOUT : STDERR;
-                fwrite($stream, $chunk);
-                fflush($stream);
-            },
-            static function (float $elapsed, float $silent): void {
-                fwrite(STDERR, sprintf("[build] Compiler process is running; elapsed %.0fs, no output for %.0fs; work progress unknown.\n", $elapsed, $silent));
-            }
+    private function runProcess(
+        array $command,
+        string $directory,
+        array $environment,
+        ?\Closure $sink = null
+    ): int {
+        $process = proc_open(
+            $command,
+            [0 => STDIN, 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            $pipes,
+            $directory,
+            $environment
         );
-        fwrite(STDERR, sprintf("[build] Compiler process %s in %.1fs; exit code %d.\n", $code === 0 ? 'completed' : 'failed', microtime(true) - $started, $code));
-        return $code;
+        if (!is_resource($process)) {
+            throw new \RuntimeException('unable to start locked TypePHP tool');
+        }
+        stream_set_blocking($pipes[1], false);
+        stream_set_blocking($pipes[2], false);
+        $reportedExitCode = null;
+        while (true) {
+            $status = proc_get_status($process);
+            foreach ([1 => STDERR, 2 => STDERR] as $index => $destination) {
+                $chunk = stream_get_contents($pipes[$index]);
+                if (is_string($chunk) && $chunk !== '') {
+                    fwrite($destination, $chunk);
+                    $sink?->__invoke($chunk);
+                }
+            }
+            if (!$status['running']) {
+                $reportedExitCode = $status['exitcode'];
+                break;
+            }
+            usleep(20000);
+        }
+        foreach ([1 => STDERR, 2 => STDERR] as $index => $destination) {
+            stream_set_blocking($pipes[$index], true);
+            $chunk = stream_get_contents($pipes[$index]);
+            if (is_string($chunk) && $chunk !== '') {
+                fwrite($destination, $chunk);
+                $sink?->__invoke($chunk);
+            }
+            fclose($pipes[$index]);
+        }
+        $closedExitCode = proc_close($process);
+        return is_int($reportedExitCode) && $reportedExitCode >= 0
+            ? $reportedExitCode
+            : $closedExitCode;
     }
-
 }

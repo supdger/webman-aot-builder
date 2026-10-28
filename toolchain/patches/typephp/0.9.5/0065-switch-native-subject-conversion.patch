@@ -1,0 +1,15 @@
+--- a/src/Parser/SwitchTrait.php
++++ b/src/Parser/SwitchTrait.php
+@@ -35,6 +35,12 @@
+         [$condExpr, $condBeforeStmts, $condAfterStmts] = $this->parseExprWithCapturedStmts($cond);
+         $var_def = '';
+         $var_def .= $this->formatCapturedStmtLines($condBeforeStmts);
++        if ($this->usesNativeScalarStorage($type)) {
++            // A statically int/bool/float subject can still lower to a Variant
++            // (for example a runtime property read helper). Normalize it at
++            // the boundary like other materialized native-scalar operands.
++            $condExpr = $this->convertExprFromType($type, $condExpr);
++        }
+         $var_def .= $type . ' ' . $tmp_var . ' = ' . $condExpr . ';' . PHP_EOL;
+         $var_def .= $this->formatCapturedStmtLines($condAfterStmts);
+ 

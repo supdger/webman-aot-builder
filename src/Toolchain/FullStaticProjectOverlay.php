@@ -8,7 +8,7 @@ use WebmanAotBuilder\Cli\ConfigurationException;
 
 final class FullStaticProjectOverlay
 {
-    public function apply(string $projectFile, string $sysroot, ?string $profile = null, ?string $sdk = null): void
+    public function apply(string $projectFile, string $sysroot): void
     {
         if (!is_file($projectFile) || is_link($projectFile)) {
             throw new ConfigurationException('generated TypePHP project file is missing or unsafe');
@@ -17,6 +17,7 @@ final class FullStaticProjectOverlay
         if (!is_string($source) || str_contains($source, "\r")) {
             throw new ConfigurationException('generated TypePHP project file is unreadable or not LF-normalized');
         }
+        $beforeSha256 = hash('sha256', $source);
         $keys = [];
         preg_match_all('/^([a-z][a-z-]*):(?:[ \t]|$)/m', $source, $matches);
         foreach ($matches[1] as $key) {
@@ -36,6 +37,7 @@ final class FullStaticProjectOverlay
         $targetKeys = [
             'build-dir', 'php-version', 'target-platform', 'reproducible-source-prefix',
             'cxx-std', 'cxx-flags', 'c-flags', 'asm-flags', 'ld-flags',
+            'native-runtime-declarations',
         ];
         $lines = [];
         $skip = false;
@@ -56,24 +58,29 @@ final class FullStaticProjectOverlay
         if (preg_match('/["\r\n\x00-\x1f]/', $target) === 1) {
             throw new ConfigurationException('locked musl sysroot path cannot be quoted safely');
         }
-        if ($sdk === null) {
-            throw new ConfigurationException('full-static overlay requires the selected SDK PHP ABI');
+        foreach ([
+            '/usr/include/c++/12.2.1/vector',
+            '/usr/include/c++/12.2.1/x86_64-alpine-linux-musl/bits/c++config.h',
+            '/usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1/crtbegin.o',
+            '/usr/lib/libstdc++.a',
+        ] as $required) {
+            if (!is_file($target . $required)) {
+                throw new ConfigurationException("locked musl sysroot is incomplete: {$required}");
+            }
         }
-        $layout = (new StaticTargetLayout())->sysroot($target);
-        $phpVersion = (new StaticTargetLayout())->phpVersion($sdk);
-        $gcc = $layout['gcc'];
-        $cxx = $layout['cxx'];
-        $targetInclude = $layout['targetInclude'];
+
+        $gcc = $target . '/usr/lib/gcc/x86_64-alpine-linux-musl/12.2.1';
         $suffix = <<<YAML
 build-dir: build
-php-version: "{$phpVersion}"
+php-version: "8.4"
 target-platform: x86_64-unknown-linux-musl
 reproducible-source-prefix: /usr/src/webman-aot-builder
+native-runtime-declarations: true
 cxx-std: c++17
 cxx-flags: >-
   --sysroot="{$target}"
-  -isystem "{$cxx}"
-  -isystem "{$targetInclude}"
+  -isystem "{$target}/usr/include/c++/12.2.1"
+  -isystem "{$target}/usr/include/c++/12.2.1/x86_64-alpine-linux-musl"
 c-flags: --sysroot="{$target}"
 asm-flags: --sysroot="{$target}"
 ld-flags: >-
@@ -88,6 +95,18 @@ YAML;
         $suffix = str_replace(["\r\n", "\r"], "\n", $suffix);
         if (file_put_contents($projectFile, $source . $suffix . "\n", LOCK_EX) === false) {
             throw new ConfigurationException('unable to write full-static TypePHP project overlay');
+        }
+        $receiptFile = dirname($projectFile) . '/.typephp/build/compilation-sources.json';
+        if (is_file($receiptFile) && !is_link($receiptFile)) {
+            $receipt = json_decode((string) file_get_contents($receiptFile), true);
+            if (is_array($receipt) && ($receipt['schema'] ?? null) === 'webman-aot-compilation-sources-v2'
+                && ($receipt['manifestSha256'] ?? null) === $beforeSha256) {
+                $receipt['manifestSha256'] = hash('sha256', $source . $suffix . "\n");
+                $bytes = json_encode($receipt, JSON_THROW_ON_ERROR | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n";
+                if (file_put_contents($receiptFile, $bytes, LOCK_EX) !== strlen($bytes)) {
+                    throw new ConfigurationException('unable to bind source selection to the full-static manifest');
+                }
+            }
         }
     }
 

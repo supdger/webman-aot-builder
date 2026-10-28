@@ -1,0 +1,11 @@
+--- a/composer.json
++++ b/composer.json
+@@ -15,7 +15,7 @@
+     "bin/tpc.php"
+   ],
+   "require": {
+-    "php": ">=8.4 <8.6",
++    "php": ">=8.4",
+     "composer-runtime-api": "^2.2",
+     "nikic/php-parser": "^5.6",
+     "league/climate": "^3.10",

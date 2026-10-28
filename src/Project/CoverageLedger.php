@@ -10,11 +10,12 @@ final class CoverageLedger
     public const COMPILED_SHADOW = 'compiled-shadow';
     public const RUNTIME_APPROVED = 'runtime-approved';
     public const INSTALL_ONLY = 'install-only';
+    public const SOURCE_NOT_SELECTED = 'source-not-selected';
 
     /**
      * @param list<array<string, string|null>> $files
      */
-    public function __construct(private readonly array $files)
+    public function __construct(private readonly array $files, private readonly array $sourceDiagnostics = [])
     {
     }
 
@@ -50,6 +51,7 @@ final class CoverageLedger
             'schema' => 'webman-aot-builder-coverage-ledger-v1',
             'counts' => $this->counts(),
             'files' => $this->files,
+            'sourceDiagnostics' => $this->sourceDiagnostics,
         ];
     }
 }

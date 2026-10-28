@@ -1,0 +1,54 @@
+--- a/src/Transform/ConstantExpressionValidationVisitor.php
++++ b/src/Transform/ConstantExpressionValidationVisitor.php
+@@ -18,8 +18,9 @@
+ /**
+  * Applies the allow_dynamic values used by php-src at each declaration site.
+  *
+- * false: class constants, property defaults and enum cases.
+- * true: attributes, parameter defaults and global constants.
++ * Attributes stay on this prepare-time whitelist. Class constants, global
++ * constants, property defaults, enum cases, and parameter defaults are checked
++ * when their file is loaded. false rejects new; true allows it.
+  *
+  * PHP 8.4+ compiles static variable initializers as regular expressions and
+  * evaluates them only once, so they do not use the constant-expression path.
+@@ -68,7 +69,6 @@
+                     $constant->value,
+                     'Closures in constant declarations are not supported by TypePHP',
+                 );
+-                $this->validator->validate($constant->value, allowDynamic: false);
+             }
+             return null;
+         }
+@@ -80,14 +80,12 @@
+                         $property->default,
+                         'Closures in property default values are not supported by TypePHP',
+                     );
+-                    $this->validator->validate($property->default, allowDynamic: false);
+                 }
+             }
+             return null;
+         }
+ 
+-        if ($node instanceof Node\Stmt\EnumCase && $node->expr !== null) {
+-            $this->validator->validate($node->expr, allowDynamic: false);
++        if ($node instanceof Node\Stmt\EnumCase) {
+             return null;
+         }
+ 
+@@ -96,7 +94,6 @@
+                 $node->default,
+                 'Closures in parameter default values are not supported by TypePHP',
+             );
+-            $this->validator->validate($node->default, allowDynamic: true);
+             return null;
+         }
+ 
+@@ -106,7 +103,6 @@
+                     $constant->value,
+                     'Closures in constant declarations are not supported by TypePHP',
+                 );
+-                $this->validator->validate($constant->value, allowDynamic: true);
+             }
+             return null;
+         }

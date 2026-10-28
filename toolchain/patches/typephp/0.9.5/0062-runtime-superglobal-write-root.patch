@@ -1,0 +1,13 @@
+--- a/src/Parser/ArrayExpressionTrait.php
++++ b/src/Parser/ArrayExpressionTrait.php
+@@ -339,7 +339,9 @@
+         while ($root instanceof Expr\ArrayDimFetch) {
+             $root = $root->var;
+         }
+-        if (!$root instanceof Expr\Variable || !is_string($root->name) || $root->name === 'GLOBALS') {
++        if (!$root instanceof Expr\Variable || !is_string($root->name) || $root->name === 'GLOBALS'
++            || $this->isDynamicScopeVariable($root)
++            || $this->usesRuntimeSuperGlobalStorage($root->name)) {
+             return;
+         }
+ 
