@@ -9,10 +9,13 @@ Install the tool and build your project on a macOS Apple Silicon or Windows x64 
 
 ## How it works
 
-The builder enumerates readable PHP sources and passes an unchanged, isolated copy of each PHP file to TypePHP, then generates an executable with Clang and the PHPx static SDK. It returns the artifact on success or preserves TypePHP's original compilation errors on failure.
-Your original source code stays unchanged. Configuration, templates, and static assets remain external files as needed.
+The builder enumerates readable PHP sources and compiles an isolated mirror copy of each file with TypePHP, then generates an executable with Clang and the PHPx static SDK. Compilation is tiered so a single file cannot abort the build:
 
-Compiler compatibility work in the development source preserves runtime conditions, loading order, and declarations from multiple files. The [native regression runner](tests/native-declarations.php) compares reduced fixtures with SDK-matched PHP, including raw output, errors, and exit status. These changes are not yet released; the final frozen suite and complete project build remain under verification.
+- Directly compilable sources are compiled ahead of time.
+- Sources needing known mechanical adjustments are normalized inside the isolated mirror and then compiled.
+- Sources TypePHP cannot compile are excluded from code generation, embedded in the binary, and executed at runtime by the embedded Zend interpreter. If compilation reports a file-level failure, the builder attributes it, marks that file interpreted, and retries automatically within a bounded limit.
+
+The build finishes with a per-tier report (compiled / processed / interpreted) instead of surfacing compiler errors. Your original source code is never modified; all rewrites happen only inside the isolated build mirror. Configuration, templates, and static assets remain external files as needed.
 
 ## Source code and installation packages
 
@@ -52,7 +55,7 @@ Compilation has only four prerequisites:
 3. The output directory is writable.
 4. Executable builds have an explicit entrypoint; individual files and libraries follow their corresponding compilation modes.
 
-The input source supplies the executable entrypoint required by TypePHP, such as a global `main(): void`. TypePHP decides whether the entrypoint and language features meet its requirements. The builder does not identify frameworks, check dependency versions, review business code, generate or rewrite PHP source, or impose project, framework, plugin, directory layout, or business startup requirements.
+Standard Webman layouts need no entrypoint flag: a root `start.php` is picked up automatically, after an explicit `--entry` or a manifest `entry-source` and before Composer `bin` detection. The generated entrypoint is synthesized in the mirror so the Embed SAPI requirement is met. The builder does not check dependency versions, review business code, or impose project, framework, plugin, directory layout, or business startup requirements. Generated runtime data (`runtime/`, `node_modules/`), vendor development directories (tests, fixtures, docs, specs, benchmarks), hidden directories, and symlinks are excluded from compilation rather than failing the build.
 
 ## Build output
 
