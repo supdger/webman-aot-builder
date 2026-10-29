@@ -2,6 +2,16 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.5.10](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.10) — 2026-10-27
+
+- 编译链路升级为 TypePHP 0.9.5（自 0.9.2），配套补丁集同步迁移，新增补丁修复类常量与方法同名（仅大小写差异）时生成符号冲突导致的链接失败。
+- 新增"解释执行"兜底档位：单个源码文件无法 AOT 编译时不再中断构建，自动降级为内嵌 Zend 解释执行并重试，构建结束按"已编译 / 已处理 / 已解释"分档报告。任意 Webman 项目都应产出 `dist-aot/`。
+- 入口自动识别：标准 Webman 布局（根目录 `start.php`）无需再传 `--entry`。
+- 源码边界收紧：跳过 `runtime/`、`node_modules/`、vendor 测试与文档目录（test/fixture/spec/docs/benchmark 等）、所有隐藏目录及符号链接；非项目目录运行时给出明确提示而非扫描报错。
+- 隔离镜像内自动改写项目源码中硬编码的本机绝对路径字面量为 `runtime_path()`/`base_path()` 调用，防止开发机路径泄漏进产物，也不修改用户原文件。
+- 修复 Composer 安装器升级时 `Console`/`Uninstaller` 类未加载的问题。
+- 本版仅提供 macOS arm64 安装资产；Windows x86_64 资产待重建后随后续版本提供。
+
 ## v0.4.10
 
 - 可读 PHP 源码按 TypePHP 的编译要求原样交给编译器；不再识别框架，不审查业务代码，不设置项目、框架、插件或依赖版本门槛，也不自动改写 PHP 源码。
@@ -130,15 +140,6 @@
 - 修复 Windows 中文安装路径中的 PHP 配置和扩展加载问题，保留实际下载失败退出码；独立 Windows setup 使用 CRLF，避免 CMD 解析错误。
 - 修复任意目录层级的 `.DS_Store` 导致源码快照和构建镜像误判的问题；真实源码变化仍会中止，并显示变化路径和重试建议。
 - 安装和项目构建的验证针对开发机上的包身份、构建产物结构和完整性；Linux 部署及业务运行需另行验收。
-
-## [v0.5.10](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.10) — 2026-10-27
-
-- 编译链路升级为 TypePHP 0.9.5（自 0.9.2），配套补丁集同步迁移，新增补丁修复类常量与方法同名（仅大小写差异）时生成符号冲突导致的链接失败。
-- 新增"解释执行"兜底档位：单个源码文件无法 AOT 编译时不再中断构建，自动降级为内嵌 Zend 解释执行并重试，构建结束按"已编译 / 已处理 / 已解释"分档报告。任意 Webman 项目都应产出 `dist-aot/`。
-- 入口自动识别：标准 Webman 布局（根目录 `start.php`）无需再传 `--entry`。
-- 源码边界收紧：跳过 `runtime/`、`node_modules/`、vendor 测试与文档目录（test/fixture/spec/docs/benchmark 等）、所有隐藏目录及符号链接；非项目目录运行时给出明确提示而非扫描报错。
-- 隔离镜像内自动改写项目源码中硬编码的本机绝对路径字面量为 `runtime_path()`/`base_path()` 调用，防止开发机路径泄漏进产物，也不修改用户原文件。
-- 修复 Composer 安装器升级时 `Console`/`Uninstaller` 类未加载的问题。
 
 ## [v0.2.3](https://github.com/supdger/webman-aot-builder/releases/tag/v0.2.3) — 2026-09-28
 
