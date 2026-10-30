@@ -10,7 +10,7 @@
 - 源码边界收紧：跳过 `runtime/`、`node_modules/`、vendor 测试与文档目录（test/fixture/spec/docs/benchmark 等）、所有隐藏目录及符号链接；非项目目录运行时给出明确提示而非扫描报错。
 - 隔离镜像内自动改写项目源码中硬编码的本机绝对路径字面量为 `runtime_path()`/`base_path()` 调用，防止开发机路径泄漏进产物，也不修改用户原文件。
 - 修复 Composer 安装器升级时 `Console`/`Uninstaller` 类未加载的问题。
-- 本版仅提供 macOS arm64 安装资产；Windows x86_64 资产待重建后随后续版本提供。
+- 安装资产覆盖 macOS arm64 与 Windows x86_64（Windows 组件包与安装器于本版本发布后在 Windows 构建机上补齐）。
 
 ## v0.4.10
 
