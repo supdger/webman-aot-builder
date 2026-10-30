@@ -375,6 +375,9 @@ final class InstallerPackager
         $this->createDirectory($app . '/tools');
         foreach ([
             'windows-replay.ps1',
+            'windows-php-bootstrap.php',
+            'build-windows-installer.ps1',
+            'guided.php',
             'macos-prepare.php',
             'apply-typephp-patches.php',
             'strip-sdk-debug.php',

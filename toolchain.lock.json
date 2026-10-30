@@ -1,339 +1,356 @@
 {
-    "schema": "webman-aot-builder-toolchain-lock-v1",
-    "target": {
-        "os": "linux",
-        "architecture": "x86_64",
-        "libc": "musl",
-        "minimumKernel": "3.10"
+  "schema": "webman-aot-builder-toolchain-lock-v1",
+  "target": {
+    "os": "linux",
+    "architecture": "x86_64",
+    "libc": "musl",
+    "minimumKernel": "3.10"
+  },
+  "hosts": [
+    "macos-arm64",
+    "windows-x86_64"
+  ],
+  "components": [
+    {
+      "id": "php-source",
+      "kind": "source",
+      "version": "8.4.26",
+      "sourceUrl": "https://www.php.net/distributions/php-8.4.26.tar.xz",
+      "sha256": "32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1"
     },
-    "hosts": [
-        "macos-arm64",
-        "windows-x86_64"
-    ],
-    "components": [
-        {
-            "id": "php-source",
-            "kind": "source",
-            "version": "8.4.26",
-            "sourceUrl": "https://www.php.net/distributions/php-8.4.26.tar.xz",
-            "sha256": "32a2de53862ad44ed4a5005244ce4f1b50c271e74dced215449a4443b40569f1"
-        },
-        {
-            "id": "typephp-source",
-            "kind": "source",
-            "version": "0.9.5",
-            "revision": "5ba9376642d8dd75efcd002b41b09a9d6bcca3e2",
-            "sourceUrl": "https://github.com/swoole/typephp/archive/refs/tags/v0.9.5.tar.gz",
-            "sha256": "d1b33b2c2ba1deea2d8af01f52b180e85b3827bd8a291772176ce66bc4684d47"
-        },
-        {
-            "id": "typephp-vendor",
-            "kind": "vendor-bundle",
-            "version": "0.9.5",
-            "sourceUrl": "https://github.com/supdger/webman-aot-builder/releases/download/toolchain/typephp-0.9.5-vendor.tar.gz",
-            "sha256": "6362857f55af55fe5c3a3566b352793c76eadba8f0668249f56d94126cfdedef"
-        },
-        {
-            "id": "webman-typephp-generator-source",
-            "kind": "source",
-            "version": "45bc1fb2f30ba71f07c6eec9ea34725b06916074",
-            "revision": "45bc1fb2f30ba71f07c6eec9ea34725b06916074",
-            "sourceUrl": "https://github.com/supdger/webman-typephp/archive/45bc1fb2f30ba71f07c6eec9ea34725b06916074.zip",
-            "sha256": "b70003e1e694f971446fd75b9d136dfc1794cfb664d3614ab68965919f732b91"
-        },
-        {
-            "id": "phpx-source",
-            "kind": "source",
-            "version": "2.9.4",
-            "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
-            "sourceUrl": "https://github.com/swoole/phpx/archive/refs/tags/v2.9.4.tar.gz",
-            "sha256": "08d075ffcee1ed35cc05be5ffeb4e009ee1de979751ab53d51f43a905fbdd569"
-        },
-        {
-            "id": "swoole-cli-source",
-            "kind": "source",
-            "version": "6.2.2.2",
-            "revision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "sourceUrl": "https://github.com/swoole/swoole-cli/archive/refs/tags/v6.2.2.2.tar.gz",
-            "sha256": "292806148451d27bcd5dfccea33c523fc34b5ce2ca63cce980889b35a172ee6c"
-        },
-        {
-            "id": "phpx-sdk-linux-x64",
-            "kind": "sdk",
-            "version": "2.9.4+php8.4.25",
-            "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
-            "sourceUrl": "https://github.com/swoole/phpx/releases/download/v2.9.4/phpx-sdk_v2.9.4_php8.4.25_linux-x64.tar.xz",
-            "sha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "typephp-macos-arm64",
-            "kind": "host-tool",
-            "version": "0.9.5",
-            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_macos_arm64_php8.4.26-zts.tar.gz",
-            "sha256": "f22f678c8aa173c9e6b616cc19d50e05a368d65d6230b77573e8dd3f7329bfd9"
-        },
-        {
-            "id": "php-driver-windows-x64",
-            "kind": "host-tool",
-            "version": "8.4.26",
-            "sourceUrl": "https://downloads.php.net/~windows/releases/archives/php-8.4.26-Win32-vs17-x64.zip",
-            "sha256": "6e56f0e932e92bfdce208d3a7e6068f6e2f7a19fc2922a5f856fb085f61673f3"
-        },
-        {
-            "id": "typephp-windows-x64",
-            "kind": "host-tool",
-            "version": "0.9.5",
-            "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_windows_x64_php8.4.26-zts.zip",
-            "sha256": "8d8576b53f942b1bdf609559189fdfe50736c217a3f2ea40890649fae51cbea8"
-        },
-        {
-            "id": "llvm-macos-arm64",
-            "kind": "host-tool",
-            "version": "19.1.7",
-            "sourceUrl": "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-macOS-ARM64.tar.xz",
-            "sha256": "d93bf12952d89fe4ec7501c40475718b722407da6a8d651f05c995863468e570"
-        },
-        {
-            "id": "llvm-windows-x64",
-            "kind": "host-tool",
-            "version": "19.1.7",
-            "sourceUrl": "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang%2Bllvm-19.1.7-x86_64-pc-windows-msvc.tar.xz",
-            "sha256": "b4557b4f012161f56a2f5d9e877ab9635cafd7a08f7affe14829bd60c9d357f0"
-        },
-        {
-            "id": "musl-source",
-            "kind": "source",
-            "version": "1.2.4",
-            "packageRevision": "r3",
-            "sourceUrl": "https://musl.libc.org/releases/musl-1.2.4.tar.gz",
-            "sha256": "7a35eae33d5372a7c0da1188de798726f68825513b7ae3ebe97aaaa52114f039"
-        },
-        {
-            "id": "alpine-v3-18-main-x86-64-index",
-            "kind": "package-index",
-            "version": "3.18",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/APKINDEX.tar.gz",
-            "sha256": "ab075861f3cbd24fe05720b5da84a2eeca1fbc2060f8d9a88f334e751020a086"
-        },
-        {
-            "id": "alpine-musl-dev-x86-64",
-            "kind": "sysroot-package",
-            "version": "1.2.4-r3",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/musl-dev-1.2.4-r3.apk",
-            "sha256": "d288f1cae4a503826df1ecff8d4c3818b8c765d3e4c63d397fddd3b52de3c17b"
-        },
-        {
-            "id": "alpine-linux-headers-x86-64",
-            "kind": "sysroot-package",
-            "version": "6.3-r0",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/linux-headers-6.3-r0.apk",
-            "sha256": "ad9893e779caacf775953d2638873a2631325c5278c668852d70b76ff233ab4d"
-        },
-        {
-            "id": "alpine-libstdcpp-dev-x86-64",
-            "kind": "sysroot-package",
-            "version": "12.2.1_git20220924-r10",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/libstdc++-dev-12.2.1_git20220924-r10.apk",
-            "sha256": "58f70628a343fbddba77261326b6a67437e69b0bc0bf277172137bb3ef1eaf59"
-        },
-        {
-            "id": "alpine-fortify-headers-x86-64",
-            "kind": "sysroot-package",
-            "version": "1.1-r3",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/fortify-headers-1.1-r3.apk",
-            "sha256": "f00f0970a1c80605e952e20fe33b37435c81b398c219de45dc7d84f1437f4b68"
-        },
-        {
-            "id": "alpine-gcc-x86-64",
-            "kind": "sysroot-package",
-            "version": "12.2.1_git20220924-r10",
-            "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/gcc-12.2.1_git20220924-r10.apk",
-            "sha256": "ff9dc5bf2b8d80cc560c49ce3156d31e88eed94517781ee5e1b30c5ee7db7ea2"
-        },
-        {
-            "id": "pecl-redis",
-            "kind": "extension-source",
-            "version": "6.2.0",
-            "sourceUrl": "https://pecl.php.net/get/redis-6.2.0.tgz",
-            "sha256": "5069c13dd22bd9e494bb246891052cb6cc0fc9a1b45c6a572a8be61773101363"
-        },
-        {
-            "id": "pecl-event",
-            "kind": "extension-source",
-            "version": "3.1.6",
-            "sourceUrl": "https://pecl.php.net/get/event-3.1.6.tgz",
-            "sha256": "5b74554c6370aae8c284c8110fe27e071d3f663953c3eb762ffc429b0a3c83a2"
-        },
-        {
-            "id": "libevent-source",
-            "kind": "library-source",
-            "version": "2.1.12-stable",
-            "sourceUrl": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
-            "sha256": "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"
-        },
-        {
-            "id": "pecl-igbinary",
-            "kind": "extension-source",
-            "version": "3.2.16",
-            "sourceUrl": "https://pecl.php.net/get/igbinary-3.2.16.tgz",
-            "sha256": "8bf25d465abc7973d9e2c9a3039a5f8eea635b23bc1477017ff3999ff95836da"
-        },
-        {
-            "id": "pecl-msgpack",
-            "kind": "extension-source",
-            "version": "3.0.1",
-            "sourceUrl": "https://pecl.php.net/get/msgpack-3.0.1.tgz",
-            "sha256": "e30be355ab79aaea4568692fbd6073fd7c7f50ea8d3cf12edce40fc0c921d868"
-        }
-    ],
-    "embeddedLibraries": [
-        {
-            "id": "openssl",
-            "version": "3.6.0",
-            "sourceUrl": "https://github.com/openssl/openssl/releases/download/openssl-3.6.0/openssl-3.6.0.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "curl",
-            "version": "8.16.0",
-            "sourceUrl": "https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "libzip",
-            "version": "1.9.2",
-            "sourceUrl": "https://libzip.org/download/libzip-1.9.2.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "icu",
-            "version": "73.2",
-            "sourceUrl": "https://github.com/unicode-org/icu/releases/download/release-73-2/icu4c-73_2-src.tgz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "libpq",
-            "version": "16.3",
-            "sourceUrl": "https://ftp.postgresql.org/pub/source/v16.3/postgresql-16.3.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "zlib",
-            "version": "1.3.1",
-            "sourceUrl": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "libxml2",
-            "version": "2.9.14",
-            "sourceUrl": "https://github.com/GNOME/libxml2/archive/refs/tags/v2.9.14.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        },
-        {
-            "id": "oniguruma",
-            "version": "6.9.9",
-            "sourceUrl": "https://github.com/kkos/oniguruma/archive/refs/tags/v6.9.9.tar.gz",
-            "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
-            "coveredBy": "phpx-sdk-linux-x64",
-            "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
-        }
-    ],
-    "requiredExtensions": {
-        "pdo": [
-            "php-source"
-        ],
-        "mysqlnd": [
-            "php-source"
-        ],
-        "pdo_mysql": [
-            "php-source"
-        ],
-        "pdo_pgsql": [
-            "php-source",
-            "libpq"
-        ],
-        "redis": [
-            "pecl-redis"
-        ],
-        "event": [
-            "pecl-event",
-            "libevent-source"
-        ],
-        "intl": [
-            "php-source",
-            "icu"
-        ],
-        "openssl": [
-            "php-source",
-            "openssl"
-        ],
-        "curl": [
-            "php-source",
-            "curl"
-        ],
-        "zip": [
-            "php-source",
-            "libzip"
-        ],
-        "sockets": [
-            "php-source"
-        ],
-        "pcntl": [
-            "php-source"
-        ],
-        "posix": [
-            "php-source"
-        ],
-        "igbinary": [
-            "pecl-igbinary"
-        ],
-        "msgpack": [
-            "pecl-msgpack"
-        ]
+    {
+      "id": "typephp-source",
+      "kind": "source",
+      "version": "0.9.5",
+      "revision": "5ba9376642d8dd75efcd002b41b09a9d6bcca3e2",
+      "sourceUrl": "https://github.com/swoole/typephp/archive/refs/tags/v0.9.5.tar.gz",
+      "sha256": "d1b33b2c2ba1deea2d8af01f52b180e85b3827bd8a291772176ce66bc4684d47"
     },
-    "evidence": {
-        "phpxSdkManifest": {
-            "producer": "swoole/swoole-cli",
-            "producerRef": "v6.2.2.2",
-            "phpVersion": "8.4.25",
-            "phpxVersion": "v2.9.4",
-            "target": "linux-x64",
-            "zts": true
-        },
-        "phpxSdkArchiveDigests": {
-            "libphp.a": "edef07bd8e532334e02061481b4bbbd70210cd8505fe90d6bec155ea04133003",
-            "libphpx.a": "eb6f55f1ff489eb81e4dc4dac4af0c5d6ecc862e551825b8b37ab0cfee8ffe72"
-        },
-        "phpxSdkArchiveCapabilities": {
-            "pdo_pgsql": {
-                "registration": "swoole_pdo_pgsql_driver",
-                "runtimeAssertion": "PDO::getAvailableDrivers() contains pgsql",
-                "libpqSymbols": [
-                    "PQconnectdb",
-                    "PQexec"
-                ]
-            }
-        },
-        "muslVersionBasis": "swoole-cli v6.2.2.2 builds Linux runtime layers from alpine:3.18; the frozen Alpine 3.18 x86_64 index identifies musl 1.2.4-r3",
-        "staticOverlayModules": [
-            "event",
-            "igbinary",
-            "msgpack"
-        ],
-        "pendingStaticMerge": []
+    {
+      "id": "typephp-vendor",
+      "kind": "vendor-bundle",
+      "version": "0.9.5",
+      "sourceUrl": "https://github.com/supdger/webman-aot-builder/releases/download/toolchain/typephp-0.9.5-vendor.tar.gz",
+      "sha256": "6362857f55af55fe5c3a3566b352793c76eadba8f0668249f56d94126cfdedef"
+    },
+    {
+      "id": "webman-typephp-generator-source",
+      "kind": "source",
+      "version": "45bc1fb2f30ba71f07c6eec9ea34725b06916074",
+      "revision": "45bc1fb2f30ba71f07c6eec9ea34725b06916074",
+      "sourceUrl": "https://github.com/supdger/webman-typephp/archive/45bc1fb2f30ba71f07c6eec9ea34725b06916074.zip",
+      "sha256": "b70003e1e694f971446fd75b9d136dfc1794cfb664d3614ab68965919f732b91"
+    },
+    {
+      "id": "phpx-source",
+      "kind": "source",
+      "version": "2.9.4",
+      "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
+      "sourceUrl": "https://github.com/swoole/phpx/archive/refs/tags/v2.9.4.tar.gz",
+      "sha256": "08d075ffcee1ed35cc05be5ffeb4e009ee1de979751ab53d51f43a905fbdd569"
+    },
+    {
+      "id": "swoole-cli-source",
+      "kind": "source",
+      "version": "6.2.2.2",
+      "revision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "sourceUrl": "https://github.com/swoole/swoole-cli/archive/refs/tags/v6.2.2.2.tar.gz",
+      "sha256": "292806148451d27bcd5dfccea33c523fc34b5ce2ca63cce980889b35a172ee6c"
+    },
+    {
+      "id": "phpx-sdk-linux-x64",
+      "kind": "sdk",
+      "version": "2.9.4+php8.4.25",
+      "revision": "f6a2555e14694e8888d2f40ff2838ffb22bc04f2",
+      "sourceUrl": "https://github.com/swoole/phpx/releases/download/v2.9.4/phpx-sdk_v2.9.4_php8.4.25_linux-x64.tar.xz",
+      "sha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "typephp-macos-arm64",
+      "kind": "host-tool",
+      "version": "0.9.5",
+      "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_macos_arm64_php8.4.26-zts.tar.gz",
+      "sha256": "f22f678c8aa173c9e6b616cc19d50e05a368d65d6230b77573e8dd3f7329bfd9"
+    },
+    {
+      "id": "php-driver-windows-x64",
+      "kind": "host-tool",
+      "version": "8.4.26",
+      "sourceUrl": "https://downloads.php.net/~windows/releases/archives/php-8.4.26-Win32-vs17-x64.zip",
+      "sha256": "6e56f0e932e92bfdce208d3a7e6068f6e2f7a19fc2922a5f856fb085f61673f3"
+    },
+    {
+      "id": "typephp-windows-x64",
+      "kind": "host-tool",
+      "version": "0.9.5",
+      "sourceUrl": "https://github.com/swoole/typephp/releases/download/v0.9.5/tpc_v0.9.5_windows_x64_php8.4.26-zts.zip",
+      "sha256": "8d8576b53f942b1bdf609559189fdfe50736c217a3f2ea40890649fae51cbea8"
+    },
+    {
+      "id": "llvm-macos-arm64",
+      "kind": "host-tool",
+      "version": "19.1.7",
+      "sourceUrl": "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/LLVM-19.1.7-macOS-ARM64.tar.xz",
+      "sha256": "d93bf12952d89fe4ec7501c40475718b722407da6a8d651f05c995863468e570"
+    },
+    {
+      "id": "llvm-windows-x64",
+      "kind": "host-tool",
+      "version": "19.1.7",
+      "sourceUrl": "https://github.com/llvm/llvm-project/releases/download/llvmorg-19.1.7/clang%2Bllvm-19.1.7-x86_64-pc-windows-msvc.tar.xz",
+      "sha256": "b4557b4f012161f56a2f5d9e877ab9635cafd7a08f7affe14829bd60c9d357f0"
+    },
+    {
+      "id": "musl-source",
+      "kind": "source",
+      "version": "1.2.4",
+      "packageRevision": "r3",
+      "sourceUrl": "https://musl.libc.org/releases/musl-1.2.4.tar.gz",
+      "sha256": "7a35eae33d5372a7c0da1188de798726f68825513b7ae3ebe97aaaa52114f039"
+    },
+    {
+      "id": "alpine-v3-18-main-x86-64-index",
+      "kind": "package-index",
+      "version": "3.18",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/APKINDEX.tar.gz",
+      "sha256": "ab075861f3cbd24fe05720b5da84a2eeca1fbc2060f8d9a88f334e751020a086"
+    },
+    {
+      "id": "alpine-musl-dev-x86-64",
+      "kind": "sysroot-package",
+      "version": "1.2.4-r3",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/musl-dev-1.2.4-r3.apk",
+      "sha256": "d288f1cae4a503826df1ecff8d4c3818b8c765d3e4c63d397fddd3b52de3c17b"
+    },
+    {
+      "id": "alpine-linux-headers-x86-64",
+      "kind": "sysroot-package",
+      "version": "6.3-r0",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/linux-headers-6.3-r0.apk",
+      "sha256": "ad9893e779caacf775953d2638873a2631325c5278c668852d70b76ff233ab4d"
+    },
+    {
+      "id": "alpine-libstdcpp-dev-x86-64",
+      "kind": "sysroot-package",
+      "version": "12.2.1_git20220924-r10",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/libstdc++-dev-12.2.1_git20220924-r10.apk",
+      "sha256": "58f70628a343fbddba77261326b6a67437e69b0bc0bf277172137bb3ef1eaf59"
+    },
+    {
+      "id": "alpine-fortify-headers-x86-64",
+      "kind": "sysroot-package",
+      "version": "1.1-r3",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/fortify-headers-1.1-r3.apk",
+      "sha256": "f00f0970a1c80605e952e20fe33b37435c81b398c219de45dc7d84f1437f4b68"
+    },
+    {
+      "id": "alpine-gcc-x86-64",
+      "kind": "sysroot-package",
+      "version": "12.2.1_git20220924-r10",
+      "sourceUrl": "https://dl-cdn.alpinelinux.org/alpine/v3.18/main/x86_64/gcc-12.2.1_git20220924-r10.apk",
+      "sha256": "ff9dc5bf2b8d80cc560c49ce3156d31e88eed94517781ee5e1b30c5ee7db7ea2"
+    },
+    {
+      "id": "pecl-redis",
+      "kind": "extension-source",
+      "version": "6.2.0",
+      "sourceUrl": "https://pecl.php.net/get/redis-6.2.0.tgz",
+      "sha256": "5069c13dd22bd9e494bb246891052cb6cc0fc9a1b45c6a572a8be61773101363"
+    },
+    {
+      "id": "pecl-event",
+      "kind": "extension-source",
+      "version": "3.1.6",
+      "sourceUrl": "https://pecl.php.net/get/event-3.1.6.tgz",
+      "sha256": "5b74554c6370aae8c284c8110fe27e071d3f663953c3eb762ffc429b0a3c83a2"
+    },
+    {
+      "id": "libevent-source",
+      "kind": "library-source",
+      "version": "2.1.12-stable",
+      "sourceUrl": "https://github.com/libevent/libevent/releases/download/release-2.1.12-stable/libevent-2.1.12-stable.tar.gz",
+      "sha256": "92e6de1be9ec176428fd2367677e61ceffc2ee1cb119035037a27d346b0403bb"
+    },
+    {
+      "id": "pecl-igbinary",
+      "kind": "extension-source",
+      "version": "3.2.16",
+      "sourceUrl": "https://pecl.php.net/get/igbinary-3.2.16.tgz",
+      "sha256": "8bf25d465abc7973d9e2c9a3039a5f8eea635b23bc1477017ff3999ff95836da"
+    },
+    {
+      "id": "pecl-msgpack",
+      "kind": "extension-source",
+      "version": "3.0.1",
+      "sourceUrl": "https://pecl.php.net/get/msgpack-3.0.1.tgz",
+      "sha256": "e30be355ab79aaea4568692fbd6073fd7c7f50ea8d3cf12edce40fc0c921d868"
     }
+  ],
+  "embeddedLibraries": [
+    {
+      "id": "openssl",
+      "version": "3.6.0",
+      "sourceUrl": "https://github.com/openssl/openssl/releases/download/openssl-3.6.0/openssl-3.6.0.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "curl",
+      "version": "8.16.0",
+      "sourceUrl": "https://github.com/curl/curl/releases/download/curl-8_16_0/curl-8.16.0.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "libzip",
+      "version": "1.9.2",
+      "sourceUrl": "https://libzip.org/download/libzip-1.9.2.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "icu",
+      "version": "73.2",
+      "sourceUrl": "https://github.com/unicode-org/icu/releases/download/release-73-2/icu4c-73_2-src.tgz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "libpq",
+      "version": "16.3",
+      "sourceUrl": "https://ftp.postgresql.org/pub/source/v16.3/postgresql-16.3.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "zlib",
+      "version": "1.3.1",
+      "sourceUrl": "https://github.com/madler/zlib/archive/refs/tags/v1.3.1.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "libxml2",
+      "version": "2.9.14",
+      "sourceUrl": "https://github.com/GNOME/libxml2/archive/refs/tags/v2.9.14.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    },
+    {
+      "id": "oniguruma",
+      "version": "6.9.9",
+      "sourceUrl": "https://github.com/kkos/oniguruma/archive/refs/tags/v6.9.9.tar.gz",
+      "recipeRevision": "f7903840c3e959612dac7d413205e1bdb0067029",
+      "coveredBy": "phpx-sdk-linux-x64",
+      "artifactSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930"
+    }
+  ],
+  "requiredExtensions": {
+    "pdo": [
+      "php-source"
+    ],
+    "mysqlnd": [
+      "php-source"
+    ],
+    "pdo_mysql": [
+      "php-source"
+    ],
+    "pdo_pgsql": [
+      "php-source",
+      "libpq"
+    ],
+    "redis": [
+      "pecl-redis"
+    ],
+    "event": [
+      "pecl-event",
+      "libevent-source"
+    ],
+    "intl": [
+      "php-source",
+      "icu"
+    ],
+    "openssl": [
+      "php-source",
+      "openssl"
+    ],
+    "curl": [
+      "php-source",
+      "curl"
+    ],
+    "zip": [
+      "php-source",
+      "libzip"
+    ],
+    "sockets": [
+      "php-source"
+    ],
+    "pcntl": [
+      "php-source"
+    ],
+    "posix": [
+      "php-source"
+    ],
+    "igbinary": [
+      "pecl-igbinary"
+    ],
+    "msgpack": [
+      "pecl-msgpack"
+    ]
+  },
+  "evidence": {
+    "phpxSdkManifest": {
+      "producer": "swoole/swoole-cli",
+      "producerRef": "v6.2.2.2",
+      "phpVersion": "8.4.25",
+      "phpxVersion": "v2.9.4",
+      "target": "linux-x64",
+      "zts": true
+    },
+    "phpxSdkArchiveDigests": {
+      "libphp.a": "edef07bd8e532334e02061481b4bbbd70210cd8505fe90d6bec155ea04133003",
+      "libphpx.a": "eb6f55f1ff489eb81e4dc4dac4af0c5d6ecc862e551825b8b37ab0cfee8ffe72"
+    },
+    "phpxSdkArchiveCapabilities": {
+      "pdo_pgsql": {
+        "registration": "swoole_pdo_pgsql_driver",
+        "runtimeAssertion": "PDO::getAvailableDrivers() contains pgsql",
+        "libpqSymbols": [
+          "PQconnectdb",
+          "PQexec"
+        ]
+      }
+    },
+    "muslVersionBasis": "swoole-cli v6.2.2.2 builds Linux runtime layers from alpine:3.18; the frozen Alpine 3.18 x86_64 index identifies musl 1.2.4-r3",
+    "staticOverlayModules": [
+      "event",
+      "igbinary",
+      "msgpack"
+    ],
+    "pendingStaticMerge": [],
+    "patchedSdk": {
+      "archiveRoot": "webman-aot-builder-0.5.10-upstream-stripped-linux-x86_64-sdk",
+      "sdkSha256": "4d683d1c5e13f90e59f1486e70683cc3ca52f31b2878087bf212d233371c2623",
+      "derivationSha256": "016adaf3f7af5a6f85c87f49f0c803c06e69a2a27fdfe424246b0d7424220b65",
+      "libraries": {
+        "libphp.a": "182909b33512b88e22ebc67d79650f67d48003b8c8b5bbfb64a7cf7481806e15",
+        "libphpx.a": "95aedd1c5051cf176e0f0b27b32756bc1877c8ec315c2386a27167a8473b7223"
+      },
+      "librariesBeforeStripping": {
+        "libphp.a": "edef07bd8e532334e02061481b4bbbd70210cd8505fe90d6bec155ea04133003",
+        "libphpx.a": "eb6f55f1ff489eb81e4dc4dac4af0c5d6ecc862e551825b8b37ab0cfee8ffe72"
+      },
+      "patchManifestSha256": "9cb4d2ee78ea71fc2ee96a3665f2d0f5f7f731923a8481a7acb3adfb526bbf27",
+      "upstreamArchiveSha256": "9858242f91c9875682179495db1070ec3cbddfc9422978078dc8de966d8b5930",
+      "derivationKind": "upstream-archive-debug-strip",
+      "allHeadersSha256": "443f0f0705a9e0ac85c412880f57b6e14d5718e24802f195b8c4ed9ce6afee4c"
+    }
+  }
 }
