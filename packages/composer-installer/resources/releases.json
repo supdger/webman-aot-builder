@@ -5,16 +5,28 @@
     "macos-arm64": {
       "filename": "webman-aot-builder-0.5.10-full-macos-arm64.tar.gz",
       "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-full-macos-arm64.tar.gz",
-      "size": 282860347,
-      "sha256": "e63e187206f52daa56104f7ac76d7358f3b6e92d9037fda55e2750c30b3dd197"
+      "size": 282935185,
+      "sha256": "6b7e7a00377ec6921df2251194677147b407f9ae57ed662218e8650665f39f2f"
+    },
+    "windows-x86_64": {
+      "filename": "webman-aot-builder-0.5.10-full-windows-x86_64.zip",
+      "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-full-windows-x86_64.zip",
+      "size": 342545008,
+      "sha256": "bfd61da798c633e4be73778b1b62f1798562336a04236e0152f86444fa075f5a"
     }
   },
   "upgrades": {
     "macos-arm64": {
       "filename": "webman-aot-builder-0.5.10-macos-arm64.tar.gz",
       "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-macos-arm64.tar.gz",
-      "size": 8958517,
-      "sha256": "8a140f50d6c71edb5698ccfe351bd44d6ced8c2e42f3f21ffed8413daf57a780"
+      "size": 9040744,
+      "sha256": "9058672e20150a2d7802183b8dae7360bf8a7046bc22d7be174bf7cd5866e2a8"
+    },
+    "windows-x86_64": {
+      "filename": "webman-aot-builder-0.5.10-windows-x86_64.zip",
+      "url": "https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-windows-x86_64.zip",
+      "size": 8200957,
+      "sha256": "12daa403c4176a2345e1d41f053a783ff79baeadec63c745a3fbe341331f783f"
     }
   }
 }
