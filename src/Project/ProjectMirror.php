@@ -19,6 +19,15 @@ final class ProjectMirror
     {
     }
 
+    public static function isOwnedPath(string $path): bool
+    {
+        $resolved = realpath($path);
+        return is_string($resolved)
+            && str_replace('\\', '/', $resolved) === str_replace('\\', '/', $path)
+            && !is_link($path)
+            && str_ends_with(str_replace('\\', '/', $resolved), '/.webman-aot-builder/build/project');
+    }
+
     /**
      * @return array{path:string,files:int,sha256:string,sourceSha256:string}
      */
