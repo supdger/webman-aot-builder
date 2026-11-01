@@ -2,6 +2,12 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.5.12](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.12) — 2026-11-01
+
+- 纯打包修复版，功能与 v0.5.11 相同：v0.5.11 的 composer.json `dist.url` 残留指向 0.5.10 的 composer.zip，经 Composer 安装会拿到旧版入口与运行时清单；且该 tag 已重新指向修正提交，Packagist 对 v0.5.11 记录永久标记 upstream re-tag，故以新版本号重发。
+- Composer 包分发改为 GitHub `export-ignore` zipball，每个 tag 自动解析自身内容，不再需要逐版维护 `dist.url`。
+- 运行时资产与 v0.5.11 字节一致，仅按 0.5.12 重命名发布；`releases.json`、最小组件锁与 `src/Version.php` 同步指向 0.5.12。
+
 ## [v0.5.11](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.11) — 2026-11-01
 
 - 修复 Windows 构建必死循环：TypePHP 补丁内两处 `dirname()` 上爬循环只认 `/` 根，Windows 下 `dirname()` 返回 `\` 不动点永远不等于 `/`，`genExtension` 阶段空转不终止（真实 Windows 构建实测 10+ CPU 小时）。新增 `0080-windows-dirname-root-fixpoint` 补丁，终止条件覆盖 `/`、`\`、盘符根与不动点。

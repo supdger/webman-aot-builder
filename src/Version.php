@@ -6,5 +6,5 @@ namespace WebmanAotBuilder;
 
 final class Version
 {
-    public const VALUE = '0.5.11';
+    public const VALUE = '0.5.12';
 }
