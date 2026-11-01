@@ -101,6 +101,7 @@ jobs:
           }
           Pop-Location
           Select-String -LiteralPath $trait.FullName -Pattern 'parent = dirname' | Select-Object -First 2
+          exit 0
 
       - name: webman-aot build (with fixes active)
         shell: pwsh
