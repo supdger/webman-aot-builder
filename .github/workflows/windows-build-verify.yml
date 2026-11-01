@@ -22,73 +22,49 @@ jobs:
           Expand-Archive -LiteralPath full.zip -DestinationPath pkg
           Get-ChildItem -Recurse pkg -Depth 2 -File | Select-Object -First 20 FullName | Format-Table -AutoSize
 
-      - name: Bake fixes into installer payload
-        shell: pwsh
-        run: |
-          $manifestPath = 'pkg\payload-manifest.sha256'
-          $changed = @{}
-
-          Get-ChildItem -Recurse pkg -Filter component.zip | ForEach-Object {
-            $zip = $_.FullName
-            $tmp = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetRandomFileName())
-            Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
-            $trait = Get-ChildItem -Recurse $tmp -Filter RuntimeDeclarationsTrait.php | Select-Object -First 1
-            if ($trait) {
-              Push-Location $trait.Directory.Parent.Parent.FullName
-              git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
-              Pop-Location
-              Compress-Archive -Path "$tmp\*" -DestinationPath "$zip.new" -Force
-              Move-Item "$zip.new" $zip -Force
-              $rel = $zip.Substring((Get-Location).Path.Length + 5).Replace('\','/')
-              $changed[$rel] = $zip
-              Write-Output "patched trait in $zip"
-            }
-          }
-
-          $fixFiles = @(
-            'src/Compatibility/GenericProjectGenerator.php',
-            'src/Project/ProjectMirror.php',
-            'src/Toolchain/TypePhpProjectCompiler.php'
-          )
-          Get-ChildItem -Recurse pkg -Filter GenericProjectGenerator.php | ForEach-Object {
-            $appRoot = $_.Directory.Parent.Parent.FullName
-            foreach ($f in $fixFiles) {
-              $dest = Join-Path $appRoot $f
-              if (Test-Path $dest) {
-                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f" -OutFile $dest
-                $rel = $dest.Substring((Get-Location).Path.Length + 5).Replace('\','/')
-                $changed[$rel] = $dest
-                Write-Output "replaced $f in payload"
-              }
-            }
-          }
-
-          Get-ChildItem -Recurse pkg -Filter php.ini | ForEach-Object {
-            Add-Content -LiteralPath $_.FullName -Value 'memory_limit = 4096M'
-            $rel = $_.FullName.Substring((Get-Location).Path.Length + 5).Replace('\','/')
-            $changed[$rel] = $_.FullName
-            Write-Output "memory_limit raised in $($_.FullName)"
-          }
-
-          $lines = Get-Content $manifestPath
-          $out = foreach ($line in $lines) {
-            if ($line -match '^([a-f0-9]{64})  (.+)$') {
-              $rel = $Matches[2]
-              if ($changed.ContainsKey($rel)) {
-                $h = (Get-FileHash -Algorithm SHA256 $changed[$rel]).Hash.ToLower()
-                Write-Host "rehash $rel"
-                "$h  $rel"
-              } else { $line }
-            } else { $line }
-          }
-          Set-Content -LiteralPath $manifestPath -Value $out
-          Write-Output ("changed payload files: " + $changed.Count)
-
       - name: Install toolchain (offline)
         shell: pwsh
         run: |
           & .\pkg\install.ps1 -InstallRoot $env:WAOT_HOME -BinDir $env:WAOT_BIN -NoPath
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed: $LASTEXITCODE" }
+
+      - name: Apply app fixes from main
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Compatibility/GenericProjectGenerator.php',
+            'src/Project/ProjectMirror.php',
+            'src/Toolchain/TypePhpProjectCompiler.php'
+          )
+          foreach ($f in $files) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f" -OutFile (Join-Path $env:WAOT_HOME "current\app\$f")
+            Write-Output "patched $f"
+          }
+
+      - name: Raise runtime memory limit
+        shell: pwsh
+        run: |
+          Add-Content -LiteralPath (Join-Path $env:WAOT_HOME 'current\runtime\php.ini') -Value 'memory_limit = 4096M'
+
+      - name: Apply dirname fixpoint patch + resync integrity hashes
+        shell: pwsh
+        run: |
+          $ver = Get-ChildItem (Join-Path $env:WAOT_HOME 'toolchains\versions') -Directory | Select-Object -First 1
+          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php $ver.FullName | Select-Object -First 1
+          Push-Location $trait.Directory.Parent.Parent.FullName
+          git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+          Pop-Location
+          $newSha = (Get-FileHash $trait.FullName -Algorithm SHA256).Hash.ToLower()
+          $newSize = (Get-Item $trait.FullName).Length
+          $mcPath = Join-Path $ver.FullName 'minimal-component.json'
+          $mc = Get-Content $mcPath -Raw | ConvertFrom-Json
+          $key = 'prepared/typephp-source/typephp-0.9.5/src/Build/RuntimeDeclarationsTrait.php'
+          if ($mc.entries.PSObject.Properties[$key]) {
+            $mc.entries.$key.sha256 = $newSha
+            $mc.entries.$key.size = $newSize
+            $mc | ConvertTo-Json -Depth 8 -Compress | Set-Content $mcPath -NoNewline
+            Write-Output "minimal-component.json resynced sha=$newSha size=$newSize"
+          } else { throw 'trait entry not found in minimal-component.json' }
 
       - name: Create real webman project
         shell: pwsh
