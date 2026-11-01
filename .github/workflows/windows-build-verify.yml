@@ -1,0 +1,80 @@
+name: windows-build-verify
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-cloud-verify]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      WAOT_HOME: D:\waot-home
+      WAOT_BIN: D:\waot-bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download v0.5.10 full installer
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-full-windows-x86_64.zip'
+          Invoke-WebRequest -Uri $url -OutFile full.zip
+          Expand-Archive -LiteralPath full.zip -DestinationPath pkg
+          Get-ChildItem pkg | Select-Object Name | Format-Table -AutoSize
+
+      - name: Install toolchain (offline)
+        shell: pwsh
+        run: |
+          & .\pkg\install.ps1 -InstallRoot $env:WAOT_HOME -BinDir $env:WAOT_BIN -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed: $LASTEXITCODE" }
+
+      - name: Raise runtime memory limit (128M default is too small)
+        shell: pwsh
+        run: |
+          $ini = Join-Path $env:WAOT_HOME 'current\runtime\php.ini'
+          Add-Content -LiteralPath $ini -Value 'memory_limit = 4096M'
+          Get-Content $ini | Select-String 'memory_limit'
+
+      - name: Apply dirname-root fixpoint patch to installed toolchain
+        shell: pwsh
+        run: |
+          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php (Join-Path $env:WAOT_HOME 'toolchains') | Select-Object -First 1
+          if (-not $trait) { throw 'patched typephp source not found' }
+          Push-Location $trait.Directory.Parent.Parent.FullName
+          git apply --check "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+          git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+          Pop-Location
+          Select-String -LiteralPath $trait.FullName -Pattern 'dirname\(\$dir\)' -SimpleMatch:$false | Select-Object -First 4
+
+      - name: Create real webman project
+        shell: pwsh
+        run: |
+          composer create-project workerman/webman D:\webman-app --no-interaction 2>&1 | Select-Object -Last 10
+          if (-not (Test-Path D:\webman-app\start.php)) { throw 'project creation failed' }
+
+      - name: webman-aot build
+        shell: pwsh
+        run: |
+          $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
+          Push-Location D:\webman-app
+          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath build.log
+          Pop-Location
+          if (-not (Test-Path D:\webman-app\dist-aot)) { throw 'dist-aot missing' }
+          Get-ChildItem -Recurse D:\webman-app\dist-aot | Select-Object Name,Length | Format-Table -AutoSize
+
+      - name: Verify ELF header
+        shell: pwsh
+        run: |
+          $elf = Get-ChildItem -Recurse -File D:\webman-app\dist-aot | Where-Object { $_.Length -gt 1MB } | Select-Object -First 1
+          if (-not $elf) { throw 'no ELF candidate found' }
+          $bytes = [IO.File]::ReadAllBytes($elf.FullName)[0..19]
+          if ($bytes[0] -ne 0x7F -or $bytes[1] -ne 0x45 -or $bytes[2] -ne 0x4C -or $bytes[3] -ne 0x46) { throw 'not an ELF binary' }
+          Write-Output ("ELF OK: " + $elf.Name + " class=" + $bytes[4] + " machine=" + $bytes[18] + " size=" + $elf.Length)
+
+      - name: Upload dist-aot artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist-aot-windows
+          path: D:\webman-app\dist-aot\
+          retention-days: 14
