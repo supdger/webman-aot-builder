@@ -71,6 +71,13 @@ jobs:
           $lock.components.'windows-x86_64'.manifestSha256 = $mcSha
           $lock | ConvertTo-Json -Depth 8 | Set-Content $lockPath
           Write-Output "lock manifestSha256 updated to $mcSha"
+          $patchManifest = Join-Path $env:WAOT_HOME 'current\app\toolchain\patches\typephp\0.9.5\manifest.json'
+          $pm = Get-Content $patchManifest -Raw | ConvertFrom-Json
+          foreach ($r in $pm.rules) {
+            if ($r.path -eq 'src/Build/RuntimeDeclarationsTrait.php') { $r.afterSha256 = $newSha }
+          }
+          $pm | ConvertTo-Json -Depth 8 | Set-Content $patchManifest
+          Write-Output "patch manifest afterSha256 updated to $newSha"
 
       - name: Create real webman project
         shell: pwsh
