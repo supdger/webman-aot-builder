@@ -76,7 +76,7 @@ jobs:
               $rel = $Matches[2]
               if ($changed.ContainsKey($rel)) {
                 $h = (Get-FileHash -Algorithm SHA256 $changed[$rel]).Hash.ToLower()
-                Write-Output "rehash $rel"
+                Write-Host "rehash $rel"
                 "$h  $rel"
               } else { $line }
             } else { $line }
