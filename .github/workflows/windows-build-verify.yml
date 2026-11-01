@@ -1,0 +1,113 @@
+name: windows-build-verify
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-cloud-verify]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      WAOT_HOME: D:\waot-home
+      WAOT_BIN: D:\waot-bin
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download v0.5.10 full installer
+        shell: pwsh
+        run: |
+          $url = 'https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-full-windows-x86_64.zip'
+          Invoke-WebRequest -Uri $url -OutFile full.zip
+          Expand-Archive -LiteralPath full.zip -DestinationPath pkg
+          Get-ChildItem -Recurse pkg -Depth 2 -File | Select-Object -First 20 FullName | Format-Table -AutoSize
+
+      - name: Install toolchain (offline)
+        shell: pwsh
+        run: |
+          & .\pkg\install.ps1 -InstallRoot $env:WAOT_HOME -BinDir $env:WAOT_BIN -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed: $LASTEXITCODE" }
+
+      - name: Apply app fixes from main
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Compatibility/GenericProjectGenerator.php',
+            'src/Project/ProjectMirror.php',
+            'src/Toolchain/TypePhpProjectCompiler.php'
+          )
+          foreach ($f in $files) {
+            Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f" -OutFile (Join-Path $env:WAOT_HOME "current\app\$f")
+            Write-Output "patched $f"
+          }
+
+      - name: Raise runtime memory limit
+        shell: pwsh
+        run: |
+          Add-Content -LiteralPath (Join-Path $env:WAOT_HOME 'current\runtime\php.ini') -Value 'memory_limit = 4096M'
+
+      - name: Apply dirname fixpoint patch + resync integrity hashes
+        shell: pwsh
+        run: |
+          $ver = Get-ChildItem (Join-Path $env:WAOT_HOME 'toolchains\versions') -Directory | Select-Object -First 1
+          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php $ver.FullName | Select-Object -First 1
+          Push-Location $trait.Directory.Parent.Parent.FullName
+          git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+          Pop-Location
+          $newSha = (Get-FileHash $trait.FullName -Algorithm SHA256).Hash.ToLower()
+          $newSize = (Get-Item $trait.FullName).Length
+          $mcPath = Join-Path $ver.FullName 'minimal-component.json'
+          $mc = Get-Content $mcPath -Raw | ConvertFrom-Json
+          $key = 'prepared/typephp-source/typephp-0.9.5/src/Build/RuntimeDeclarationsTrait.php'
+          if ($mc.entries.PSObject.Properties[$key]) {
+            $mc.entries.$key.sha256 = $newSha
+            $mc.entries.$key.size = $newSize
+            $mc | ConvertTo-Json -Depth 8 -Compress | Set-Content $mcPath -NoNewline
+            Write-Output "minimal-component.json resynced sha=$newSha size=$newSize"
+          } else { throw 'trait entry not found in minimal-component.json' }
+          $mcSha = (Get-FileHash $mcPath -Algorithm SHA256).Hash.ToLower()
+          $lockPath = Join-Path $env:WAOT_HOME 'current\app\toolchain\minimal-components.lock.json'
+          $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+          $lock.components.'windows-x86_64'.manifestSha256 = $mcSha
+          $lock | ConvertTo-Json -Depth 8 | Set-Content $lockPath
+          Write-Output "lock manifestSha256 updated to $mcSha"
+          $patchManifest = Join-Path $env:WAOT_HOME 'current\app\toolchain\patches\typephp\0.9.5\manifest.json'
+          $pm = Get-Content $patchManifest -Raw | ConvertFrom-Json
+          foreach ($r in $pm.rules) {
+            if ($r.path -eq 'src/Build/RuntimeDeclarationsTrait.php') { $r.afterSha256 = $newSha }
+          }
+          $pm | ConvertTo-Json -Depth 8 | Set-Content $patchManifest
+          Write-Output "patch manifest afterSha256 updated to $newSha"
+
+      - name: Create real webman project
+        shell: pwsh
+        run: |
+          composer create-project workerman/webman D:\webman-app --no-interaction 2>&1 | Select-Object -Last 10
+          if (-not (Test-Path D:\webman-app\start.php)) { throw 'project creation failed' }
+
+      - name: webman-aot build
+        shell: pwsh
+        run: |
+          $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
+          Push-Location D:\webman-app
+          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath $env:RUNNER_TEMP\build.log
+          Pop-Location
+          if (-not (Test-Path D:\webman-app\dist-aot)) { throw 'dist-aot missing' }
+          Get-ChildItem -Recurse D:\webman-app\dist-aot | Select-Object Name,Length | Format-Table -AutoSize
+
+      - name: Verify ELF header
+        shell: pwsh
+        run: |
+          $elf = Get-ChildItem -Recurse -File D:\webman-app\dist-aot | Where-Object { $_.Length -gt 1MB } | Select-Object -First 1
+          if (-not $elf) { throw 'no ELF candidate found' }
+          $bytes = [IO.File]::ReadAllBytes($elf.FullName)[0..19]
+          if ($bytes[0] -ne 0x7F -or $bytes[1] -ne 0x45 -or $bytes[2] -ne 0x4C -or $bytes[3] -ne 0x46) { throw 'not an ELF binary' }
+          Write-Output ("ELF OK: " + $elf.Name + " class=" + $bytes[4] + " machine=" + $bytes[18] + " size=" + $elf.Length)
+
+      - name: Upload dist-aot artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dist-aot-windows
+          path: D:\webman-app\dist-aot\
+          retention-days: 14
