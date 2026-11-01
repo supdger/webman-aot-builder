@@ -45,7 +45,7 @@ jobs:
           )
           foreach ($f in $files) {
             $url = "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f"
-            $dest = Join-Path $env:WAOT_HOME "currentpp\$f"
+            $dest = Join-Path $env:WAOT_HOME "current\app\$f"
             Invoke-WebRequest -Uri $url -OutFile $dest
             Write-Output "patched $f"
           }
