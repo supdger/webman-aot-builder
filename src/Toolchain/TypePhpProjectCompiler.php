@@ -347,9 +347,18 @@ final class TypePhpProjectCompiler
         array $environment,
         ?\Closure $sink = null
     ): int {
+        $files = [];
+        foreach ([1, 2] as $index) {
+            $files[$index] = tmpfile();
+            if ($files[$index] === false) {
+                throw new \RuntimeException('unable to create process output file');
+            }
+        }
+        // Poll regular files: Windows anonymous process pipes cannot be made
+        // reliably nonblocking, which deadlocks the parent and child together.
         $process = proc_open(
             $command,
-            [0 => STDIN, 1 => ['pipe', 'w'], 2 => ['pipe', 'w']],
+            [0 => STDIN, 1 => $files[1], 2 => $files[2]],
             $pipes,
             $directory,
             $environment
@@ -357,15 +366,19 @@ final class TypePhpProjectCompiler
         if (!is_resource($process)) {
             throw new \RuntimeException('unable to start locked TypePHP tool');
         }
-        stream_set_blocking($pipes[1], false);
-        stream_set_blocking($pipes[2], false);
+        $paths = [];
+        foreach ($files as $index => $file) {
+            $paths[$index] = stream_get_meta_data($file)['uri'];
+        }
+        $offsets = [1 => 0, 2 => 0];
         $reportedExitCode = null;
         while (true) {
             $status = proc_get_status($process);
-            foreach ([1 => STDERR, 2 => STDERR] as $index => $destination) {
-                $chunk = stream_get_contents($pipes[$index]);
+            foreach ($paths as $index => $path) {
+                $chunk = file_get_contents($path, false, null, $offsets[$index], 65536);
                 if (is_string($chunk) && $chunk !== '') {
-                    fwrite($destination, $chunk);
+                    $offsets[$index] += strlen($chunk);
+                    fwrite(STDERR, $chunk);
                     $sink?->__invoke($chunk);
                 }
             }
@@ -375,14 +388,13 @@ final class TypePhpProjectCompiler
             }
             usleep(20000);
         }
-        foreach ([1 => STDERR, 2 => STDERR] as $index => $destination) {
-            stream_set_blocking($pipes[$index], true);
-            $chunk = stream_get_contents($pipes[$index]);
-            if (is_string($chunk) && $chunk !== '') {
-                fwrite($destination, $chunk);
+        foreach ($paths as $index => $path) {
+            while (($chunk = file_get_contents($path, false, null, $offsets[$index], 65536)) !== false && $chunk !== '') {
+                $offsets[$index] += strlen($chunk);
+                fwrite(STDERR, $chunk);
                 $sink?->__invoke($chunk);
             }
-            fclose($pipes[$index]);
+            fclose($files[$index]);
         }
         $closedExitCode = proc_close($process);
         return is_int($reportedExitCode) && $reportedExitCode >= 0

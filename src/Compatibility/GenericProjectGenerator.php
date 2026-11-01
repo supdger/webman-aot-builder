@@ -24,7 +24,9 @@ final class GenericProjectGenerator
         ?string $explicitEntry = null
     ): array {
         $resolved = realpath($mirror);
-        if (!is_string($resolved) || $resolved !== $mirror || is_link($mirror)
+        if (!is_string($resolved)
+            || str_replace('\\', '/', $resolved) !== str_replace('\\', '/', $mirror)
+            || is_link($mirror)
             || !str_ends_with(str_replace('\\', '/', $mirror), '/.webman-aot-builder/build/project')
             || is_link($mirror . '/.typephp') || is_link($mirror . '/.typephp/build')
         ) {
