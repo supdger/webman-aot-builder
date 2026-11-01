@@ -1,1 +1,22 @@
 * text=auto eol=lf
+
+# 分发归档（GitHub zipball / composer archive）只保留 Composer 安装入口与根文档
+/.github/                           export-ignore
+/.gitattributes                     export-ignore
+/.gitignore                         export-ignore
+/CLAUDE.md                          export-ignore
+/assets/                            export-ignore
+/bin/                               export-ignore
+/build.cmd                          export-ignore
+/build.command                      export-ignore
+/compatibility/                     export-ignore
+/docs/                              export-ignore
+/installer/                         export-ignore
+/openspec/                          export-ignore
+/src/                               export-ignore
+/tests/                             export-ignore
+/toolchain/                         export-ignore
+/toolchain.lock.json                export-ignore
+/tools/                             export-ignore
+/dist/                              export-ignore
+/packages/composer-installer/tests/ export-ignore

@@ -1,8 +1,11 @@
 /.phpunit.cache/
+/.agents/
 /build/
 /dist/
 /vendor/
-/tests/fixtures/webman-neutral/vendor/
+/tests/
+/openspec/
+/LLVM-*.tar.xz
 .env
 .env.*
 !.env.example
