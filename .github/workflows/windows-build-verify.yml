@@ -67,7 +67,42 @@ jobs:
           composer create-project workerman/webman D:\webman-app --no-interaction 2>&1 | Select-Object -Last 10
           if (-not (Test-Path D:\webman-app\start.php)) { throw 'project creation failed' }
 
-      - name: webman-aot build
+      - name: First build (lets toolchain prepare; expected to fail)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
+          Push-Location D:\webman-app
+          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath build1.log
+          Pop-Location
+          Write-Output 'first build finished (prepare stage complete)'
+
+      - name: Re-apply app fixes + dirname patch after prepare
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Compatibility/GenericProjectGenerator.php',
+            'src/Project/ProjectMirror.php',
+            'src/Toolchain/TypePhpProjectCompiler.php'
+          )
+          foreach ($f in $files) {
+            $url = "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f"
+            Invoke-WebRequest -Uri $url -OutFile (Join-Path $env:WAOT_HOME "current\app\$f")
+            Write-Output "patched $f"
+          }
+          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php (Join-Path $env:WAOT_HOME 'toolchains') | Select-Object -First 1
+          Push-Location $trait.Directory.Parent.Parent.FullName
+          git apply --check "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+            Write-Output 'dirname fixpoint patch applied'
+          } else {
+            Write-Output 'dirname fixpoint patch already present or not applicable'
+          }
+          Pop-Location
+          Select-String -LiteralPath $trait.FullName -Pattern 'parent = dirname' | Select-Object -First 2
+
+      - name: webman-aot build (with fixes active)
         shell: pwsh
         run: |
           $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
