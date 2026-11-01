@@ -1,0 +1,23 @@
+--- a/src/Build/RuntimeDeclarationsTrait.php
++++ b/src/Build/RuntimeDeclarationsTrait.php
+@@ -458,7 +458,8 @@
+                 for ($path = $source; dirname($path) !== '.'; $path = dirname($path)) {
+                     $directory = dirname($path);
+                     $children[$directory][basename($path)] = true;
+-                    if ($directory === '/') { break; }
++                    if ($directory === '/' || $directory === $path
++                        || $directory === '\\' || preg_match('/^[A-Za-z]:[\\\\\/]?$/', $directory)) { break; }
+                 }
+             }
+         }
+@@ -1774,7 +1775,9 @@
+             foreach ([$this->getSourceIdentity($file), ...($this->runtimeFileAliases[$file] ?? [])] as $source) {
+                 for ($dir = dirname($source); $dir !== '.'; $dir = dirname($dir)) {
+                     $directories[$dir] = true;
+-                    if ($dir === '/') { break; }
++                    $parent = dirname($dir);
++                    if ($dir === '/' || $dir === '\\' || $parent === $dir
++                        || preg_match('/^[A-Za-z]:[\\\\\/]?$/', $dir)) { break; }
+                 }
+             }
+         }
