@@ -35,6 +35,21 @@ jobs:
           Add-Content -LiteralPath $ini -Value 'memory_limit = 4096M'
           Get-Content $ini | Select-String 'memory_limit'
 
+      - name: Apply Windows app fixes from main
+        shell: pwsh
+        run: |
+          $files = @(
+            'src/Compatibility/GenericProjectGenerator.php',
+            'src/Project/ProjectMirror.php',
+            'src/Toolchain/TypePhpProjectCompiler.php'
+          )
+          foreach ($f in $files) {
+            $url = "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f"
+            $dest = Join-Path $env:WAOT_HOME "currentpp\$f"
+            Invoke-WebRequest -Uri $url -OutFile $dest
+            Write-Output "patched $f"
+          }
+
       - name: Apply dirname-root fixpoint patch to installed toolchain
         shell: pwsh
         run: |
