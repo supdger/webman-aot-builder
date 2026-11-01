@@ -391,7 +391,8 @@ $result = [ordered] @{
     host = 'windows-x86_64'
     containerUsed = $false
     normalizedInputSha256 = $normalizedInput.sha256
-    expectedNormalizedInputSha256 = 'deb62f759d3d11cbbbe0dc86b5ffb22dfae95069d49edfaeb70bbd668bb4cc31'
+    # Mac baseline of tools/reproducibility-input.php; covers the complete 0.9.5 patch chain (0001..0080).
+    expectedNormalizedInputSha256 = '7382c1e83fd07e4e0a386173596fba6b1821df772c3bea7a52f3c786012ef9e9'
     matchesMacNormalizedInput = $false
     artifact = $artifact
     artifactSize = (Get-Item -LiteralPath $artifact).Length

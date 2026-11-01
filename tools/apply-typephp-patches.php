@@ -58,7 +58,14 @@ try {
         throw new RuntimeException('TypePHP patch manifest has no rules');
     }
 
-    (new UnifiedPatchApplier())->verifyManifestCoverage($patchDirectory . '/manifest.json', $rules);
+    $applier = new UnifiedPatchApplier();
+    $applier->verifyManifestCoverage($patchDirectory . '/manifest.json', $rules);
+    // The chain is the complete numbered patch directory; a hand-maintained list here once
+    // silently dropped 0055-0080 and only surfaced as 17 unexplained afterSha256 mismatches.
+    $patches = $applier->enumeratePatches($patchDirectory);
+    if ($patches === []) {
+        throw new RuntimeException('TypePHP patch chain is empty: ' . $patchDirectory);
+    }
 
     $alreadyApplied = true;
     foreach ($rules as $rule) {
@@ -71,7 +78,7 @@ try {
     }
     if ($alreadyApplied) {
         fwrite(STDOUT, json_encode(['component' => 'typephp-source', 'version' => $manifest['version'],
-            'patches' => 29, 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
+            'patches' => count($patches), 'rules' => count($rules), 'status' => 'already-applied-and-verified'], JSON_THROW_ON_ERROR | JSON_PRETTY_PRINT) . PHP_EOL);
         exit(0);
     }
 
@@ -94,48 +101,33 @@ try {
         }
     }
 
-    $applier = new UnifiedPatchApplier();
-    foreach ([
-        '0001-full-static-sdk-target.patch',
-        '0002-static-extension-registry.patch',
-        '0003-reproducible-source-identities.patch',
-        '0004-full-static-host-target-separation.patch',
-        '0005-windows-clang-response-paths.patch',
-        '0006-pcntl-target-reference-metadata.patch',
-        '0010-reproducible-arginfo-source-identity.patch',
-        '0011-native-inheritance-and-target-reference-calls.patch',
-        '0012-loop-probe-defers-unknown-foreach-vars.patch',
-        '0014-default-helpers-and-globals-reference.patch',
-        '0015-portable-full-static-magic-dir.patch',
-        '0016-embedded-anonymous-class-valid-php.patch',
-        '0021-portable-source-scan-order.patch',
-        '0022-full-static-hide-host-only-reflection.patch',
-        '0024-closure-runtime-binding-and-reference-storage.patch',
-        '0026-compiler-command-paths.patch',
-        '0027-compiler-runtime-capabilities.patch',
-        '0028-ordinary-toarray-method-contracts.patch',
-        '0029-unavailable-composer-traits.patch',
-        '0030-polymorphic-php-local-storage.patch',
-        '0031-persistent-php-reference-storage.patch',
-        '0035-target-function-value-storage.patch',
-        '0036-request-namespace-function-fallback.patch',
-        '0037-php-string-bitwise-not.patch',
-        '0039-target-internal-class-declarations.patch',
-        '0045-switch-goto-termination.patch',
-        '0047-lexical-finally-goto-exits.patch',
-        '0053-native-runtime-declarations.patch',
-        '0054-load-time-constant-and-list-reference.patch',
-    ] as $patch) {
-        $applier->apply($patchDirectory . '/' . $patch, $typephp);
-    }
+    // Apply the whole chain atomically: every hunk of every patch must match (in memory, in
+    // order) before any file is written, so an unmatched hunk never leaves a half-patched tree.
+    $appliedPatches = $applier->applyChain($patches, $typephp);
+    fwrite(STDERR, sprintf("[patch] applied %d patches: %s .. %s\n",
+        count($appliedPatches), $appliedPatches[0], $appliedPatches[count($appliedPatches) - 1]));
 
+    $mismatches = [];
     foreach ($rules as $rule) {
         $path = (string) $rule['path'];
         $expected = (string) $rule['afterSha256'];
-        $actual = hash_file('sha256', $typephp . '/' . $path);
+        $actual = is_file($typephp . '/' . $path) ? hash_file('sha256', $typephp . '/' . $path) : false;
         if (!is_string($actual) || !hash_equals($expected, $actual)) {
-            throw new RuntimeException("patched TypePHP source digest mismatch: {$path}");
+            $touchedBy = [];
+            foreach ($patches as $patch) {
+                if (str_contains((string) file_get_contents($patch), "\n+++ b/{$path}\n")) {
+                    $touchedBy[] = basename($patch);
+                }
+            }
+            $mismatches[] = sprintf('%s (expected %s, actual %s; touched by %s)', $path, $expected,
+                is_string($actual) ? $actual : 'missing', $touchedBy === [] ? 'no patch' : implode(', ', $touchedBy));
         }
+    }
+    if ($mismatches !== []) {
+        throw new RuntimeException(sprintf(
+            "patched TypePHP source digest mismatch in %d of %d rules after applying %d patches:\n  %s",
+            count($mismatches), count($rules), count($appliedPatches), implode("\n  ", $mismatches)
+        ));
     }
 
     fwrite(
@@ -144,7 +136,7 @@ try {
             [
                 'component' => 'typephp-source',
                 'version' => $manifest['version'],
-                'patches' => 29,
+                'patches' => count($appliedPatches),
                 'rules' => count($rules),
                 'status' => 'applied-and-verified',
             ],

@@ -3,6 +3,7 @@
 
 declare(strict_types=1);
 
+require dirname(__DIR__) . '/src/Toolchain/UnifiedPatchApplier.php';
 require dirname(__DIR__) . '/src/Toolchain/ReproducibilityInput.php';
 
 use WebmanAotBuilder\Toolchain\ReproducibilityInput;

@@ -1,6 +1,6 @@
 --- a/src/CompilerBase.php
 +++ b/src/CompilerBase.php
-@@ -1694,6 +1694,19 @@
+@@ -1694,6 +1694,20 @@
          return implode(self::NAMESPACE_SEPARATOR, $names);
      }
  
@@ -17,10 +17,11 @@
 +        return implode(self::NAMESPACE_SEPARATOR, $names);
 +    }
 +
++
      /**
       * Determine whether a class's symbol pointer is stable across the PHP
       * module lifetime (registered at MINIT, safe to cache across requests).
-@@ -3669,7 +3682,7 @@
+@@ -3669,7 +3683,7 @@
                  }
                  $interfaceConstDef = $interfaceDef->constants[$const];
                  if ($interfaceConstDef->type === Type::ARRAY) {
@@ -29,7 +30,7 @@
                  }
                  if (!$interfaceConstDef->codegenFinalized) {
                      return false;
-@@ -3690,7 +3703,7 @@
+@@ -3690,7 +3704,7 @@
              $this->fatalError($expr, 'Constant `' . $classDef->getNamespacedName() . '::' . $const . '` is not accessible');
          }
          if ($constDef->type === Type::ARRAY) {
