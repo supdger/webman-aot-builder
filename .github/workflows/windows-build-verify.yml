@@ -20,7 +20,69 @@ jobs:
           $url = 'https://github.com/supdger/webman-aot-builder/releases/download/v0.5.10/webman-aot-builder-0.5.10-full-windows-x86_64.zip'
           Invoke-WebRequest -Uri $url -OutFile full.zip
           Expand-Archive -LiteralPath full.zip -DestinationPath pkg
-          Get-ChildItem pkg | Select-Object Name | Format-Table -AutoSize
+          Get-ChildItem -Recurse pkg -Depth 2 -File | Select-Object -First 20 FullName | Format-Table -AutoSize
+
+      - name: Bake fixes into installer payload
+        shell: pwsh
+        run: |
+          $manifestPath = 'pkg\payload-manifest.sha256'
+          $changed = @{}
+
+          Get-ChildItem -Recurse pkg -Filter component.zip | ForEach-Object {
+            $zip = $_.FullName
+            $tmp = Join-Path $env:RUNNER_TEMP ([IO.Path]::GetRandomFileName())
+            Expand-Archive -LiteralPath $zip -DestinationPath $tmp -Force
+            $trait = Get-ChildItem -Recurse $tmp -Filter RuntimeDeclarationsTrait.php | Select-Object -First 1
+            if ($trait) {
+              Push-Location $trait.Directory.Parent.Parent.FullName
+              git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
+              Pop-Location
+              Compress-Archive -Path "$tmp\*" -DestinationPath "$zip.new" -Force
+              Move-Item "$zip.new" $zip -Force
+              $rel = $zip.Substring((Get-Location).Path.Length + 5).Replace('\','/')
+              $changed[$rel] = $zip
+              Write-Output "patched trait in $zip"
+            }
+          }
+
+          $fixFiles = @(
+            'src/Compatibility/GenericProjectGenerator.php',
+            'src/Project/ProjectMirror.php',
+            'src/Toolchain/TypePhpProjectCompiler.php'
+          )
+          Get-ChildItem -Recurse pkg -Filter GenericProjectGenerator.php | ForEach-Object {
+            $appRoot = $_.Directory.Parent.Parent.FullName
+            foreach ($f in $fixFiles) {
+              $dest = Join-Path $appRoot $f
+              if (Test-Path $dest) {
+                Invoke-WebRequest -Uri "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f" -OutFile $dest
+                $rel = $dest.Substring((Get-Location).Path.Length + 5).Replace('\','/')
+                $changed[$rel] = $dest
+                Write-Output "replaced $f in payload"
+              }
+            }
+          }
+
+          Get-ChildItem -Recurse pkg -Filter php.ini | ForEach-Object {
+            Add-Content -LiteralPath $_.FullName -Value 'memory_limit = 4096M'
+            $rel = $_.FullName.Substring((Get-Location).Path.Length + 5).Replace('\','/')
+            $changed[$rel] = $_.FullName
+            Write-Output "memory_limit raised in $($_.FullName)"
+          }
+
+          $lines = Get-Content $manifestPath
+          $out = foreach ($line in $lines) {
+            if ($line -match '^([a-f0-9]{64})  (.+)$') {
+              $rel = $Matches[2]
+              if ($changed.ContainsKey($rel)) {
+                $h = (Get-FileHash -Algorithm SHA256 $changed[$rel]).Hash.ToLower()
+                Write-Output "rehash $rel"
+                "$h  $rel"
+              } else { $line }
+            } else { $line }
+          }
+          Set-Content -LiteralPath $manifestPath -Value $out
+          Write-Output ("changed payload files: " + $changed.Count)
 
       - name: Install toolchain (offline)
         shell: pwsh
@@ -28,82 +90,13 @@ jobs:
           & .\pkg\install.ps1 -InstallRoot $env:WAOT_HOME -BinDir $env:WAOT_BIN -NoPath
           if ($LASTEXITCODE -ne 0) { throw "install.ps1 failed: $LASTEXITCODE" }
 
-      - name: Raise runtime memory limit (128M default is too small)
-        shell: pwsh
-        run: |
-          $ini = Join-Path $env:WAOT_HOME 'current\runtime\php.ini'
-          Add-Content -LiteralPath $ini -Value 'memory_limit = 4096M'
-          Get-Content $ini | Select-String 'memory_limit'
-
-      - name: Apply Windows app fixes from main
-        shell: pwsh
-        run: |
-          $files = @(
-            'src/Compatibility/GenericProjectGenerator.php',
-            'src/Project/ProjectMirror.php',
-            'src/Toolchain/TypePhpProjectCompiler.php'
-          )
-          foreach ($f in $files) {
-            $url = "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f"
-            $dest = Join-Path $env:WAOT_HOME "current\app\$f"
-            Invoke-WebRequest -Uri $url -OutFile $dest
-            Write-Output "patched $f"
-          }
-
-      - name: Apply dirname-root fixpoint patch to installed toolchain
-        shell: pwsh
-        run: |
-          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php (Join-Path $env:WAOT_HOME 'toolchains') | Select-Object -First 1
-          if (-not $trait) { throw 'patched typephp source not found' }
-          Push-Location $trait.Directory.Parent.Parent.FullName
-          git apply --check "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
-          git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
-          Pop-Location
-          Select-String -LiteralPath $trait.FullName -Pattern 'dirname\(\$dir\)' -SimpleMatch:$false | Select-Object -First 4
-
       - name: Create real webman project
         shell: pwsh
         run: |
           composer create-project workerman/webman D:\webman-app --no-interaction 2>&1 | Select-Object -Last 10
           if (-not (Test-Path D:\webman-app\start.php)) { throw 'project creation failed' }
 
-      - name: First build (lets toolchain prepare; expected to fail)
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
-          Push-Location D:\webman-app
-          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath build1.log
-          Pop-Location
-          Write-Output 'first build finished (prepare stage complete)'
-
-      - name: Re-apply app fixes + dirname patch after prepare
-        shell: pwsh
-        run: |
-          $files = @(
-            'src/Compatibility/GenericProjectGenerator.php',
-            'src/Project/ProjectMirror.php',
-            'src/Toolchain/TypePhpProjectCompiler.php'
-          )
-          foreach ($f in $files) {
-            $url = "https://raw.githubusercontent.com/supdger/webman-aot-builder/main/$f"
-            Invoke-WebRequest -Uri $url -OutFile (Join-Path $env:WAOT_HOME "current\app\$f")
-            Write-Output "patched $f"
-          }
-          $trait = Get-ChildItem -Recurse -Filter RuntimeDeclarationsTrait.php (Join-Path $env:WAOT_HOME 'toolchains') | Select-Object -First 1
-          Push-Location $trait.Directory.Parent.Parent.FullName
-          git apply --check "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch" 2>$null
-          if ($LASTEXITCODE -eq 0) {
-            git apply "$env:GITHUB_WORKSPACE\toolchain\patches\typephp\0.9.5\0080-windows-dirname-root-fixpoint.patch"
-            Write-Output 'dirname fixpoint patch applied'
-          } else {
-            Write-Output 'dirname fixpoint patch already present or not applicable'
-          }
-          Pop-Location
-          Select-String -LiteralPath $trait.FullName -Pattern 'parent = dirname' | Select-Object -First 2
-          exit 0
-
-      - name: webman-aot build (with fixes active)
+      - name: webman-aot build
         shell: pwsh
         run: |
           $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
