@@ -90,7 +90,7 @@ jobs:
         run: |
           $env:WEBMAN_AOT_BUILDER_HOME = $env:WAOT_HOME
           Push-Location D:\webman-app
-          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath build.log
+          & (Join-Path $env:WAOT_BIN 'webman-aot.cmd') build 2>&1 | Tee-Object -FilePath $env:RUNNER_TEMP\build.log
           Pop-Location
           if (-not (Test-Path D:\webman-app\dist-aot)) { throw 'dist-aot missing' }
           Get-ChildItem -Recurse D:\webman-app\dist-aot | Select-Object Name,Length | Format-Table -AutoSize
