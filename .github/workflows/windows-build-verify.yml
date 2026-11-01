@@ -65,6 +65,12 @@ jobs:
             $mc | ConvertTo-Json -Depth 8 -Compress | Set-Content $mcPath -NoNewline
             Write-Output "minimal-component.json resynced sha=$newSha size=$newSize"
           } else { throw 'trait entry not found in minimal-component.json' }
+          $mcSha = (Get-FileHash $mcPath -Algorithm SHA256).Hash.ToLower()
+          $lockPath = Join-Path $env:WAOT_HOME 'current\app\toolchain\minimal-components.lock.json'
+          $lock = Get-Content $lockPath -Raw | ConvertFrom-Json
+          $lock.components.'windows-x86_64'.manifestSha256 = $mcSha
+          $lock | ConvertTo-Json -Depth 8 | Set-Content $lockPath
+          Write-Output "lock manifestSha256 updated to $mcSha"
 
       - name: Create real webman project
         shell: pwsh
