@@ -2,6 +2,15 @@
 
 本文记录各版本的变更；正式发布状态以 GitHub Release 为准，已发布版本日期采用 Release 的 UTC 发布日期。
 
+## [v0.5.11](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.11) — 2026-11-01
+
+- 修复 Windows 构建必死循环：TypePHP 补丁内两处 `dirname()` 上爬循环只认 `/` 根，Windows 下 `dirname()` 返回 `\` 不动点永远不等于 `/`，`genExtension` 阶段空转不终止（真实 Windows 构建实测 10+ CPU 小时）。新增 `0080-windows-dirname-root-fixpoint` 补丁，终止条件覆盖 `/`、`\`、盘符根与不动点。
+- 修复 Windows 隔离镜像校验：`realpath()` 返回反斜杠路径与正斜杠镜像路径严格比较恒不等，导致 `generate` 阶段必报 "requires an isolated project mirror"；现统一分隔符后比较。
+- 补齐 `ProjectMirror::isOwnedPath()`：兼容性规则引用但类中未定义，Windows 下直接 fatal。
+- 修复 Windows TypePHP 子进程死锁：匿名管道无法非阻塞导致父读子写互锁冻结，改为临时文件轮询输出（沿用 `ProcessOutput` 既有模式）。
+- Windows 运行时默认 `memory_limit` 提升为 2048M（原 PHP 默认 128M，大项目扫描阶段即耗尽）。
+- 新增 `windows-build-verify` CI：云端 windows-latest 端到端验证安装→编译→dist-aot ELF 产物（已实测产出 144MB 静态 ELF）。
+
 ## [v0.5.10](https://github.com/supdger/webman-aot-builder/releases/tag/v0.5.10) — 2026-10-27
 
 - 编译链路升级为 TypePHP 0.9.5（自 0.9.2），配套补丁集同步迁移，新增补丁修复类常量与方法同名（仅大小写差异）时生成符号冲突导致的链接失败。

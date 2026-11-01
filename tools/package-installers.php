@@ -260,6 +260,7 @@ final class InstallerPackager
         if (file_put_contents(
             $runtimeStage . '/php.ini',
             "extension_dir=\"ext\"\n"
+            . "memory_limit=2048M\n"
             . implode('', array_map(
                 static fn (string $extension): string => "extension={$extension}\n",
                 $runtime['extensions']
