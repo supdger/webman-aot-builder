@@ -11,6 +11,24 @@ not relicense that upstream material. The patch manifest records the exact
 upstream file hashes expected before each modification. The modifications
 prepared by this project as of 2026-09-26 are supplied under `GPL-3.0-only`.
 
+The `webman-typephp-generator-source` component is a full source snapshot of
+[supdger/webman-typephp](https://github.com/supdger/webman-typephp) at commit
+`45bc1fb2`, a fork of
+[Tinywan/webman-typephp](https://github.com/Tinywan/webman-typephp); the
+locked commit is on its `feat/saiadmin-aot-profile` branch, which includes
+commits by this repository's owner. The component is recorded in
+`toolchain.lock.json` and its archive is embedded in the published
+`webman-aot-builder-*-components.zip` release assets (v0.2.0-rc.* through
+v0.5.12). The upstream project declares `MIT` in its `composer.json` and does
+not ship a `LICENSE` file.
+
+That snapshot contains a `docker/` directory with third-party material:
+eight files marked "This file is part of TypePHP" correspond to upstream
+swoole/typephp, whose v0.9.5 declares `GPL-3.0-only`, and
+`docker/gen_stub.php` is derived from php-src under the PHP License 3.01
+with its copyright header retained. This repository's MIT license does not
+relicense that upstream material.
+
 Toolchains downloaded by the CLI, locally assembled installer archives, and
 generated Linux executables contain additional third-party components with
 their own license terms. The v0.1.3 Mac installer includes PHP 8.4.25 built
